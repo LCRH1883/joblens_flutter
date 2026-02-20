@@ -37,7 +37,12 @@ class ProjectDetailPage extends ConsumerWidget {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => PhotoViewerPage(path: asset.localPath),
+                        builder: (_) => PhotoViewerPage(
+                          paths: assets
+                              .map((item) => item.localPath)
+                              .toList(growable: false),
+                          initialIndex: index,
+                        ),
                       ),
                     );
                   },
