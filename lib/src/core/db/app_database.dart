@@ -1,0 +1,389 @@
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
+
+import '../models/cloud_provider.dart';
+import '../models/photo_asset.dart';
+import '../models/project.dart';
+import '../models/provider_account.dart';
+import '../models/sync_job.dart';
+
+class AppDatabase {
+  AppDatabase._(this._db);
+
+  final Database _db;
+  static const _uuid = Uuid();
+
+  static Future<AppDatabase> open() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final dbPath = p.join(dir.path, 'joblens.db');
+
+    final db = await openDatabase(
+      dbPath,
+      version: 1,
+      onCreate: (db, version) async {
+        await db.execute('''
+          CREATE TABLE projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            cover_asset_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            sync_folder_map TEXT NOT NULL DEFAULT '{}'
+          )
+        ''');
+
+        await db.execute('''
+          CREATE TABLE photo_assets (
+            id TEXT PRIMARY KEY,
+            local_path TEXT NOT NULL,
+            thumb_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            imported_at TEXT NOT NULL,
+            project_id INTEGER NOT NULL,
+            hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            FOREIGN KEY(project_id) REFERENCES projects(id)
+          )
+        ''');
+
+        await db.execute('''
+          CREATE TABLE provider_accounts (
+            id TEXT PRIMARY KEY,
+            provider_type TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            token_state TEXT NOT NULL,
+            connected_at TEXT
+          )
+        ''');
+
+        await db.execute('''
+          CREATE TABLE sync_jobs (
+            id TEXT PRIMARY KEY,
+            asset_id TEXT NOT NULL,
+            provider_type TEXT NOT NULL,
+            project_id INTEGER NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(asset_id) REFERENCES photo_assets(id),
+            FOREIGN KEY(project_id) REFERENCES projects(id)
+          )
+        ''');
+
+        await db.execute(
+          'CREATE INDEX idx_assets_project ON photo_assets(project_id)',
+        );
+        await db.execute(
+          'CREATE INDEX idx_assets_created ON photo_assets(created_at DESC)',
+        );
+        await db.execute('CREATE INDEX idx_sync_state ON sync_jobs(state)');
+        await db.execute(
+          'CREATE UNIQUE INDEX uq_sync_asset_provider ON sync_jobs(asset_id, provider_type)',
+        );
+      },
+    );
+
+    return AppDatabase._(db);
+  }
+
+  Future<void> close() async => _db.close();
+
+  Future<int> ensureDefaultProject() async {
+    final now = DateTime.now().toIso8601String();
+    final existing = await _db.query(
+      'projects',
+      where: 'name = ?',
+      whereArgs: ['Inbox'],
+      limit: 1,
+    );
+    if (existing.isNotEmpty) {
+      return existing.first['id']! as int;
+    }
+
+    return _db.insert('projects', {
+      'name': 'Inbox',
+      'cover_asset_id': null,
+      'created_at': now,
+      'updated_at': now,
+      'sync_folder_map': '{}',
+    });
+  }
+
+  Future<List<Project>> getProjects() async {
+    final rows = await _db.query('projects', orderBy: 'updated_at DESC');
+    return rows.map(Project.fromMap).toList();
+  }
+
+  Future<int> createProject(String name) async {
+    final now = DateTime.now().toIso8601String();
+    return _db.insert('projects', {
+      'name': name,
+      'cover_asset_id': null,
+      'created_at': now,
+      'updated_at': now,
+      'sync_folder_map': '{}',
+    }, conflictAlgorithm: ConflictAlgorithm.abort);
+  }
+
+  Future<void> renameProject(int projectId, String name) async {
+    await _db.update(
+      'projects',
+      {'name': name, 'updated_at': DateTime.now().toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [projectId],
+    );
+  }
+
+  Future<void> deleteProject(
+    int projectId, {
+    required int fallbackProjectId,
+  }) async {
+    await _db.transaction((txn) async {
+      await txn.update(
+        'photo_assets',
+        {'project_id': fallbackProjectId},
+        where: 'project_id = ?',
+        whereArgs: [projectId],
+      );
+      await txn.delete('projects', where: 'id = ?', whereArgs: [projectId]);
+    });
+  }
+
+  Future<void> upsertAsset(PhotoAsset asset) async {
+    await _db.insert(
+      'photo_assets',
+      asset.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await _db.update(
+      'projects',
+      {
+        'cover_asset_id': asset.id,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [asset.projectId],
+    );
+  }
+
+  Future<List<PhotoAsset>> getAssets({
+    int? projectId,
+    bool includeDeleted = false,
+  }) async {
+    final whereParts = <String>[];
+    final args = <Object?>[];
+
+    if (!includeDeleted) {
+      whereParts.add('status = ?');
+      args.add(AssetStatus.active.name);
+    }
+    if (projectId != null) {
+      whereParts.add('project_id = ?');
+      args.add(projectId);
+    }
+
+    final rows = await _db.query(
+      'photo_assets',
+      where: whereParts.isEmpty ? null : whereParts.join(' AND '),
+      whereArgs: args.isEmpty ? null : args,
+      orderBy: 'created_at DESC',
+    );
+
+    return rows.map(PhotoAsset.fromMap).toList();
+  }
+
+  Future<void> moveAssetToProject(String assetId, int projectId) async {
+    await _db.transaction((txn) async {
+      await txn.update(
+        'photo_assets',
+        {'project_id': projectId},
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+      await txn.update(
+        'projects',
+        {'updated_at': DateTime.now().toIso8601String()},
+        where: 'id = ?',
+        whereArgs: [projectId],
+      );
+    });
+  }
+
+  Future<void> softDeleteAsset(String assetId) async {
+    await _db.update(
+      'photo_assets',
+      {'status': AssetStatus.deleted.name},
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
+  Future<void> ensureProviderRows() async {
+    for (final provider in CloudProviderType.values) {
+      await _db.insert('provider_accounts', {
+        'id': _uuid.v4(),
+        'provider_type': provider.key,
+        'display_name': provider.label,
+        'token_state': ProviderTokenState.disconnected.name,
+        'connected_at': null,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await _db.update(
+        'provider_accounts',
+        {'display_name': provider.label, 'connected_at': null},
+        where: 'provider_type = ? AND token_state = ?',
+        whereArgs: [provider.key, ProviderTokenState.disconnected.name],
+      );
+    }
+  }
+
+  Future<List<ProviderAccount>> getProviderAccounts() async {
+    final rows = await _db.query(
+      'provider_accounts',
+      orderBy: 'provider_type ASC',
+    );
+    return rows.map(ProviderAccount.fromMap).toList();
+  }
+
+  Future<void> setProviderConnection(
+    CloudProviderType provider,
+    ProviderTokenState state,
+  ) async {
+    await _db.update(
+      'provider_accounts',
+      {
+        'token_state': state.name,
+        'connected_at': state == ProviderTokenState.connected
+            ? DateTime.now().toIso8601String()
+            : null,
+      },
+      where: 'provider_type = ?',
+      whereArgs: [provider.key],
+    );
+  }
+
+  Future<List<CloudProviderType>> getConnectedProviders() async {
+    final rows = await _db.query(
+      'provider_accounts',
+      columns: ['provider_type'],
+      where: 'token_state = ?',
+      whereArgs: [ProviderTokenState.connected.name],
+    );
+    return rows
+        .map(
+          (row) => CloudProviderTypeX.fromKey(row['provider_type']! as String),
+        )
+        .toList();
+  }
+
+  Future<void> enqueueSyncJob({
+    required String assetId,
+    required int projectId,
+    required CloudProviderType provider,
+  }) async {
+    final now = DateTime.now();
+    await _db.insert(
+      'sync_jobs',
+      SyncJob(
+        id: _uuid.v4(),
+        assetId: assetId,
+        providerType: provider,
+        projectId: projectId,
+        attemptCount: 0,
+        state: SyncJobState.queued,
+        lastError: null,
+        createdAt: now,
+        updatedAt: now,
+      ).toMap(),
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  Future<List<SyncJob>> getSyncJobs() async {
+    final rows = await _db.query('sync_jobs', orderBy: 'updated_at DESC');
+    return rows.map(SyncJob.fromMap).toList();
+  }
+
+  Future<List<SyncJob>> getPendingSyncJobs() async {
+    final rows = await _db.query(
+      'sync_jobs',
+      where: 'state IN (?, ?, ?)',
+      whereArgs: [
+        SyncJobState.queued.name,
+        SyncJobState.failed.name,
+        SyncJobState.paused.name,
+      ],
+      orderBy: 'created_at ASC',
+      limit: 25,
+    );
+    return rows.map(SyncJob.fromMap).toList();
+  }
+
+  Future<void> updateSyncJob(SyncJob job) async {
+    await _db.update(
+      'sync_jobs',
+      job.copyWith(updatedAt: DateTime.now()).toMap(),
+      where: 'id = ?',
+      whereArgs: [job.id],
+    );
+  }
+
+  Future<void> setAllFailedToQueued() async {
+    await _db.update(
+      'sync_jobs',
+      {
+        'state': SyncJobState.queued.name,
+        'last_error': null,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'state = ?',
+      whereArgs: [SyncJobState.failed.name],
+    );
+  }
+
+  Future<PhotoAsset?> getAssetById(String assetId) async {
+    final rows = await _db.query(
+      'photo_assets',
+      where: 'id = ?',
+      whereArgs: [assetId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return PhotoAsset.fromMap(rows.first);
+  }
+
+  Future<bool> assetExistsByHash(String hash) async {
+    final rows = await _db.query(
+      'photo_assets',
+      columns: ['id'],
+      where: 'hash = ? AND status = ?',
+      whereArgs: [hash, AssetStatus.active.name],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<Map<int, int>> getProjectCounts() async {
+    final rows = await _db.rawQuery(
+      '''
+      SELECT project_id, COUNT(*) AS cnt
+      FROM photo_assets
+      WHERE status = ?
+      GROUP BY project_id
+    ''',
+      [AssetStatus.active.name],
+    );
+
+    final map = <int, int>{};
+    for (final row in rows) {
+      map[row['project_id']! as int] = row['cnt']! as int;
+    }
+    return map;
+  }
+}
