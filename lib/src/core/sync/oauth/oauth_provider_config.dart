@@ -67,6 +67,15 @@ class OAuthProviderConfig {
             'Files.ReadWrite',
           ],
         );
+      case CloudProviderType.dropbox:
+        return OAuthProviderConfig(
+          provider: provider,
+          clientId: const String.fromEnvironment('JOBLENS_DROPBOX_CLIENT_ID'),
+          redirectUri: redirectUri,
+          authorizationEndpoint: 'https://www.dropbox.com/oauth2/authorize',
+          tokenEndpoint: 'https://api.dropboxapi.com/oauth2/token',
+          scopes: const <String>[],
+        );
       case CloudProviderType.box:
         return OAuthProviderConfig(
           provider: provider,
@@ -77,6 +86,7 @@ class OAuthProviderConfig {
           scopes: const <String>[],
         );
       case CloudProviderType.nextcloud:
+      case CloudProviderType.backend:
         return null;
     }
   }

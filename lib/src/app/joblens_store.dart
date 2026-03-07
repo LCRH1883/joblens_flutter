@@ -16,6 +16,8 @@ import '../core/storage/media_storage_service.dart';
 import '../core/sync/oauth/oauth_service.dart';
 import '../core/sync/sync_service.dart';
 
+const int kProjectNotesMaxLength = 4000;
+
 final joblensStoreProvider = Provider<JoblensStore>(
   (ref) => throw UnimplementedError(
     'joblensStoreProvider must be overridden in main.dart',
@@ -77,16 +79,36 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
+    String? remoteMergeError;
     _assets = await _database.getAssets();
     _projects = await _database.getProjects();
     _projectCounts = await _database.getProjectCounts();
     _providers = await _database.getProviderAccounts();
     _syncJobs = await _database.getSyncJobs();
     _credentialStatus = await _syncService.credentialStatus();
+    try {
+      await _syncService.mergeRemoteAssets(_projects);
+      _assets = await _database.getAssets();
+      _projects = await _database.getProjects();
+      _projectCounts = await _database.getProjectCounts();
+      _syncJobs = await _database.getSyncJobs();
+    } catch (error, stackTrace) {
+      remoteMergeError = error.toString();
+      if (kDebugMode) {
+        debugPrint('Remote merge failed: $error\n$stackTrace');
+      }
+    }
+    if (remoteMergeError != null) {
+      _lastError = remoteMergeError;
+    }
     notifyListeners();
   }
 
-  Future<void> ingestCapturedFile(File sourceFile, {int? projectId}) async {
+  Future<void> ingestCapturedFile(
+    File sourceFile, {
+    int? projectId,
+    bool processSyncNow = false,
+  }) async {
     await _runBusy(() async {
       final targetProjectId = projectId ?? _defaultProjectId;
       final asset = await _mediaStorage.ingestFile(
@@ -101,7 +123,11 @@ class JoblensStore extends ChangeNotifier {
 
       await _database.upsertAsset(asset);
       await _syncService.enqueueAsset(asset);
-      await _syncService.processQueue(_projects);
+      if (processSyncNow) {
+        await _syncService.processQueue(_projects);
+      } else {
+        unawaited(_syncService.processQueue(_projects));
+      }
       await refresh();
     });
   }
@@ -159,6 +185,30 @@ class JoblensStore extends ChangeNotifier {
 
     await _runBusy(() async {
       await _database.renameProject(projectId, trimmed);
+      await refresh();
+    });
+  }
+
+  Future<void> updateProjectNotes(int projectId, String notes) async {
+    final normalized = _normalizeProjectNotesForSave(notes);
+    if (normalized.length > kProjectNotesMaxLength) {
+      _lastError =
+          'Project notes must be at most $kProjectNotesMaxLength characters.';
+      notifyListeners();
+      return;
+    }
+    await _runBusy(() async {
+      await _database.updateProjectNotes(projectId, normalized);
+      await refresh();
+    });
+  }
+
+  Future<void> updateProjectRemoteId(
+    int projectId,
+    String? remoteProjectId,
+  ) async {
+    await _runBusy(() async {
+      await _database.updateProjectRemoteId(projectId, remoteProjectId);
       await refresh();
     });
   }
@@ -281,6 +331,20 @@ class JoblensStore extends ChangeNotifier {
     });
   }
 
+  Future<String?> resolveThumbnailUrl(
+    PhotoAsset asset, {
+    bool forceRefresh = false,
+  }) {
+    return _syncService.getThumbnailUrl(asset, forceRefresh: forceRefresh);
+  }
+
+  Future<String?> resolveDownloadUrl(
+    PhotoAsset asset, {
+    bool forceRefresh = false,
+  }) {
+    return _syncService.getDownloadUrl(asset, forceRefresh: forceRefresh);
+  }
+
   Future<void> _runBusy(Future<void> Function() action) async {
     if (_isBusy) {
       return;
@@ -331,20 +395,19 @@ class JoblensStore extends ChangeNotifier {
           : ProviderTokenState.disconnected,
     );
 
-    if (isConnected) {
-      await _syncService.resumeProvider(provider);
-      final allAssets = await _database.getAssets();
-      for (final asset in allAssets) {
-        await _database.enqueueSyncJob(
-          assetId: asset.id,
-          projectId: asset.projectId,
-          provider: provider,
-        );
-      }
-    } else {
-      await _syncService.pauseProvider(provider);
-    }
-
     await refresh();
   }
 }
+
+String normalizeProjectNotesForSave(String notes) {
+  var normalized = notes.replaceAll('\r\n', '\n');
+  final lines = normalized.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    lines[i] = lines[i].replaceFirst(RegExp(r'[ \t]+$'), '');
+  }
+  normalized = lines.join('\n');
+  return normalized;
+}
+
+String _normalizeProjectNotesForSave(String notes) =>
+    normalizeProjectNotesForSave(notes);

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -21,9 +22,15 @@ class MediaStorageService {
   final Directory thumbnailsDir;
   static const _uuid = Uuid();
 
-  static Future<MediaStorageService> create() async {
-    final documents = await getApplicationDocumentsDirectory();
-    final root = Directory(p.join(documents.path, 'joblens_media'));
+  static Future<MediaStorageService> create({Directory? rootDirectory}) async {
+    final root = rootDirectory != null
+        ? Directory(p.join(rootDirectory.path, 'joblens_media'))
+        : Directory(
+            p.join(
+              (await getApplicationDocumentsDirectory()).path,
+              'joblens_media',
+            ),
+          );
     final originals = Directory(p.join(root.path, 'originals'));
     final thumbs = Directory(p.join(root.path, 'thumbnails'));
 
@@ -51,11 +58,10 @@ class MediaStorageService {
     final storedPath = p.join(originalsDir.path, '$id$extension');
     final thumbPath = p.join(thumbnailsDir.path, '$id.jpg');
 
-    final copied = await source.copy(storedPath);
-    final bytes = await copied.readAsBytes();
-    final hash = sha256.convert(bytes).toString();
-
-    await _createThumbnail(bytes: bytes, outputPath: thumbPath);
+    await source.copy(storedPath);
+    final hash = await Isolate.run(
+      () => _generateHashAndThumbnail(storedPath, thumbPath),
+    );
 
     final now = DateTime.now();
     return PhotoAsset(
@@ -68,21 +74,29 @@ class MediaStorageService {
       hash: hash,
       status: AssetStatus.active,
       sourceType: sourceType,
+      cloudState: AssetCloudState.localAndCloud,
+      remoteAssetId: null,
+      remoteProvider: null,
+      remoteFileId: null,
+      uploadSessionId: null,
+      uploadPath: null,
+      lastSyncErrorCode: null,
     );
   }
+}
 
-  Future<void> _createThumbnail({
-    required List<int> bytes,
-    required String outputPath,
-  }) async {
-    final decoded = img.decodeImage(Uint8List.fromList(bytes));
-    if (decoded == null) {
-      await File(outputPath).writeAsBytes(bytes, flush: true);
-      return;
-    }
+String _generateHashAndThumbnail(String sourcePath, String thumbPath) {
+  final sourceBytes = File(sourcePath).readAsBytesSync();
+  final hash = sha256.convert(sourceBytes).toString();
 
-    final resized = img.copyResize(decoded, width: 512);
-    final encoded = img.encodeJpg(resized, quality: 85);
-    await File(outputPath).writeAsBytes(encoded, flush: true);
+  final decoded = img.decodeImage(Uint8List.fromList(sourceBytes));
+  if (decoded == null) {
+    File(thumbPath).writeAsBytesSync(sourceBytes, flush: true);
+    return hash;
   }
+
+  final resized = img.copyResize(decoded, width: 512);
+  final encoded = img.encodeJpg(resized, quality: 85);
+  File(thumbPath).writeAsBytesSync(encoded, flush: true);
+  return hash;
 }

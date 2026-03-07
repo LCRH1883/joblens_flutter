@@ -18,11 +18,13 @@ CloudAdapter? buildAdapter(ProviderCredentials? credentials) {
     CloudProviderType.oneDrive => OneDriveAdapter(
       accessToken: credentials.accessToken!,
     ),
+    CloudProviderType.dropbox => null,
     CloudProviderType.box => BoxAdapter(accessToken: credentials.accessToken!),
     CloudProviderType.nextcloud => NextcloudAdapter(
       serverUrl: credentials.serverUrl!,
       username: credentials.username!,
       appPassword: credentials.appPassword!,
     ),
+    CloudProviderType.backend => null,
   };
 }

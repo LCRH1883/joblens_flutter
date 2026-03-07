@@ -14,19 +14,21 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
+  static const _schemaVersion = 4;
 
-  static Future<AppDatabase> open() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final dbPath = p.join(dir.path, 'joblens.db');
+  static Future<AppDatabase> open({String? databasePath}) async {
+    final resolvedPath = databasePath ?? await _defaultDatabasePath();
 
     final db = await openDatabase(
-      dbPath,
-      version: 1,
+      resolvedPath,
+      version: _schemaVersion,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
+            notes TEXT NOT NULL DEFAULT '',
+            remote_project_id TEXT,
             cover_asset_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -45,6 +47,13 @@ class AppDatabase {
             hash TEXT NOT NULL,
             status TEXT NOT NULL,
             source_type TEXT NOT NULL,
+            remote_asset_id TEXT,
+            remote_provider TEXT,
+            remote_file_id TEXT,
+            upload_session_id TEXT,
+            upload_path TEXT,
+            cloud_state TEXT NOT NULL DEFAULT 'local_and_cloud',
+            last_sync_error_code TEXT,
             FOREIGN KEY(project_id) REFERENCES projects(id)
           )
         ''');
@@ -81,14 +90,66 @@ class AppDatabase {
         await db.execute(
           'CREATE INDEX idx_assets_created ON photo_assets(created_at DESC)',
         );
+        await db.execute(
+          'CREATE INDEX idx_assets_remote_asset_id ON photo_assets(remote_asset_id)',
+        );
+        await db.execute(
+          'CREATE INDEX idx_projects_remote_project_id ON projects(remote_project_id)',
+        );
         await db.execute('CREATE INDEX idx_sync_state ON sync_jobs(state)');
         await db.execute(
           'CREATE UNIQUE INDEX uq_sync_asset_provider ON sync_jobs(asset_id, provider_type)',
         );
       },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+            "ALTER TABLE projects ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
+          );
+        }
+        if (oldVersion < 3) {
+          await db.execute(
+            "ALTER TABLE projects ADD COLUMN remote_project_id TEXT",
+          );
+          await db.execute(
+            "ALTER TABLE photo_assets ADD COLUMN remote_asset_id TEXT",
+          );
+          await db.execute(
+            "ALTER TABLE photo_assets ADD COLUMN upload_session_id TEXT",
+          );
+          await db.execute(
+            "ALTER TABLE photo_assets ADD COLUMN upload_path TEXT",
+          );
+          await db.execute(
+            "ALTER TABLE photo_assets ADD COLUMN cloud_state TEXT NOT NULL DEFAULT 'local_and_cloud'",
+          );
+          await db.execute(
+            "ALTER TABLE photo_assets ADD COLUMN last_sync_error_code TEXT",
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_assets_remote_asset_id ON photo_assets(remote_asset_id)',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_projects_remote_project_id ON projects(remote_project_id)',
+          );
+        }
+        if (oldVersion < 4) {
+          await db.execute(
+            "ALTER TABLE photo_assets ADD COLUMN remote_provider TEXT",
+          );
+          await db.execute(
+            "ALTER TABLE photo_assets ADD COLUMN remote_file_id TEXT",
+          );
+        }
+      },
     );
 
     return AppDatabase._(db);
+  }
+
+  static Future<String> _defaultDatabasePath() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return p.join(dir.path, 'joblens.db');
   }
 
   Future<void> close() async => _db.close();
@@ -107,6 +168,8 @@ class AppDatabase {
 
     return _db.insert('projects', {
       'name': 'Inbox',
+      'notes': '',
+      'remote_project_id': null,
       'cover_asset_id': null,
       'created_at': now,
       'updated_at': now,
@@ -119,10 +182,26 @@ class AppDatabase {
     return rows.map(Project.fromMap).toList();
   }
 
+  Future<int?> getLocalProjectIdByRemoteId(String remoteProjectId) async {
+    final rows = await _db.query(
+      'projects',
+      columns: ['id'],
+      where: 'remote_project_id = ?',
+      whereArgs: [remoteProjectId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return rows.first['id'] as int;
+  }
+
   Future<int> createProject(String name) async {
     final now = DateTime.now().toIso8601String();
     return _db.insert('projects', {
       'name': name,
+      'notes': '',
+      'remote_project_id': null,
       'cover_asset_id': null,
       'created_at': now,
       'updated_at': now,
@@ -130,10 +209,34 @@ class AppDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.abort);
   }
 
+  Future<void> updateProjectRemoteId(
+    int projectId,
+    String? remoteProjectId,
+  ) async {
+    await _db.update(
+      'projects',
+      {
+        'remote_project_id': remoteProjectId,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [projectId],
+    );
+  }
+
   Future<void> renameProject(int projectId, String name) async {
     await _db.update(
       'projects',
       {'name': name, 'updated_at': DateTime.now().toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [projectId],
+    );
+  }
+
+  Future<void> updateProjectNotes(int projectId, String notes) async {
+    await _db.update(
+      'projects',
+      {'notes': notes, 'updated_at': DateTime.now().toIso8601String()},
       where: 'id = ?',
       whereArgs: [projectId],
     );
@@ -168,6 +271,42 @@ class AppDatabase {
       },
       where: 'id = ?',
       whereArgs: [asset.projectId],
+    );
+  }
+
+  Future<void> upsertCloudOnlyAsset({
+    required String localAssetId,
+    required int projectId,
+    required String remoteAssetId,
+    required String sha256,
+    required DateTime createdAt,
+    bool deleted = false,
+  }) async {
+    final now = DateTime.now();
+    final status = deleted ? AssetStatus.deleted : AssetStatus.active;
+    await _db.insert(
+      'photo_assets',
+      {
+        'id': localAssetId,
+        'local_path': '',
+        'thumb_path': '',
+        'created_at': createdAt.toIso8601String(),
+        'imported_at': now.toIso8601String(),
+        'project_id': projectId,
+        'hash': sha256,
+        'status': status.name,
+        'source_type': AssetSourceType.imported.name,
+        'remote_asset_id': remoteAssetId,
+        'remote_provider': null,
+        'remote_file_id': null,
+        'upload_session_id': null,
+        'upload_path': null,
+        'cloud_state': deleted
+            ? AssetCloudState.deleted
+            : AssetCloudState.cloudOnly,
+        'last_sync_error_code': null,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
 
@@ -224,7 +363,7 @@ class AppDatabase {
   }
 
   Future<void> ensureProviderRows() async {
-    for (final provider in CloudProviderType.values) {
+    for (final provider in CloudProviderTypeX.userConfigurableProviders) {
       await _db.insert('provider_accounts', {
         'id': _uuid.v4(),
         'provider_type': provider.key,
@@ -356,6 +495,116 @@ class AppDatabase {
       return null;
     }
     return PhotoAsset.fromMap(rows.first);
+  }
+
+  Future<List<PhotoAsset>> getAssetsByIds(Iterable<String> assetIds) async {
+    final uniqueIds = assetIds.toSet();
+    if (uniqueIds.isEmpty) {
+      return const [];
+    }
+
+    final placeholders = List.filled(uniqueIds.length, '?').join(', ');
+    final rows = await _db.query(
+      'photo_assets',
+      where: 'id IN ($placeholders)',
+      whereArgs: uniqueIds.toList(growable: false),
+    );
+    return rows.map(PhotoAsset.fromMap).toList(growable: false);
+  }
+
+  Future<PhotoAsset?> getAssetByRemoteId(String remoteAssetId) async {
+    final rows = await _db.query(
+      'photo_assets',
+      where: 'remote_asset_id = ?',
+      whereArgs: [remoteAssetId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return PhotoAsset.fromMap(rows.first);
+  }
+
+  Future<PhotoAsset?> getAssetByHash(String hash) async {
+    final rows = await _db.query(
+      'photo_assets',
+      where: 'hash = ?',
+      whereArgs: [hash],
+      orderBy: 'created_at DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return PhotoAsset.fromMap(rows.first);
+  }
+
+  Future<void> updateAssetCloudMetadata({
+    required String assetId,
+    String? remoteAssetId,
+    String? remoteProvider,
+    String? remoteFileId,
+    String? uploadSessionId,
+    String? uploadPath,
+    String? cloudState,
+    String? lastSyncErrorCode,
+  }) async {
+    final values = <String, Object?>{
+      'last_sync_error_code': lastSyncErrorCode,
+    };
+    if (remoteAssetId != null) {
+      values['remote_asset_id'] = remoteAssetId;
+    }
+    if (remoteProvider != null) {
+      values['remote_provider'] = remoteProvider;
+    }
+    if (remoteFileId != null) {
+      values['remote_file_id'] = remoteFileId;
+    }
+    if (uploadSessionId != null) {
+      values['upload_session_id'] = uploadSessionId;
+    }
+    if (uploadPath != null) {
+      values['upload_path'] = uploadPath;
+    }
+    if (cloudState != null) {
+      values['cloud_state'] = cloudState;
+    }
+
+    await _db.update(
+      'photo_assets',
+      values,
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
+  Future<void> updateAssetSyncError(
+    String assetId,
+    String? errorCode,
+  ) async {
+    await _db.update(
+      'photo_assets',
+      {'last_sync_error_code': errorCode},
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
+  Future<void> updateProviderAccountStatus(
+    CloudProviderType provider,
+    ProviderTokenState state, {
+    DateTime? connectedAt,
+  }) async {
+    await _db.update(
+      'provider_accounts',
+      {
+        'token_state': state.name,
+        'connected_at': connectedAt?.toIso8601String(),
+      },
+      where: 'provider_type = ?',
+      whereArgs: [provider.key],
+    );
   }
 
   Future<bool> assetExistsByHash(String hash) async {

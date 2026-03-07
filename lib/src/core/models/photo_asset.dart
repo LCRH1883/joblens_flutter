@@ -4,6 +4,12 @@ enum AssetSourceType { captured, imported }
 
 enum AssetStatus { active, deleted }
 
+class AssetCloudState {
+  static const localAndCloud = 'local_and_cloud';
+  static const cloudOnly = 'cloud_only';
+  static const deleted = 'deleted';
+}
+
 class PhotoAsset {
   const PhotoAsset({
     required this.id,
@@ -15,6 +21,13 @@ class PhotoAsset {
     required this.hash,
     required this.status,
     required this.sourceType,
+    required this.cloudState,
+    this.remoteAssetId,
+    this.remoteProvider,
+    this.remoteFileId,
+    this.uploadSessionId,
+    this.uploadPath,
+    this.lastSyncErrorCode,
   });
 
   final String id;
@@ -26,6 +39,13 @@ class PhotoAsset {
   final String hash;
   final AssetStatus status;
   final AssetSourceType sourceType;
+  final String cloudState;
+  final String? remoteAssetId;
+  final String? remoteProvider;
+  final String? remoteFileId;
+  final String? uploadSessionId;
+  final String? uploadPath;
+  final String? lastSyncErrorCode;
 
   String get dayLabel => DateFormat('EEE, MMM d, y').format(createdAt);
 
@@ -33,6 +53,13 @@ class PhotoAsset {
     int? projectId,
     AssetStatus? status,
     String? thumbPath,
+    String? cloudState,
+    String? remoteAssetId,
+    String? remoteProvider,
+    String? remoteFileId,
+    String? uploadSessionId,
+    String? uploadPath,
+    String? lastSyncErrorCode,
   }) {
     return PhotoAsset(
       id: id,
@@ -44,6 +71,13 @@ class PhotoAsset {
       hash: hash,
       status: status ?? this.status,
       sourceType: sourceType,
+      cloudState: cloudState ?? this.cloudState,
+      remoteAssetId: remoteAssetId ?? this.remoteAssetId,
+      remoteProvider: remoteProvider ?? this.remoteProvider,
+      remoteFileId: remoteFileId ?? this.remoteFileId,
+      uploadSessionId: uploadSessionId ?? this.uploadSessionId,
+      uploadPath: uploadPath ?? this.uploadPath,
+      lastSyncErrorCode: lastSyncErrorCode ?? this.lastSyncErrorCode,
     );
   }
 
@@ -58,6 +92,13 @@ class PhotoAsset {
       'hash': hash,
       'status': status.name,
       'source_type': sourceType.name,
+      'remote_asset_id': remoteAssetId,
+      'remote_provider': remoteProvider,
+      'remote_file_id': remoteFileId,
+      'upload_session_id': uploadSessionId,
+      'upload_path': uploadPath,
+      'cloud_state': cloudState,
+      'last_sync_error_code': lastSyncErrorCode,
     };
   }
 
@@ -72,6 +113,14 @@ class PhotoAsset {
       hash: map['hash']! as String,
       status: AssetStatus.values.byName(map['status']! as String),
       sourceType: AssetSourceType.values.byName(map['source_type']! as String),
+      cloudState:
+          (map['cloud_state'] as String?) ?? AssetCloudState.localAndCloud,
+      remoteAssetId: map['remote_asset_id'] as String?,
+      remoteProvider: map['remote_provider'] as String?,
+      remoteFileId: map['remote_file_id'] as String?,
+      uploadSessionId: map['upload_session_id'] as String?,
+      uploadPath: map['upload_path'] as String?,
+      lastSyncErrorCode: map['last_sync_error_code'] as String?,
     );
   }
 }

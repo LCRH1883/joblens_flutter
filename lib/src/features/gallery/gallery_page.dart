@@ -17,13 +17,13 @@ class GalleryPage extends ConsumerStatefulWidget {
 
 class _GalleryPageState extends ConsumerState<GalleryPage> {
   final Set<String> _selectedAssetIds = <String>{};
-  final Map<String, GlobalKey> _tileKeys = <String, GlobalKey>{};
+  bool _selectionModeEnabled = false;
 
   bool _isDragSelecting = false;
   bool _dragSelectionAdds = true;
   String? _lastDraggedAssetId;
 
-  bool get _isSelectionMode => _selectedAssetIds.isNotEmpty;
+  bool get _isSelectionMode => _selectionModeEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -60,20 +60,30 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                 ),
                 IconButton(
                   tooltip: 'Move selected',
-                  onPressed: store.isBusy || store.projects.isEmpty
+                  onPressed:
+                      store.isBusy ||
+                          store.projects.isEmpty ||
+                          _selectedAssetIds.isEmpty
                       ? null
                       : () => _showMoveDialog(context, store),
                   icon: const Icon(Icons.drive_file_move_outline),
                 ),
                 IconButton(
                   tooltip: 'Delete selected',
-                  onPressed: store.isBusy
+                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
                       ? null
                       : () => _confirmDeleteSelected(context, store),
                   icon: const Icon(Icons.delete_outline),
                 ),
               ]
             : [
+                IconButton(
+                  tooltip: 'Select photos',
+                  onPressed: store.isBusy || assets.isEmpty
+                      ? null
+                      : _enableSelectionMode,
+                  icon: const Icon(Icons.checklist_outlined),
+                ),
                 IconButton(
                   tooltip: 'Import photos',
                   onPressed: store.isBusy
@@ -123,42 +133,43 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
       );
     }
 
-    return Listener(
-      behavior: HitTestBehavior.translucent,
-      onPointerMove: (event) => _handleDragSelection(event.position, assets),
-      onPointerUp: (_) => _stopDragSelection(),
-      onPointerCancel: (_) => _stopDragSelection(),
-      child: RefreshIndicator(
-        onRefresh: store.refresh,
-        child: ListView(
-          physics: _isDragSelecting
-              ? const NeverScrollableScrollPhysics()
-              : const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.only(left: 12, right: 12, bottom: 100),
-          children: [
-            if (store.isBusy) ...[
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
+    return RefreshIndicator(
+      onRefresh: store.refresh,
+      child: CustomScrollView(
+        physics: _isDragSelecting
+            ? const NeverScrollableScrollPhysics()
+            : const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          const SliverPadding(padding: EdgeInsets.only(top: 12)),
+          if (store.isBusy)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: LinearProgressIndicator(),
               ),
-            ],
-            if (store.lastError != null) ...[
-              Card(
-                color: Theme.of(context).colorScheme.errorContainer,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(
-                    store.lastError!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onErrorContainer,
+            ),
+          if (store.lastError != null)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Card(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      store.lastError!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ],
-            for (final entry in grouped.entries) ...[
-              Padding(
-                padding: const EdgeInsets.only(top: 8, bottom: 8),
+            ),
+          for (final entry in grouped.entries) ...[
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                 child: Text(
                   entry.key,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -166,31 +177,33 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                   ),
                 ),
               ),
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: entry.value.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 3,
-                  crossAxisSpacing: 3,
-                ),
-                itemBuilder: (context, index) {
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              sliver: SliverGrid(
+                delegate: SliverChildBuilderDelegate((context, index) {
                   final asset = entry.value[index];
                   return _AssetTile(
-                    key: _tileKeyFor(asset.id),
                     asset: asset,
+                    store: store,
                     selected: _selectedAssetIds.contains(asset.id),
                     selectionMode: _isSelectionMode,
                     onTap: () => _onAssetTap(context, asset, assets),
                     onLongPressStart: () => _startDragSelection(asset.id),
                     onLongPressEnd: _stopDragSelection,
+                    onDragHover: () => _dragSelectAsset(asset.id),
                   );
-                },
+                }, childCount: entry.value.length),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  mainAxisSpacing: 3,
+                  crossAxisSpacing: 3,
+                ),
               ),
-            ],
+            ),
           ],
-        ),
+          const SliverToBoxAdapter(child: SizedBox(height: 100)),
+        ],
       ),
     );
   }
@@ -215,7 +228,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PhotoViewerPage(
-          paths: assets.map((item) => item.localPath).toList(growable: false),
+          assets: assets,
           initialIndex: initialIndex,
         ),
       ),
@@ -233,7 +246,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
   void _toggleSelectAll(List<PhotoAsset> assets) {
     setState(() {
       if (_selectedAssetIds.length == assets.length) {
-        _clearSelectionState();
+        _selectedAssetIds.clear();
         return;
       }
       _selectedAssetIds
@@ -244,6 +257,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
 
   void _startDragSelection(String assetId) {
     setState(() {
+      _selectionModeEnabled = true;
       if (_selectedAssetIds.contains(assetId)) {
         _dragSelectionAdds = false;
         _selectedAssetIds.remove(assetId);
@@ -267,54 +281,27 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     });
   }
 
-  void _handleDragSelection(Offset globalPosition, List<PhotoAsset> assets) {
+  void _dragSelectAsset(String assetId) {
     if (!_isDragSelecting) {
       return;
     }
 
-    final hitAssetId = _assetIdAtPosition(globalPosition, assets);
-    if (hitAssetId == null || hitAssetId == _lastDraggedAssetId) {
+    if (assetId == _lastDraggedAssetId) {
       return;
     }
 
     setState(() {
       if (_dragSelectionAdds) {
-        _selectedAssetIds.add(hitAssetId);
+        _selectedAssetIds.add(assetId);
       } else {
-        _selectedAssetIds.remove(hitAssetId);
+        _selectedAssetIds.remove(assetId);
       }
-      _lastDraggedAssetId = hitAssetId;
+      _lastDraggedAssetId = assetId;
 
       if (_selectedAssetIds.isEmpty) {
         _isDragSelecting = false;
       }
     });
-  }
-
-  String? _assetIdAtPosition(Offset globalPosition, List<PhotoAsset> assets) {
-    for (final asset in assets) {
-      final key = _tileKeys[asset.id];
-      final tileContext = key?.currentContext;
-      if (tileContext == null) {
-        continue;
-      }
-
-      final renderObject = tileContext.findRenderObject();
-      if (renderObject is! RenderBox || !renderObject.hasSize) {
-        continue;
-      }
-
-      final localPosition = renderObject.globalToLocal(globalPosition);
-      final insideTile =
-          localPosition.dx >= 0 &&
-          localPosition.dy >= 0 &&
-          localPosition.dx <= renderObject.size.width &&
-          localPosition.dy <= renderObject.size.height;
-      if (insideTile) {
-        return asset.id;
-      }
-    }
-    return null;
   }
 
   Future<void> _showMoveDialog(BuildContext context, JoblensStore store) async {
@@ -376,7 +363,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     );
 
     if (moved == true && mounted) {
-      setState(_clearSelectionState);
+      setState(_exitSelectionModeState);
     }
   }
 
@@ -420,11 +407,17 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
       return;
     }
 
-    setState(_clearSelectionState);
+    setState(_exitSelectionModeState);
   }
 
   void _clearSelection() {
-    setState(_clearSelectionState);
+    setState(_exitSelectionModeState);
+  }
+
+  void _enableSelectionMode() {
+    setState(() {
+      _selectionModeEnabled = true;
+    });
   }
 
   void _clearSelectionState() {
@@ -433,19 +426,24 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     _lastDraggedAssetId = null;
   }
 
+  void _exitSelectionModeState() {
+    _selectionModeEnabled = false;
+    _clearSelectionState();
+  }
+
   void _normalizeSelectionState(List<PhotoAsset> assets) {
     final assetIds = assets.map((asset) => asset.id).toSet();
     _selectedAssetIds.removeWhere((assetId) => !assetIds.contains(assetId));
-    _tileKeys.removeWhere((assetId, _) => !assetIds.contains(assetId));
+
+    if (assets.isEmpty) {
+      _exitSelectionModeState();
+      return;
+    }
 
     if (_selectedAssetIds.isEmpty) {
       _isDragSelecting = false;
       _lastDraggedAssetId = null;
     }
-  }
-
-  GlobalKey _tileKeyFor(String assetId) {
-    return _tileKeys.putIfAbsent(assetId, () => GlobalKey());
   }
 
   Map<String, List<PhotoAsset>> _groupByDay(List<PhotoAsset> assets) {
@@ -460,40 +458,34 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
 
 class _AssetTile extends StatelessWidget {
   const _AssetTile({
-    super.key,
     required this.asset,
+    required this.store,
     required this.selected,
     required this.selectionMode,
     required this.onTap,
     required this.onLongPressStart,
     required this.onLongPressEnd,
+    required this.onDragHover,
   });
 
   final PhotoAsset asset;
+  final JoblensStore store;
   final bool selected;
   final bool selectionMode;
   final VoidCallback onTap;
   final VoidCallback onLongPressStart;
   final VoidCallback onLongPressEnd;
+  final VoidCallback onDragHover;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final tile = GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      onLongPressStart: (_) => onLongPressStart(),
-      onLongPressEnd: (_) => onLongPressEnd(),
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Image.file(
-            File(asset.thumbPath),
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) => Container(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: const Icon(Icons.broken_image_outlined),
-            ),
-          ),
+          _AssetThumbnail(asset: asset, store: store),
           if (selected)
             Positioned.fill(
               child: ColoredBox(
@@ -539,6 +531,101 @@ class _AssetTile extends StatelessWidget {
           ),
         ],
       ),
+    );
+
+    return DragTarget<String>(
+      onWillAcceptWithDetails: (_) {
+        onDragHover();
+        return false;
+      },
+      builder: (context, candidateData, rejectedData) {
+        return LongPressDraggable<String>(
+          data: asset.id,
+          maxSimultaneousDrags: 1,
+          hapticFeedbackOnStart: true,
+          ignoringFeedbackPointer: true,
+          feedback: const SizedBox(width: 1, height: 1),
+          onDragStarted: onLongPressStart,
+          onDragEnd: (_) => onLongPressEnd(),
+          child: tile,
+        );
+      },
+    );
+  }
+}
+
+class _AssetThumbnail extends StatefulWidget {
+  const _AssetThumbnail({
+    required this.asset,
+    required this.store,
+  });
+
+  final PhotoAsset asset;
+  final JoblensStore store;
+
+  @override
+  State<_AssetThumbnail> createState() => _AssetThumbnailState();
+}
+
+class _AssetThumbnailState extends State<_AssetThumbnail> {
+  bool _forceRefresh = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final thumbPath = widget.asset.thumbPath;
+    if (thumbPath.isNotEmpty && File(thumbPath).existsSync()) {
+      return Image.file(
+        File(thumbPath),
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _placeholder(context),
+      );
+    }
+
+    return FutureBuilder<String?>(
+      future: widget.store.resolveThumbnailUrl(
+        widget.asset,
+        forceRefresh: _forceRefresh,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return _placeholder(context, loading: true);
+        }
+        final url = snapshot.data;
+        if (url == null || url.isEmpty) {
+          return _placeholder(context);
+        }
+        return Image.network(
+          url,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            if (!_forceRefresh) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) {
+                  return;
+                }
+                setState(() {
+                  _forceRefresh = true;
+                });
+              });
+            }
+            return _placeholder(context);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _placeholder(BuildContext context, {bool loading = false}) {
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      alignment: Alignment.center,
+      child: loading
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.broken_image_outlined),
     );
   }
 }

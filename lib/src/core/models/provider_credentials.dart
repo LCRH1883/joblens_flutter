@@ -27,6 +27,7 @@ class ProviderCredentials {
     return switch (provider) {
       CloudProviderType.googleDrive ||
       CloudProviderType.oneDrive ||
+      CloudProviderType.dropbox ||
       CloudProviderType.box => hasAccessToken || hasRefreshToken,
       CloudProviderType.nextcloud =>
         serverUrl != null &&
@@ -35,6 +36,7 @@ class ProviderCredentials {
             username!.trim().isNotEmpty &&
             appPassword != null &&
             appPassword!.trim().isNotEmpty,
+      CloudProviderType.backend => false,
     };
   }
 
@@ -46,6 +48,7 @@ class ProviderCredentials {
   bool get isOAuthProvider {
     return provider == CloudProviderType.googleDrive ||
         provider == CloudProviderType.oneDrive ||
+        provider == CloudProviderType.dropbox ||
         provider == CloudProviderType.box;
   }
 

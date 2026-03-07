@@ -45,7 +45,11 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(index: _currentTab, children: _pages),
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragEnd: _onTabSwipeEnd,
+        child: IndexedStack(index: _currentTab, children: _pages),
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentTab,
         onDestinationSelected: (index) {
@@ -70,5 +74,20 @@ class _AppShellState extends State<AppShell> {
         ],
       ),
     );
+  }
+
+  void _onTabSwipeEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    if (velocity <= -450 && _currentTab < _pages.length - 1) {
+      setState(() {
+        _currentTab += 1;
+      });
+      return;
+    }
+    if (velocity >= 450 && _currentTab > 0) {
+      setState(() {
+        _currentTab -= 1;
+      });
+    }
   }
 }

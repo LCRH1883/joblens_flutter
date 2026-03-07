@@ -63,7 +63,10 @@ class ProjectsPage extends ConsumerWidget {
                       : _placeholder(context),
                 ),
                 title: Text(project.name),
-                subtitle: Text('$count photos'),
+                subtitle: _ProjectSubtitle(
+                  photoCount: count,
+                  notePreview: _notePreview(project.notes),
+                ),
                 trailing: PopupMenuButton<String>(
                   onSelected: (value) async {
                     if (value == 'rename') {
@@ -174,6 +177,41 @@ class ProjectsPage extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+
+  String? _notePreview(String notes) {
+    final normalized = notes.replaceAll('\r\n', '\n');
+    final lines = normalized.split('\n');
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+      if (line.isNotEmpty) {
+        return line;
+      }
+    }
+    return null;
+  }
+}
+
+class _ProjectSubtitle extends StatelessWidget {
+  const _ProjectSubtitle({required this.photoCount, required this.notePreview});
+
+  final int photoCount;
+  final String? notePreview;
+
+  @override
+  Widget build(BuildContext context) {
+    if (notePreview == null) {
+      return Text('$photoCount photos');
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('$photoCount photos'),
+        Text(notePreview!, maxLines: 1, overflow: TextOverflow.ellipsis),
+      ],
     );
   }
 }
