@@ -63,7 +63,7 @@ void main() {
           sha256: 'a' * 64,
           mediaType: 'photo',
           bytes: 123,
-          uploadPath: 'user/hash/file.jpg',
+          remotePath: 'Joblens/Library/file.jpg',
         ),
       ),
       throwsA(
@@ -97,7 +97,7 @@ void main() {
           sha256: 'a' * 64,
           mediaType: 'photo',
           bytes: 123,
-          uploadPath: 'user/hash/file.jpg',
+          remotePath: 'Joblens/Library/file.jpg',
         ),
       ),
       throwsA(

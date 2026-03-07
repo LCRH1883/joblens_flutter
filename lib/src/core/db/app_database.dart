@@ -278,6 +278,9 @@ class AppDatabase {
     required String localAssetId,
     required int projectId,
     required String remoteAssetId,
+    String? remoteProvider,
+    String? remoteFileId,
+    String? remotePath,
     required String sha256,
     required DateTime createdAt,
     bool deleted = false,
@@ -297,10 +300,10 @@ class AppDatabase {
         'status': status.name,
         'source_type': AssetSourceType.imported.name,
         'remote_asset_id': remoteAssetId,
-        'remote_provider': null,
-        'remote_file_id': null,
+        'remote_provider': remoteProvider,
+        'remote_file_id': remoteFileId,
         'upload_session_id': null,
-        'upload_path': null,
+        'upload_path': remotePath,
         'cloud_state': deleted
             ? AssetCloudState.deleted
             : AssetCloudState.cloudOnly,

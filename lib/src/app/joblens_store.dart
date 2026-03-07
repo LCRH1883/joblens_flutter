@@ -38,13 +38,11 @@ class JoblensStore extends ChangeNotifier {
   }) : _database = database,
        _mediaStorage = mediaStorage,
        _syncService = syncService,
-       _oauthService = oauthService,
        _picker = imagePicker ?? ImagePicker();
 
   final AppDatabase _database;
   final MediaStorageService _mediaStorage;
   final SyncService _syncService;
-  final OAuthService _oauthService;
   final ImagePicker _picker;
 
   bool _isLoading = true;
@@ -80,6 +78,14 @@ class JoblensStore extends ChangeNotifier {
 
   Future<void> refresh() async {
     String? remoteMergeError;
+    try {
+      await _syncService.refreshProviderConnections();
+    } catch (error, stackTrace) {
+      remoteMergeError = error.toString();
+      if (kDebugMode) {
+        debugPrint('Provider refresh failed: $error\n$stackTrace');
+      }
+    }
     _assets = await _database.getAssets();
     _projects = await _database.getProjects();
     _projectCounts = await _database.getProjectCounts();
@@ -172,7 +178,18 @@ class JoblensStore extends ChangeNotifier {
     }
 
     await _runBusy(() async {
-      await _database.createProject(trimmed);
+      final projectId = await _database.createProject(trimmed);
+      final localProject = Project(
+        id: projectId,
+        name: trimmed,
+        notes: '',
+        remoteProjectId: null,
+        coverAssetId: null,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        syncFolderMap: const {},
+      );
+      await _syncService.syncProject(localProject);
       await refresh();
     });
   }
@@ -185,6 +202,10 @@ class JoblensStore extends ChangeNotifier {
 
     await _runBusy(() async {
       await _database.renameProject(projectId, trimmed);
+      final project = (await _database.getProjects()).firstWhere(
+        (item) => item.id == projectId,
+      );
+      await _syncService.syncProject(project);
       await refresh();
     });
   }
@@ -219,10 +240,31 @@ class JoblensStore extends ChangeNotifier {
     }
 
     await _runBusy(() async {
+      final currentProjects = await _database.getProjects();
+      final project = currentProjects.firstWhere((item) => item.id == projectId);
+      final movedAssetIds = _assets
+          .where((asset) => asset.projectId == projectId)
+          .map((asset) => asset.id)
+          .toSet();
+
       await _database.deleteProject(
         projectId,
         fallbackProjectId: _defaultProjectId,
       );
+      if (project.remoteProjectId != null && project.remoteProjectId!.isNotEmpty) {
+        try {
+          await _syncService.archiveProject(project.remoteProjectId!);
+        } catch (error, stackTrace) {
+          if (kDebugMode) {
+            debugPrint('Archive project failed: $error\n$stackTrace');
+          }
+        }
+      }
+      final updatedAssets = await _database.getAssets();
+      await _syncService.enqueueAssets(
+        updatedAssets.where((asset) => movedAssetIds.contains(asset.id)),
+      );
+      unawaited(_syncService.processQueue(await _database.getProjects()));
       await refresh();
     });
   }
@@ -230,6 +272,11 @@ class JoblensStore extends ChangeNotifier {
   Future<void> moveAssetToProject(String assetId, int projectId) async {
     await _runBusy(() async {
       await _database.moveAssetToProject(assetId, projectId);
+      final movedAsset = await _database.getAssetById(assetId);
+      if (movedAsset != null) {
+        await _syncService.enqueueAsset(movedAsset);
+        unawaited(_syncService.processQueue(await _database.getProjects()));
+      }
       await refresh();
     });
   }
@@ -247,6 +294,9 @@ class JoblensStore extends ChangeNotifier {
       for (final assetId in uniqueIds) {
         await _database.moveAssetToProject(assetId, projectId);
       }
+      final movedAssets = await _database.getAssetsByIds(uniqueIds);
+      await _syncService.enqueueAssets(movedAssets);
+      unawaited(_syncService.processQueue(await _database.getProjects()));
       await refresh();
     });
   }
@@ -289,11 +339,7 @@ class JoblensStore extends ChangeNotifier {
   Future<void> clearProviderCredentials(CloudProviderType provider) async {
     await _runBusy(() async {
       await _syncService.clearCredentials(provider);
-      await _database.setProviderConnection(
-        provider,
-        ProviderTokenState.disconnected,
-      );
-      await _syncService.pauseProvider(provider);
+      await _syncService.disconnectProvider(provider);
       await refresh();
     });
   }
@@ -303,15 +349,35 @@ class JoblensStore extends ChangeNotifier {
     bool isConnected,
   ) async {
     await _runBusy(() async {
-      await _setProviderConnectedInternal(provider, isConnected);
+      if (isConnected) {
+        await _syncService.validateProviderConnection(provider);
+      } else {
+        await _syncService.disconnectProvider(provider);
+      }
+      await refresh();
     });
   }
 
-  Future<void> connectProviderWithOAuth(CloudProviderType provider) async {
+  Future<String?> beginProviderOAuthConnection(CloudProviderType provider) async {
+    String? authUrl;
     await _runBusy(() async {
-      final credentials = await _oauthService.authorize(provider);
-      await _syncService.saveCredentials(credentials);
-      await _setProviderConnectedInternal(provider, true);
+      authUrl = await _syncService.beginProviderConnection(provider);
+    });
+    return authUrl;
+  }
+
+  Future<void> connectNextcloudProvider({
+    required String serverUrl,
+    required String username,
+    required String appPassword,
+  }) async {
+    await _runBusy(() async {
+      await _syncService.connectNextcloud(
+        serverUrl: serverUrl,
+        username: username,
+        appPassword: appPassword,
+      );
+      await refresh();
     });
   }
 
@@ -380,23 +446,6 @@ class JoblensStore extends ChangeNotifier {
     throw StateError('No project available');
   }
 
-  Future<void> _setProviderConnectedInternal(
-    CloudProviderType provider,
-    bool isConnected,
-  ) async {
-    if (isConnected) {
-      await _syncService.validateProviderConnection(provider);
-    }
-
-    await _database.setProviderConnection(
-      provider,
-      isConnected
-          ? ProviderTokenState.connected
-          : ProviderTokenState.disconnected,
-    );
-
-    await refresh();
-  }
 }
 
 String normalizeProjectNotesForSave(String notes) {

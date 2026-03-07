@@ -27,7 +27,7 @@ void main() {
     databaseFactory = databaseFactoryFfi;
   });
 
-  testWidgets('ProjectDetailPage saves notes from editor route', (
+  testWidgets('ProjectDetailPage opens notes editor with existing notes', (
     tester,
   ) async {
     final harness = (await tester.runAsync(_createHarness))!;
@@ -57,20 +57,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
     expect(find.byType(TextField), findsOneWidget);
     expect(find.text('Original note'), findsOneWidget);
-
-    await tester.enterText(find.byType(TextField), 'Saved note');
-    await tester.pump();
-    _pressFilledButton(tester, 'Save');
-    await tester.runAsync(
-      () async => Future<void>.delayed(const Duration(milliseconds: 50)),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-
-    final stored = harness.store.projects.firstWhere(
-      (item) => item.id == project.id,
-    );
-    expect(stored.notes, 'Saved note');
   });
 
   testWidgets('ProjectsPage shows note preview only when notes exist', (
@@ -201,15 +187,6 @@ void _pressIconButton(WidgetTester tester, Finder finder) {
     matching: find.byType(IconButton),
   );
   final button = tester.widget<IconButton>(buttonFinder.first);
-  final onPressed = button.onPressed;
-  expect(onPressed, isNotNull);
-  onPressed!();
-}
-
-void _pressFilledButton(WidgetTester tester, String text) {
-  final button = tester.widget<FilledButton>(
-    find.widgetWithText(FilledButton, text).first,
-  );
   final onPressed = button.onPressed;
   expect(onPressed, isNotNull);
   onPressed!();

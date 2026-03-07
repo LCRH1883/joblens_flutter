@@ -20,6 +20,7 @@ Future<void> main() async {
 
   const supabaseUrl = String.fromEnvironment('JOBLENS_SUPABASE_URL');
   const supabaseAnonKey = String.fromEnvironment('JOBLENS_SUPABASE_ANON_KEY');
+  const configuredApiBaseUrl = String.fromEnvironment('API_BASE_URL');
   if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
     throw StateError(
       'Missing Supabase configuration. Provide JOBLENS_SUPABASE_URL and JOBLENS_SUPABASE_ANON_KEY via --dart-define.',
@@ -39,7 +40,9 @@ Future<void> main() async {
   final oauthService = OAuthService();
   final backendTokenProvider = const SupabaseAccessTokenProvider();
   final backendApiClient = JoblensBackendApiClient(
-    baseUrl: '$supabaseUrl/functions/v1/api/v1',
+    baseUrl: configuredApiBaseUrl.isEmpty
+        ? '$supabaseUrl/functions/v1/api/v1'
+        : configuredApiBaseUrl,
     accessTokenProvider: backendTokenProvider,
   );
   final signedMediaUrlCache = SignedMediaUrlCache();

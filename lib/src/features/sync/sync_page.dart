@@ -1,16 +1,41 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/joblens_store.dart';
 import '../../core/models/cloud_provider.dart';
-import '../../core/models/provider_credentials.dart';
+import '../../core/models/provider_account.dart';
 import '../../core/models/sync_job.dart';
 
-class SyncPage extends ConsumerWidget {
+class SyncPage extends ConsumerStatefulWidget {
   const SyncPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SyncPage> createState() => _SyncPageState();
+}
+
+class _SyncPageState extends ConsumerState<SyncPage> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ref.read(joblensStoreProvider).refresh();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final store = ref.watch(joblensStoreListenableProvider);
 
     return Scaffold(
@@ -77,63 +102,40 @@ class SyncPage extends ConsumerWidget {
                               style: Theme.of(context).textTheme.titleMedium,
                             ),
                           ),
-                          Switch.adaptive(
-                            value: providerAccount.isConnected,
-                            onChanged:
-                                (store.credentialStatus[providerAccount
-                                        .providerType] ??
-                                    false)
-                                ? (value) {
-                                    store.setProviderConnected(
-                                      providerAccount.providerType,
-                                      value,
-                                    );
-                                  }
-                                : null,
-                          ),
+                          _StatusChip(state: providerAccount.tokenState),
                         ],
                       ),
-                      Text(
-                        _providerSubtitle(
-                          providerAccount.providerType,
-                          configured:
-                              store.credentialStatus[providerAccount
-                                  .providerType] ??
-                              false,
-                          connected: providerAccount.isConnected,
-                        ),
-                      ),
+                      const SizedBox(height: 6),
+                      Text(_providerSubtitle(providerAccount)),
                       const SizedBox(height: 10),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          if (_supportsOAuth(providerAccount.providerType))
-                            OutlinedButton.icon(
-                              onPressed: () => store.connectProviderWithOAuth(
-                                providerAccount.providerType,
-                              ),
-                              icon: const Icon(Icons.login_outlined),
-                              label: const Text('OAuth Sign In'),
+                          FilledButton.icon(
+                            onPressed: store.isBusy
+                                ? null
+                                : () => _connectProvider(context, providerAccount),
+                            icon: Icon(
+                              providerAccount.isConnected
+                                  ? Icons.refresh_outlined
+                                  : Icons.link_outlined,
                             ),
-                          if (providerAccount.providerType ==
-                              CloudProviderType.nextcloud)
-                            OutlinedButton.icon(
-                              onPressed: () => _configureCredentials(
-                                context,
-                                store,
-                                providerAccount.providerType,
-                              ),
-                              icon: const Icon(Icons.key_outlined),
-                              label: const Text('Configure'),
+                            label: Text(
+                              providerAccount.isConnected ? 'Reconnect' : 'Connect',
                             ),
-                          OutlinedButton.icon(
-                            onPressed: () => store.clearProviderCredentials(
-                              providerAccount.providerType,
-                            ),
-                            icon: const Icon(Icons.delete_outline),
-                            label: const Text('Clear Credentials'),
                           ),
+                          if (providerAccount.tokenState !=
+                              ProviderTokenState.disconnected)
+                            OutlinedButton.icon(
+                              onPressed: store.isBusy
+                                  ? null
+                                  : () => store.clearProviderCredentials(
+                                      providerAccount.providerType,
+                                    ),
+                              icon: const Icon(Icons.link_off_outlined),
+                              label: const Text('Disconnect'),
+                            ),
                         ],
                       ),
                     ],
@@ -160,9 +162,7 @@ class SyncPage extends ConsumerWidget {
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
                   leading: Icon(_iconForState(job.state)),
-                  title: Text(
-                    '${job.providerType.label} • Asset ${job.assetId.substring(0, 8)}',
-                  ),
+                  title: Text('Asset ${job.assetId.substring(0, 8)}'),
                   subtitle: Text(_subtitleForJob(job)),
                 ),
               ),
@@ -172,71 +172,77 @@ class SyncPage extends ConsumerWidget {
     );
   }
 
-  Future<void> _configureCredentials(
+  Future<void> _connectProvider(
     BuildContext context,
-    JoblensStore store,
-    CloudProviderType provider,
+    ProviderAccount providerAccount,
   ) async {
-    final existing = await store.getProviderCredentials(provider);
-
-    final tokenController = TextEditingController(
-      text: existing?.accessToken ?? '',
-    );
-    final serverController = TextEditingController(
-      text: existing?.serverUrl ?? '',
-    );
-    final usernameController = TextEditingController(
-      text: existing?.username ?? '',
-    );
-    final appPasswordController = TextEditingController(
-      text: existing?.appPassword ?? '',
-    );
-
-    if (!context.mounted) {
+    final messenger = ScaffoldMessenger.of(context);
+    if (providerAccount.providerType == CloudProviderType.nextcloud) {
+      await _configureNextcloud(context);
       return;
     }
+
+    final store = ref.read(joblensStoreProvider);
+    final authUrl = await store.beginProviderOAuthConnection(
+      providerAccount.providerType,
+    );
+    if (!mounted || authUrl == null || authUrl.isEmpty) {
+      return;
+    }
+
+    final launched = await launchUrl(
+      Uri.parse(authUrl),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!mounted) {
+      return;
+    }
+
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          launched
+              ? 'Complete sign-in in your browser, then return to Joblens.'
+              : 'Unable to open provider sign-in link.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _configureNextcloud(BuildContext context) async {
+    final serverController = TextEditingController();
+    final usernameController = TextEditingController();
+    final appPasswordController = TextEditingController();
 
     await showDialog<void>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text('Configure ${provider.label}'),
+          title: const Text('Connect Nextcloud'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (provider == CloudProviderType.nextcloud) ...[
-                  TextField(
-                    controller: serverController,
-                    decoration: const InputDecoration(
-                      labelText: 'Server URL',
-                      hintText: 'https://cloud.example.com',
-                    ),
+                TextField(
+                  controller: serverController,
+                  decoration: const InputDecoration(
+                    labelText: 'Server URL',
+                    hintText: 'https://cloud.example.com',
                   ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: usernameController,
-                    decoration: const InputDecoration(labelText: 'Username'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: usernameController,
+                  decoration: const InputDecoration(labelText: 'Username'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: appPasswordController,
+                  decoration: const InputDecoration(
+                    labelText: 'App Password',
                   ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: appPasswordController,
-                    decoration: const InputDecoration(
-                      labelText: 'App Password',
-                    ),
-                    obscureText: true,
-                  ),
-                ] else ...[
-                  TextField(
-                    controller: tokenController,
-                    decoration: const InputDecoration(
-                      labelText: 'Access Token',
-                    ),
-                    obscureText: true,
-                    minLines: 2,
-                    maxLines: 4,
-                  ),
-                ],
+                  obscureText: true,
+                ),
               ],
             ),
           ),
@@ -247,20 +253,16 @@ class SyncPage extends ConsumerWidget {
             ),
             FilledButton(
               onPressed: () async {
-                final credentials = ProviderCredentials(
-                  provider: provider,
-                  accessToken: tokenController.text.trim(),
-                  serverUrl: serverController.text.trim(),
-                  username: usernameController.text.trim(),
-                  appPassword: appPasswordController.text,
-                );
-
-                await store.saveProviderCredentials(credentials);
+                await ref.read(joblensStoreProvider).connectNextcloudProvider(
+                      serverUrl: serverController.text.trim(),
+                      username: usernameController.text.trim(),
+                      appPassword: appPasswordController.text,
+                    );
                 if (context.mounted) {
                   Navigator.of(context).pop();
                 }
               },
-              child: const Text('Save'),
+              child: const Text('Connect'),
             ),
           ],
         );
@@ -268,23 +270,17 @@ class SyncPage extends ConsumerWidget {
     );
   }
 
-  String _providerSubtitle(
-    CloudProviderType provider, {
-    required bool configured,
-    required bool connected,
-  }) {
-    if (!configured) {
-      return switch (provider) {
-        CloudProviderType.nextcloud =>
-          'Credentials missing. Add server URL, username, and app password.',
-        _ =>
-          'OAuth not configured. Tap OAuth Sign In (requires client ID via --dart-define).',
-      };
-    }
-
-    return connected
-        ? 'Connected and ready to sync into Joblens/{ProjectName} folders.'
-        : 'Credentials saved. Enable the switch to connect.';
+  String _providerSubtitle(ProviderAccount providerAccount) {
+    return switch (providerAccount.tokenState) {
+      ProviderTokenState.connected =>
+        'Connected. New and moved photos sync into this provider through the Joblens backend.',
+      ProviderTokenState.expired =>
+        'Connection expired. Reconnect this provider to resume sync.',
+      ProviderTokenState.disconnected => providerAccount.providerType ==
+              CloudProviderType.nextcloud
+          ? 'Connect your Nextcloud server. Credentials are stored and refreshed by the backend.'
+          : 'Connect your ${providerAccount.providerType.label} account in the browser. Tokens are stored and refreshed by the backend.',
+    };
   }
 
   IconData _iconForState(SyncJobState state) {
@@ -304,10 +300,47 @@ class SyncPage extends ConsumerWidget {
     }
     return '$base\nError: ${job.lastError}';
   }
+}
 
-  bool _supportsOAuth(CloudProviderType provider) {
-    return provider == CloudProviderType.googleDrive ||
-        provider == CloudProviderType.oneDrive ||
-        provider == CloudProviderType.box;
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.state});
+
+  final ProviderTokenState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (label, foreground, background) = switch (state) {
+      ProviderTokenState.connected => (
+          'Connected',
+          scheme.onPrimaryContainer,
+          scheme.primaryContainer,
+        ),
+      ProviderTokenState.expired => (
+          'Expired',
+          scheme.onTertiaryContainer,
+          scheme.tertiaryContainer,
+        ),
+      ProviderTokenState.disconnected => (
+          'Disconnected',
+          scheme.onSurfaceVariant,
+          scheme.surfaceContainerHighest,
+        ),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: foreground,
+              fontWeight: FontWeight.w700,
+            ),
+      ),
+    );
   }
 }

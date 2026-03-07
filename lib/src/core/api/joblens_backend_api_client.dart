@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import '../models/cloud_provider.dart';
 import 'api_exception.dart';
 import 'backend_api_models.dart';
 import 'backend_auth.dart';
@@ -12,13 +13,71 @@ class JoblensBackendApiClient {
     required String baseUrl,
     required AccessTokenProvider accessTokenProvider,
     http.Client? httpClient,
-  }) : _baseUrl = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl,
+  }) : _baseUrl = baseUrl.endsWith('/')
+           ? baseUrl.substring(0, baseUrl.length - 1)
+           : baseUrl,
        _accessTokenProvider = accessTokenProvider,
        _httpClient = httpClient ?? http.Client();
 
   final String _baseUrl;
   final AccessTokenProvider _accessTokenProvider;
   final http.Client _httpClient;
+
+  Future<ProviderConnectionsResponse> listProviderConnections() async {
+    final map = await _authorizedJsonRequest(
+      method: 'GET',
+      path: '/providers/connections',
+    );
+    return ProviderConnectionsResponse.fromMap(map);
+  }
+
+  Future<BeginProviderConnectionResponse> beginProviderConnection(
+    CloudProviderType provider,
+  ) async {
+    final map = await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/providers/${provider.key}/connect',
+      body: const {'redirectTo': 'joblens://auth-callback'},
+    );
+    return BeginProviderConnectionResponse.fromMap(map);
+  }
+
+  Future<void> connectNextcloud(NextcloudConnectionRequest request) async {
+    await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/providers/nextcloud/connect',
+      body: request.toMap(),
+    );
+  }
+
+  Future<void> disconnectProvider(CloudProviderType provider) async {
+    await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/providers/${provider.key}/disconnect',
+    );
+  }
+
+  Future<RemoteProjectRecord> upsertProject(
+    RemoteProjectUpsertRequest request,
+  ) async {
+    final map = await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/projects/upsert',
+      body: request.toMap(),
+    );
+    return RemoteProjectRecord.fromMap(
+      map['project'] is Map<String, dynamic>
+          ? map['project'] as Map<String, dynamic>
+          : map,
+    );
+  }
+
+  Future<void> archiveProject(String remoteProjectId) async {
+    await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/projects/$remoteProjectId/archive',
+    );
+  }
 
   Future<BulkCheckAssetsResponse> bulkCheckAssets({
     required String projectId,
@@ -36,13 +95,15 @@ class JoblensBackendApiClient {
     return BulkCheckAssetsResponse.fromMap(map);
   }
 
-  Future<UploadUrlResponse> requestUploadUrl(UploadUrlRequest request) async {
+  Future<PrepareAssetUploadResponse> prepareAssetUpload(
+    PrepareAssetUploadRequest request,
+  ) async {
     final map = await _authorizedJsonRequest(
       method: 'POST',
-      path: '/assets/upload-url',
+      path: '/assets/prepare-upload',
       body: request.toMap(),
     );
-    return UploadUrlResponse.fromMap(map);
+    return PrepareAssetUploadResponse.fromMap(map);
   }
 
   Future<CommitAssetResponse> commitAsset(CommitAssetRequest request) async {
@@ -87,25 +148,168 @@ class JoblensBackendApiClient {
     return SignedMediaUrlResponse.fromMap(map);
   }
 
-  Future<void> uploadToSignedUrl({
-    required String signedUrl,
+  Future<void> uploadWithInstruction({
+    required DirectUploadInstruction instruction,
+    required Uint8List bytes,
+    required String contentType,
+    required String filename,
+  }) async {
+    switch (instruction.strategy) {
+      case 'single_put':
+        await _sendBinaryRequest(
+          method: 'PUT',
+          url: instruction.url,
+          bytes: bytes,
+          contentType: contentType,
+          headers: instruction.headers,
+        );
+      case 'single_post':
+        await _sendBinaryRequest(
+          method: 'POST',
+          url: instruction.url,
+          bytes: bytes,
+          contentType: contentType,
+          headers: instruction.headers,
+        );
+      case 'multipart_post':
+        await _sendMultipartRequest(
+          instruction: instruction,
+          bytes: bytes,
+          filename: filename,
+        );
+      case 'chunked_put':
+        await _sendChunkedPut(
+          instruction: instruction,
+          bytes: bytes,
+          contentType: contentType,
+        );
+      default:
+        throw ApiException(
+          code: 'unsupported_upload_strategy',
+          message: 'Unsupported upload strategy: ${instruction.strategy}',
+        );
+    }
+
+    if (instruction.completionUrl != null &&
+        instruction.completionUrl!.isNotEmpty) {
+      await _sendCompletionRequest(instruction);
+    }
+  }
+
+  Future<void> _sendBinaryRequest({
+    required String method,
+    required String url,
+    required Uint8List bytes,
+    required String contentType,
+    required Map<String, String> headers,
+  }) async {
+    final mergedHeaders = <String, String>{
+      ...headers,
+      if (!headers.containsKey('Content-Type')) 'Content-Type': contentType,
+    };
+    final response = switch (method) {
+      'PUT' => await _httpClient.put(
+          Uri.parse(url),
+          headers: mergedHeaders,
+          body: bytes,
+        ),
+      'POST' => await _httpClient.post(
+          Uri.parse(url),
+          headers: mergedHeaders,
+          body: bytes,
+        ),
+      _ => throw ArgumentError.value(method, 'method', 'Unsupported method'),
+    };
+    _ensureUploadSucceeded(response);
+  }
+
+  Future<void> _sendMultipartRequest({
+    required DirectUploadInstruction instruction,
+    required Uint8List bytes,
+    required String filename,
+  }) async {
+    final request = http.MultipartRequest(
+      instruction.method,
+      Uri.parse(instruction.url),
+    );
+    request.headers.addAll(instruction.headers);
+    request.fields.addAll(instruction.fields);
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        instruction.fileFieldName,
+        bytes,
+        filename: filename,
+      ),
+    );
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+    _ensureUploadSucceeded(response);
+  }
+
+  Future<void> _sendChunkedPut({
+    required DirectUploadInstruction instruction,
     required Uint8List bytes,
     required String contentType,
   }) async {
-    final response = await _httpClient.put(
-      Uri.parse(signedUrl),
-      headers: {'Content-Type': contentType},
-      body: bytes,
-    );
+    final chunkSize =
+        instruction.chunkSizeBytes == null || instruction.chunkSizeBytes! <= 0
+        ? bytes.length
+        : instruction.chunkSizeBytes!;
+    var start = 0;
+    while (start < bytes.length) {
+      final endExclusive = (start + chunkSize > bytes.length)
+          ? bytes.length
+          : start + chunkSize;
+      final chunk = Uint8List.sublistView(bytes, start, endExclusive);
+      final headers = <String, String>{
+        ...instruction.headers,
+        if (!instruction.headers.containsKey('Content-Type'))
+          'Content-Type': contentType,
+        'Content-Length': '${chunk.length}',
+        'Content-Range': 'bytes $start-${endExclusive - 1}/${bytes.length}',
+      };
+      final response = await _httpClient.put(
+        Uri.parse(instruction.url),
+        headers: headers,
+        body: chunk,
+      );
+      _ensureUploadSucceeded(response);
+      start = endExclusive;
+    }
+  }
 
+  Future<void> _sendCompletionRequest(DirectUploadInstruction instruction) async {
+    final method = (instruction.completionMethod ?? 'POST').toUpperCase();
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      ...?instruction.completionHeaders,
+      if (instruction.completionBody != null) 'Content-Type': 'application/json',
+    };
+    final uri = Uri.parse(instruction.completionUrl!);
+    final body = instruction.completionBody == null
+        ? null
+        : jsonEncode(instruction.completionBody);
+    final response = switch (method) {
+      'POST' => await _httpClient.post(uri, headers: headers, body: body),
+      'PUT' => await _httpClient.put(uri, headers: headers, body: body),
+      _ => throw ArgumentError.value(
+          method,
+          'completionMethod',
+          'Unsupported completion method',
+        ),
+    };
+    _ensureUploadSucceeded(response);
+  }
+
+  void _ensureUploadSucceeded(http.Response response) {
     final status = response.statusCode;
-    if (status == 200 || status == 201 || status == 204) {
+    if (status == 200 || status == 201 || status == 202 || status == 204) {
       return;
     }
 
     throw ApiException(
       code: 'upload_failed',
-      message: 'Signed URL upload failed with HTTP $status.',
+      message: 'Direct upload failed with HTTP $status.',
       statusCode: status,
       rawBody: response.body,
     );
@@ -157,6 +361,9 @@ class JoblensBackendApiClient {
     final decoded = jsonDecode(response.body);
     if (decoded is Map<String, dynamic>) {
       return decoded;
+    }
+    if (decoded is Map) {
+      return decoded.map((key, value) => MapEntry('$key', value));
     }
 
     throw ApiException(
@@ -221,7 +428,7 @@ class JoblensBackendApiClient {
           }
         }
       } catch (_) {
-        // Keep default parsed values.
+        // Ignore malformed response bodies and preserve the default message.
       }
     }
 

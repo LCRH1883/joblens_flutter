@@ -11,9 +11,9 @@ import '../db/app_database.dart';
 import '../models/cloud_provider.dart';
 import '../models/photo_asset.dart';
 import '../models/project.dart';
+import '../models/provider_account.dart';
 import '../models/provider_credentials.dart';
 import '../models/sync_job.dart';
-import 'adapters/adapter_factory.dart';
 import 'cloud_adapter.dart';
 import 'credential_store.dart';
 import 'oauth/oauth_service.dart';
@@ -22,7 +22,7 @@ class SyncService {
   SyncService(
     this._db,
     this._credentialStore,
-    this._oauthService, {
+    OAuthService oauthService, {
     JoblensBackendApiClient? backendApiClient,
     SignedMediaUrlCache? signedMediaUrlCache,
   }) : _backendApiClient = backendApiClient,
@@ -30,11 +30,9 @@ class SyncService {
 
   final AppDatabase _db;
   final CredentialStore _credentialStore;
-  final OAuthService _oauthService;
   final JoblensBackendApiClient? _backendApiClient;
   final SignedMediaUrlCache _signedMediaUrlCache;
   bool _isRunning = false;
-  static const Duration _refreshSkew = Duration(minutes: 2);
 
   Future<void> enqueueAsset(PhotoAsset asset) async {
     await _db.enqueueSyncJob(
@@ -42,6 +40,12 @@ class SyncService {
       projectId: asset.projectId,
       provider: CloudProviderType.backend,
     );
+  }
+
+  Future<void> enqueueAssets(Iterable<PhotoAsset> assets) async {
+    for (final asset in assets) {
+      await enqueueAsset(asset);
+    }
   }
 
   Future<void> enqueueProjectBackfill(
@@ -58,6 +62,14 @@ class SyncService {
   }
 
   Future<void> pauseProvider(CloudProviderType provider) async {
+    if (provider != CloudProviderType.backend) {
+      await _db.updateProviderAccountStatus(
+        provider,
+        ProviderTokenState.disconnected,
+      );
+      return;
+    }
+
     final jobs = await _db.getSyncJobs();
     for (final job in jobs.where(
       (item) =>
@@ -70,9 +82,14 @@ class SyncService {
   }
 
   Future<void> resumeProvider(CloudProviderType provider) async {
+    if (provider != CloudProviderType.backend) {
+      return;
+    }
+
     final jobs = await _db.getSyncJobs();
     for (final job in jobs.where(
-      (item) => item.providerType == provider && item.state == SyncJobState.paused,
+      (item) =>
+          item.providerType == provider && item.state == SyncJobState.paused,
     )) {
       await _db.updateSyncJob(
         job.copyWith(state: SyncJobState.queued, lastError: null),
@@ -84,26 +101,96 @@ class SyncService {
     await _db.setAllFailedToQueued();
   }
 
-  Future<void> validateProviderConnection(CloudProviderType provider) async {
-    final creds = await _ensureUsableCredentials(
-      provider,
-      throwOnRefreshFailure: true,
-    );
-    final adapter = buildAdapter(creds);
-    if (adapter == null) {
-      throw CloudSyncException(
-        '${provider.label} credentials are missing or incomplete.',
-      );
+  Future<void> refreshProviderConnections() async {
+    final client = _backendApiClient;
+    if (client == null) {
+      return;
     }
 
-    await adapter.authenticate();
+    final response = await client.listProviderConnections();
+    for (final connection in response.connections) {
+      final state = switch (connection.status) {
+        'connected' => ProviderTokenState.connected,
+        'expired' => ProviderTokenState.expired,
+        _ => ProviderTokenState.disconnected,
+      };
+      await _db.updateProviderAccountStatus(
+        connection.provider,
+        state,
+        connectedAt: connection.connectedAt,
+      );
+    }
   }
 
-  Future<ProviderCredentials?> readCredentials(CloudProviderType provider) {
-    return _credentialStore.read(provider);
+  Future<String> beginProviderConnection(CloudProviderType provider) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw const CloudSyncException('Backend API client is not configured.');
+    }
+    if (provider == CloudProviderType.nextcloud ||
+        provider == CloudProviderType.backend) {
+      throw CloudSyncException(
+        '${provider.label} does not use browser-based OAuth.',
+      );
+    }
+    final response = await client.beginProviderConnection(provider);
+    return response.authorizationUrl;
+  }
+
+  Future<void> connectNextcloud({
+    required String serverUrl,
+    required String username,
+    required String appPassword,
+  }) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw const CloudSyncException('Backend API client is not configured.');
+    }
+    await client.connectNextcloud(
+      NextcloudConnectionRequest(
+        serverUrl: serverUrl,
+        username: username,
+        appPassword: appPassword,
+      ),
+    );
+    await refreshProviderConnections();
+  }
+
+  Future<void> disconnectProvider(CloudProviderType provider) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw const CloudSyncException('Backend API client is not configured.');
+    }
+    if (provider == CloudProviderType.backend) {
+      return;
+    }
+    await client.disconnectProvider(provider);
+    await _db.updateProviderAccountStatus(
+      provider,
+      ProviderTokenState.disconnected,
+    );
+  }
+
+  Future<void> validateProviderConnection(CloudProviderType provider) async {
+    await refreshProviderConnections();
+    final providers = await _db.getProviderAccounts();
+    final account = providers.where((item) => item.providerType == provider).firstOrNull;
+    if (account == null || !account.isConnected) {
+      throw CloudSyncException('${provider.label} is not connected.');
+    }
+  }
+
+  Future<ProviderCredentials?> readCredentials(CloudProviderType provider) async {
+    if (provider == CloudProviderType.nextcloud) {
+      return _credentialStore.read(provider);
+    }
+    return null;
   }
 
   Future<void> saveCredentials(ProviderCredentials credentials) async {
+    if (credentials.provider != CloudProviderType.nextcloud) {
+      return;
+    }
     await _credentialStore.save(credentials.provider, credentials);
   }
 
@@ -112,9 +199,41 @@ class SyncService {
   }
 
   Future<Map<CloudProviderType, bool>> credentialStatus() async {
-    final status = await _credentialStore.hasCredentials();
+    final accounts = await _db.getProviderAccounts();
+    final status = <CloudProviderType, bool>{
+      for (final provider in CloudProviderType.values) provider: false,
+    };
+    for (final account in accounts) {
+      status[account.providerType] =
+          account.tokenState != ProviderTokenState.disconnected;
+    }
     status[CloudProviderType.backend] = true;
     return status;
+  }
+
+  Future<String?> syncProject(Project project) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      return project.remoteProjectId;
+    }
+
+    final response = await client.upsertProject(
+      RemoteProjectUpsertRequest(
+        localProjectId: project.id,
+        name: project.name,
+        remoteProjectId: project.remoteProjectId,
+      ),
+    );
+    await _db.updateProjectRemoteId(project.id, response.projectId);
+    return response.projectId;
+  }
+
+  Future<void> archiveProject(String remoteProjectId) async {
+    final client = _backendApiClient;
+    if (client == null || remoteProjectId.isEmpty) {
+      return;
+    }
+    await client.archiveProject(remoteProjectId);
   }
 
   Future<void> processQueue(List<Project> projects) async {
@@ -173,13 +292,27 @@ class SyncService {
           continue;
         }
 
-        final remoteProjectId = project.remoteProjectId;
-        if (remoteProjectId == null || remoteProjectId.trim().isEmpty) {
-          await _db.updateAssetSyncError(asset.id, 'project_mapping_missing');
+        String remoteProjectId;
+        try {
+          remoteProjectId =
+              (await syncProject(project))?.trim() ?? '';
+        } catch (error) {
+          final mapped = _mapSyncError(error);
+          await _db.updateAssetSyncError(asset.id, mapped.code);
           await _markJobsFailed(
             jobs,
-            errorCode: 'project_mapping_missing',
-            errorMessage: 'Project is missing remote project mapping.',
+            errorCode: mapped.code,
+            errorMessage: mapped.message,
+          );
+          continue;
+        }
+
+        if (remoteProjectId.isEmpty) {
+          await _db.updateAssetSyncError(asset.id, 'project_sync_failed');
+          await _markJobsFailed(
+            jobs,
+            errorCode: 'project_sync_failed',
+            errorMessage: 'Unable to create or resolve backend project.',
           );
           continue;
         }
@@ -229,11 +362,15 @@ class SyncService {
           for (final item in chunk) {
             final result = resultsByDevice[item.asset.id];
             if (result == null) {
-              await _db.updateAssetSyncError(item.asset.id, 'bulk_check_missing_result');
+              await _db.updateAssetSyncError(
+                item.asset.id,
+                'bulk_check_missing_result',
+              );
               await _markJobsFailed(
                 item.jobs,
                 errorCode: 'bulk_check_missing_result',
-                errorMessage: 'Backend did not return bulk-check result for this asset.',
+                errorMessage:
+                    'Backend did not return bulk-check result for this asset.',
               );
               continue;
             }
@@ -392,12 +529,18 @@ class SyncService {
           status: remoteAsset.deleted ? AssetStatus.deleted : AssetStatus.active,
           cloudState: cloudState,
           remoteAssetId: remoteAsset.assetId,
+          remoteProvider: remoteAsset.provider?.key,
+          remoteFileId: remoteAsset.remoteFileId,
+          uploadPath: remoteAsset.remotePath,
           lastSyncErrorCode: null,
         ),
       );
       await _db.updateAssetCloudMetadata(
         assetId: existingByHash.id,
         remoteAssetId: remoteAsset.assetId,
+        remoteProvider: remoteAsset.provider?.key,
+        remoteFileId: remoteAsset.remoteFileId,
+        uploadPath: remoteAsset.remotePath,
         cloudState: cloudState,
         lastSyncErrorCode: null,
       );
@@ -408,6 +551,9 @@ class SyncService {
       localAssetId: 'remote:${remoteAsset.assetId}',
       projectId: localProjectId,
       remoteAssetId: remoteAsset.assetId,
+      remoteProvider: remoteAsset.provider?.key,
+      remoteFileId: remoteAsset.remoteFileId,
+      remotePath: remoteAsset.remotePath,
       sha256: remoteAsset.sha256,
       createdAt: remoteAsset.takenAt ?? remoteAsset.createdAt ?? DateTime.now(),
       deleted: remoteAsset.deleted,
@@ -440,8 +586,10 @@ class SyncService {
       await _db.updateAssetCloudMetadata(
         assetId: context.asset.id,
         remoteAssetId: outcome.remoteAssetId,
+        remoteProvider: outcome.remoteProvider?.key,
+        remoteFileId: outcome.remoteFileId,
         uploadSessionId: outcome.uploadSessionId,
-        uploadPath: outcome.uploadPath,
+        uploadPath: outcome.remotePath,
         cloudState: AssetCloudState.localAndCloud,
         lastSyncErrorCode: null,
       );
@@ -487,37 +635,48 @@ class SyncService {
     String? uploadSessionHint = context.asset.uploadSessionId;
 
     while (true) {
-      final uploadUrl = await client.requestUploadUrl(
-        UploadUrlRequest(
+      final prepared = await client.prepareAssetUpload(
+        PrepareAssetUploadRequest(
           projectId: remoteProjectId,
           sha256: context.asset.hash,
           mediaType: 'photo',
+          bytes: bytes.length,
           filename: filename,
+          mimeType: mimeType,
+          deviceAssetId: context.asset.id,
+          takenAt: context.asset.createdAt,
           uploadSessionId: uploadSessionHint,
         ),
       );
 
-      if (uploadUrl.isDuplicate) {
+      if (prepared.isDuplicate) {
         return _UploadOutcome(
-          remoteAssetId: uploadUrl.assetId ?? '',
-          uploadSessionId: uploadUrl.uploadSessionId,
-          uploadPath: uploadUrl.path,
+          remoteAssetId: prepared.assetId ?? '',
+          remoteProvider: prepared.provider,
+          remoteFileId: prepared.remoteFileId,
+          uploadSessionId: prepared.uploadSessionId,
+          remotePath: prepared.remotePath,
         );
       }
 
-      if (!uploadUrl.isUploadRequired ||
-          uploadUrl.signedUrl == null ||
-          uploadUrl.path == null) {
+      final instruction = prepared.instruction;
+      final remotePath = prepared.remotePath;
+      if (!prepared.isUploadRequired ||
+          instruction == null ||
+          remotePath == null ||
+          remotePath.isEmpty) {
         throw const ApiException(
-          code: 'invalid_upload_url_response',
-          message: 'Upload URL response missing signed URL or path.',
+          code: 'invalid_prepare_upload_response',
+          message:
+              'Prepare-upload response is missing upload instructions or remote path.',
         );
       }
 
-      await client.uploadToSignedUrl(
-        signedUrl: uploadUrl.signedUrl!,
+      await client.uploadWithInstruction(
+        instruction: instruction,
         bytes: bytes,
         contentType: mimeType,
+        filename: filename,
       );
 
       try {
@@ -532,9 +691,10 @@ class SyncService {
             durationMs: 0,
             takenAt: context.asset.createdAt,
             deviceAssetId: context.asset.id,
-            uploadPath: uploadUrl.path!,
-            uploadBucket: uploadUrl.bucket,
-            uploadSessionId: uploadUrl.uploadSessionId,
+            uploadSessionId: prepared.uploadSessionId,
+            provider: prepared.provider,
+            remoteFileId: prepared.remoteFileId,
+            remotePath: remotePath,
           ),
         );
 
@@ -548,8 +708,10 @@ class SyncService {
 
         return _UploadOutcome(
           remoteAssetId: remoteAssetId,
-          uploadSessionId: uploadUrl.uploadSessionId,
-          uploadPath: uploadUrl.path,
+          remoteProvider: commit.provider ?? prepared.provider,
+          remoteFileId: commit.remoteFileId ?? prepared.remoteFileId,
+          uploadSessionId: prepared.uploadSessionId,
+          remotePath: commit.remotePath ?? remotePath,
         );
       } on ApiException catch (error) {
         if (error.code == 'uploaded_object_not_found' && !retriedMissingObject) {
@@ -608,66 +770,10 @@ class SyncService {
     if (error is ApiException) {
       return _MappedSyncError(code: error.code, message: error.message);
     }
+    if (error is CloudSyncException) {
+      return _MappedSyncError(code: 'provider_error', message: error.message);
+    }
     return _MappedSyncError(code: 'network_error', message: error.toString());
-  }
-
-  Future<ProviderCredentials?> _ensureUsableCredentials(
-    CloudProviderType provider, {
-    bool throwOnRefreshFailure = false,
-  }) async {
-    if (provider == CloudProviderType.backend) {
-      return null;
-    }
-
-    var credentials = await _credentialStore.read(provider);
-    if (credentials == null) {
-      return null;
-    }
-
-    if (provider == CloudProviderType.nextcloud) {
-      return credentials.isConfigured ? credentials : null;
-    }
-
-    if (!credentials.hasAccessToken) {
-      credentials = await _tryRefresh(
-        provider,
-        credentials,
-        throwOnFailure: throwOnRefreshFailure,
-      );
-      return credentials;
-    }
-
-    if (credentials.isAccessTokenExpiringSoon(skew: _refreshSkew) &&
-        credentials.canRefreshAccessToken) {
-      credentials = await _tryRefresh(
-        provider,
-        credentials,
-        throwOnFailure: throwOnRefreshFailure,
-      );
-    }
-
-    return credentials;
-  }
-
-  Future<ProviderCredentials?> _tryRefresh(
-    CloudProviderType provider,
-    ProviderCredentials current, {
-    bool throwOnFailure = false,
-  }) async {
-    if (!current.canRefreshAccessToken) {
-      return null;
-    }
-
-    try {
-      final refreshed = await _oauthService.refreshAccessToken(current);
-      await _credentialStore.save(provider, refreshed);
-      return refreshed;
-    } catch (_) {
-      if (throwOnFailure) {
-        rethrow;
-      }
-      return null;
-    }
   }
 }
 
@@ -684,13 +790,17 @@ class _PendingAssetContext {
 class _UploadOutcome {
   const _UploadOutcome({
     required this.remoteAssetId,
+    required this.remoteProvider,
+    required this.remoteFileId,
     required this.uploadSessionId,
-    required this.uploadPath,
+    required this.remotePath,
   });
 
   final String remoteAssetId;
+  final CloudProviderType? remoteProvider;
+  final String? remoteFileId;
   final String? uploadSessionId;
-  final String? uploadPath;
+  final String? remotePath;
 }
 
 class _MappedSyncError {
@@ -712,4 +822,8 @@ List<List<T>> _chunk<T>(List<T> items, int chunkSize) {
     chunks.add(items.sublist(index, end));
   }
   return chunks;
+}
+
+extension _FirstOrNullExtension<T> on Iterable<T> {
+  T? get firstOrNull => isEmpty ? null : first;
 }

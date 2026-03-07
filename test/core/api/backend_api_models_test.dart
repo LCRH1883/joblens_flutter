@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:joblens_flutter/src/core/api/backend_api_models.dart';
+import 'package:joblens_flutter/src/core/models/cloud_provider.dart';
 
 void main() {
   test('parses bulk-check response with duplicate and missing entries', () {
@@ -33,8 +34,8 @@ void main() {
     expect(response.results.last.isMissing, isTrue);
   });
 
-  test('parses upload-url duplicate and upload_required variants', () {
-    final duplicate = UploadUrlResponse.fromMap({
+  test('parses prepare-upload duplicate and upload_required variants', () {
+    final duplicate = PrepareAssetUploadResponse.fromMap({
       'status': 'duplicate',
       'assetId': 'asset-dup',
       'uploadSessionId': 'session-1',
@@ -42,18 +43,24 @@ void main() {
     expect(duplicate.isDuplicate, isTrue);
     expect(duplicate.assetId, 'asset-dup');
 
-    final uploadRequired = UploadUrlResponse.fromMap({
+    final uploadRequired = PrepareAssetUploadResponse.fromMap({
       'status': 'upload_required',
-      'bucket': 'joblens-originals',
-      'path': 'user/hash/file.jpg',
-      'token': 'token-value',
-      'signedUrl': 'https://upload.example/signed',
+      'provider': 'google_drive',
       'uploadSessionId': 'session-2',
+      'remotePath': 'Joblens/Library/file.jpg',
+      'remoteFileId': 'provider-file-1',
+      'upload': {
+        'strategy': 'single_put',
+        'url': 'https://upload.example/signed',
+        'method': 'PUT',
+        'headers': {'x-upload': '1'},
+      },
     });
     expect(uploadRequired.isUploadRequired, isTrue);
-    expect(uploadRequired.bucket, 'joblens-originals');
-    expect(uploadRequired.path, 'user/hash/file.jpg');
-    expect(uploadRequired.signedUrl, 'https://upload.example/signed');
+    expect(uploadRequired.provider, CloudProviderType.googleDrive);
+    expect(uploadRequired.remotePath, 'Joblens/Library/file.jpg');
+    expect(uploadRequired.remoteFileId, 'provider-file-1');
+    expect(uploadRequired.instruction?.url, 'https://upload.example/signed');
     expect(uploadRequired.uploadSessionId, 'session-2');
   });
 
