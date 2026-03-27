@@ -50,7 +50,9 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(title: Text('${_currentIndex + 1} / ${widget.assets.length}')),
+      appBar: AppBar(
+        title: Text('${_currentIndex + 1} / ${widget.assets.length}'),
+      ),
       body: EdgeSwipeBack(
         child: PageView.builder(
           controller: _pageController,

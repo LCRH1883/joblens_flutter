@@ -2,56 +2,47 @@
 
 Joblens is a cross-platform Flutter app (iOS + Android) for job photo capture and organization.
 
-## Implemented MVP Foundation
+## Architecture
+
+- The user signs into Joblens with Supabase Auth.
+- The user then connects a cloud storage account they already own:
+  - Google Drive
+  - OneDrive
+  - Dropbox
+  - Box
+  - Nextcloud
+- Provider storage is the canonical home for synced Joblens content.
+- Supabase stores app auth, provider connection state, sync metadata, asset indexes, and coordination data between devices.
+- The mobile app keeps a local private cache in app storage and syncs through the Joblens backend.
+
+## Current App Scope
 
 - In-app camera capture (photo-only)
 - Import photos from device gallery
-- Private app storage for all Joblens photos (`joblens_media/originals` + `joblens_media/thumbnails`)
-- Gallery timeline grouped by date (Immich-inspired interaction style)
-- Projects (album-equivalent) with create, rename, delete, and detail views
-- Queue-based sync engine with provider toggles for:
-  - Google Drive
-  - OneDrive
-  - Nextcloud
-  - Box
-- Sync queue states: `queued`, `uploading`, `done`, `failed`, `paused`
+- Private app storage for local originals and thumbnails
+- Gallery timeline grouped by date
+- Projects with create, rename, delete, notes, and detail views
+- Backend-orchestrated sync queue with provider connection management
+- Remote asset merge and backend-proxied media URLs for cloud-only items
 
-## Cloud Sync Status
+## Provider Connection Flow
 
-API-backed cloud adapters are implemented for all four providers:
-
-- Google Drive (`Drive v3 API`)
-- OneDrive (`Microsoft Graph Drive API`)
-- Box (`Box Content API`)
-- Nextcloud (`WebDAV`)
-
-Credentials are stored in secure storage and configured from the **Sync** screen:
-
-- Google Drive / OneDrive / Box: in-app OAuth (PKCE)
-- Nextcloud: server URL + username + app password
-- OAuth providers automatically refresh access tokens when they are near expiry.
-
-OAuth client IDs are provided at runtime via `--dart-define`:
-
-```bash
---dart-define=JOBLENS_GOOGLE_CLIENT_ID=...
---dart-define=JOBLENS_ONEDRIVE_CLIENT_ID=...
---dart-define=JOBLENS_BOX_CLIENT_ID=...
-```
-
-Register this redirect URI in each OAuth app configuration:
-
-- `joblens:/oauth2redirect`
+- Google Drive, OneDrive, Dropbox, and Box connect through backend-managed OAuth in the browser.
+- Nextcloud connects by sending server URL, username, and app password to the backend.
+- The Flutter app does not keep provider OAuth tokens as its source of truth.
+- The backend stores provider connection secrets and refresh state.
 
 ## Run
 
 ```bash
 /Users/lcrh/Tools/flutter/bin/flutter pub get
 /Users/lcrh/Tools/flutter/bin/flutter run \
-  --dart-define=JOBLENS_GOOGLE_CLIENT_ID=... \
-  --dart-define=JOBLENS_ONEDRIVE_CLIENT_ID=... \
-  --dart-define=JOBLENS_BOX_CLIENT_ID=...
+  --dart-define=JOBLENS_SUPABASE_URL=... \
+  --dart-define=JOBLENS_SUPABASE_ANON_KEY=... \
+  --dart-define=API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
 ```
+
+If `API_BASE_URL` is omitted, the app defaults to `${JOBLENS_SUPABASE_URL}/functions/v1/api/v1`.
 
 ## Validate
 

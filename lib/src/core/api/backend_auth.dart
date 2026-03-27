@@ -20,7 +20,8 @@ class SupabaseAccessTokenProvider implements AccessTokenProvider {
 
     try {
       final refreshed = await auth.refreshSession();
-      final token = refreshed.session?.accessToken ?? auth.currentSession?.accessToken;
+      final token =
+          refreshed.session?.accessToken ?? auth.currentSession?.accessToken;
       if (token == null || token.trim().isEmpty) {
         return null;
       }

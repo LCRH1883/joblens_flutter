@@ -12,24 +12,18 @@ import '../models/cloud_provider.dart';
 import '../models/photo_asset.dart';
 import '../models/project.dart';
 import '../models/provider_account.dart';
-import '../models/provider_credentials.dart';
 import '../models/sync_job.dart';
 import 'cloud_adapter.dart';
-import 'credential_store.dart';
-import 'oauth/oauth_service.dart';
 
 class SyncService {
   SyncService(
-    this._db,
-    this._credentialStore,
-    OAuthService oauthService, {
+    this._db, {
     JoblensBackendApiClient? backendApiClient,
     SignedMediaUrlCache? signedMediaUrlCache,
   }) : _backendApiClient = backendApiClient,
        _signedMediaUrlCache = signedMediaUrlCache ?? SignedMediaUrlCache();
 
   final AppDatabase _db;
-  final CredentialStore _credentialStore;
   final JoblensBackendApiClient? _backendApiClient;
   final SignedMediaUrlCache _signedMediaUrlCache;
   bool _isRunning = false;
@@ -171,46 +165,6 @@ class SyncService {
     );
   }
 
-  Future<void> validateProviderConnection(CloudProviderType provider) async {
-    await refreshProviderConnections();
-    final providers = await _db.getProviderAccounts();
-    final account = providers.where((item) => item.providerType == provider).firstOrNull;
-    if (account == null || !account.isConnected) {
-      throw CloudSyncException('${provider.label} is not connected.');
-    }
-  }
-
-  Future<ProviderCredentials?> readCredentials(CloudProviderType provider) async {
-    if (provider == CloudProviderType.nextcloud) {
-      return _credentialStore.read(provider);
-    }
-    return null;
-  }
-
-  Future<void> saveCredentials(ProviderCredentials credentials) async {
-    if (credentials.provider != CloudProviderType.nextcloud) {
-      return;
-    }
-    await _credentialStore.save(credentials.provider, credentials);
-  }
-
-  Future<void> clearCredentials(CloudProviderType provider) async {
-    await _credentialStore.clear(provider);
-  }
-
-  Future<Map<CloudProviderType, bool>> credentialStatus() async {
-    final accounts = await _db.getProviderAccounts();
-    final status = <CloudProviderType, bool>{
-      for (final provider in CloudProviderType.values) provider: false,
-    };
-    for (final account in accounts) {
-      status[account.providerType] =
-          account.tokenState != ProviderTokenState.disconnected;
-    }
-    status[CloudProviderType.backend] = true;
-    return status;
-  }
-
   Future<String?> syncProject(Project project) async {
     final client = _backendApiClient;
     if (client == null) {
@@ -266,7 +220,9 @@ class SyncService {
 
       final assets = await _db.getAssetsByIds(jobsByAssetId.keys);
       final assetsById = {for (final asset in assets) asset.id: asset};
-      final projectsById = {for (final project in projects) project.id: project};
+      final projectsById = {
+        for (final project in projects) project.id: project,
+      };
 
       final groupedByRemoteProject = <String, List<_PendingAssetContext>>{};
       for (final entry in jobsByAssetId.entries) {
@@ -294,8 +250,7 @@ class SyncService {
 
         String remoteProjectId;
         try {
-          remoteProjectId =
-              (await syncProject(project))?.trim() ?? '';
+          remoteProjectId = (await syncProject(project))?.trim() ?? '';
         } catch (error) {
           final mapped = _mapSyncError(error);
           await _db.updateAssetSyncError(asset.id, mapped.code);
@@ -400,7 +355,8 @@ class SyncService {
 
     final mappedProjects = {
       for (final project in projects)
-        if (project.remoteProjectId != null && project.remoteProjectId!.isNotEmpty)
+        if (project.remoteProjectId != null &&
+            project.remoteProjectId!.isNotEmpty)
           project.remoteProjectId!: project.id,
     };
     if (mappedProjects.isEmpty) {
@@ -493,7 +449,10 @@ class SyncService {
     if (remoteAssetId == null || remoteAssetId.isEmpty) {
       return;
     }
-    _signedMediaUrlCache.invalidate(remoteAssetId, SignedMediaUrlKind.thumbnail);
+    _signedMediaUrlCache.invalidate(
+      remoteAssetId,
+      SignedMediaUrlKind.thumbnail,
+    );
   }
 
   Future<void> invalidateDownloadUrl(PhotoAsset asset) async {
@@ -526,7 +485,9 @@ class SyncService {
       await _db.upsertAsset(
         existingByHash.copyWith(
           projectId: localProjectId,
-          status: remoteAsset.deleted ? AssetStatus.deleted : AssetStatus.active,
+          status: remoteAsset.deleted
+              ? AssetStatus.deleted
+              : AssetStatus.active,
           cloudState: cloudState,
           remoteAssetId: remoteAsset.assetId,
           remoteProvider: remoteAsset.provider?.key,
@@ -714,7 +675,8 @@ class SyncService {
           remotePath: commit.remotePath ?? remotePath,
         );
       } on ApiException catch (error) {
-        if (error.code == 'uploaded_object_not_found' && !retriedMissingObject) {
+        if (error.code == 'uploaded_object_not_found' &&
+            !retriedMissingObject) {
           retriedMissingObject = true;
           uploadSessionHint = null;
           continue;
@@ -778,10 +740,7 @@ class SyncService {
 }
 
 class _PendingAssetContext {
-  const _PendingAssetContext({
-    required this.asset,
-    required this.jobs,
-  });
+  const _PendingAssetContext({required this.asset, required this.jobs});
 
   final PhotoAsset asset;
   final List<SyncJob> jobs;
@@ -822,8 +781,4 @@ List<List<T>> _chunk<T>(List<T> items, int chunkSize) {
     chunks.add(items.sublist(index, end));
   }
   return chunks;
-}
-
-extension _FirstOrNullExtension<T> on Iterable<T> {
-  T? get firstOrNull => isEmpty ? null : first;
 }

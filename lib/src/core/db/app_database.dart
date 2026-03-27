@@ -14,7 +14,7 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 4;
+  static const _schemaVersion = 5;
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -84,6 +84,13 @@ class AppDatabase {
           )
         ''');
 
+        await db.execute('''
+          CREATE TABLE app_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+          )
+        ''');
+
         await db.execute(
           'CREATE INDEX idx_assets_project ON photo_assets(project_id)',
         );
@@ -141,6 +148,14 @@ class AppDatabase {
             "ALTER TABLE photo_assets ADD COLUMN remote_file_id TEXT",
           );
         }
+        if (oldVersion < 5) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS app_state (
+              key TEXT PRIMARY KEY,
+              value TEXT
+            )
+          ''');
+        }
       },
     );
 
@@ -153,6 +168,50 @@ class AppDatabase {
   }
 
   Future<void> close() async => _db.close();
+
+  Future<String?> getStoredAuthUserId() async {
+    final rows = await _db.query(
+      'app_state',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['auth_user_id'],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+
+    final value = rows.first['value'] as String?;
+    if (value == null || value.trim().isEmpty) {
+      return null;
+    }
+    return value;
+  }
+
+  Future<void> setStoredAuthUserId(String? userId) async {
+    if (userId == null || userId.trim().isEmpty) {
+      await _db.delete(
+        'app_state',
+        where: 'key = ?',
+        whereArgs: ['auth_user_id'],
+      );
+      return;
+    }
+
+    await _db.insert('app_state', {
+      'key': 'auth_user_id',
+      'value': userId.trim(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> clearUserScopedData() async {
+    await _db.transaction((txn) async {
+      await txn.delete('sync_jobs');
+      await txn.delete('photo_assets');
+      await txn.delete('projects');
+      await txn.delete('provider_accounts');
+    });
+  }
 
   Future<int> ensureDefaultProject() async {
     final now = DateTime.now().toIso8601String();
@@ -287,30 +346,26 @@ class AppDatabase {
   }) async {
     final now = DateTime.now();
     final status = deleted ? AssetStatus.deleted : AssetStatus.active;
-    await _db.insert(
-      'photo_assets',
-      {
-        'id': localAssetId,
-        'local_path': '',
-        'thumb_path': '',
-        'created_at': createdAt.toIso8601String(),
-        'imported_at': now.toIso8601String(),
-        'project_id': projectId,
-        'hash': sha256,
-        'status': status.name,
-        'source_type': AssetSourceType.imported.name,
-        'remote_asset_id': remoteAssetId,
-        'remote_provider': remoteProvider,
-        'remote_file_id': remoteFileId,
-        'upload_session_id': null,
-        'upload_path': remotePath,
-        'cloud_state': deleted
-            ? AssetCloudState.deleted
-            : AssetCloudState.cloudOnly,
-        'last_sync_error_code': null,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _db.insert('photo_assets', {
+      'id': localAssetId,
+      'local_path': '',
+      'thumb_path': '',
+      'created_at': createdAt.toIso8601String(),
+      'imported_at': now.toIso8601String(),
+      'project_id': projectId,
+      'hash': sha256,
+      'status': status.name,
+      'source_type': AssetSourceType.imported.name,
+      'remote_asset_id': remoteAssetId,
+      'remote_provider': remoteProvider,
+      'remote_file_id': remoteFileId,
+      'upload_session_id': null,
+      'upload_path': remotePath,
+      'cloud_state': deleted
+          ? AssetCloudState.deleted
+          : AssetCloudState.cloudOnly,
+      'last_sync_error_code': null,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<List<PhotoAsset>> getAssets({
@@ -552,9 +607,7 @@ class AppDatabase {
     String? cloudState,
     String? lastSyncErrorCode,
   }) async {
-    final values = <String, Object?>{
-      'last_sync_error_code': lastSyncErrorCode,
-    };
+    final values = <String, Object?>{'last_sync_error_code': lastSyncErrorCode};
     if (remoteAssetId != null) {
       values['remote_asset_id'] = remoteAssetId;
     }
@@ -582,10 +635,7 @@ class AppDatabase {
     );
   }
 
-  Future<void> updateAssetSyncError(
-    String assetId,
-    String? errorCode,
-  ) async {
+  Future<void> updateAssetSyncError(String assetId, String? errorCode) async {
     await _db.update(
       'photo_assets',
       {'last_sync_error_code': errorCode},

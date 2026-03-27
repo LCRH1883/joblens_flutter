@@ -32,9 +32,7 @@ void main() {
 
     await client.bulkCheckAssets(
       projectId: 'project-1',
-      assets: [
-        BulkCheckAssetInput(deviceAssetId: 'asset-1', sha256: 'a' * 64),
-      ],
+      assets: [BulkCheckAssetInput(deviceAssetId: 'asset-1', sha256: 'a' * 64)],
     );
 
     expect(capturedRequest.headers['authorization'], 'Bearer token-123');
@@ -67,7 +65,11 @@ void main() {
         ),
       ),
       throwsA(
-        isA<ApiException>().having((e) => e.code, 'code', 'uploaded_object_not_found'),
+        isA<ApiException>().having(
+          (e) => e.code,
+          'code',
+          'uploaded_object_not_found',
+        ),
       ),
     );
   });
@@ -101,7 +103,11 @@ void main() {
         ),
       ),
       throwsA(
-        isA<ApiException>().having((e) => e.code, 'code', 'idempotency_key_reuse_mismatch'),
+        isA<ApiException>().having(
+          (e) => e.code,
+          'code',
+          'idempotency_key_reuse_mismatch',
+        ),
       ),
     );
   });
@@ -112,9 +118,7 @@ void main() {
       accessTokenProvider: _FakeTokenProvider('token-123'),
       httpClient: MockClient((request) async {
         return http.Response(
-          jsonEncode({
-            'signedUrl': 'https://cdn.example/thumb.jpg',
-          }),
+          jsonEncode({'signedUrl': 'https://cdn.example/thumb.jpg'}),
           200,
           headers: {'content-type': 'application/json'},
         );

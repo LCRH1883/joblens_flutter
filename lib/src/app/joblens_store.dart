@@ -4,16 +4,15 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Session;
 
 import '../core/db/app_database.dart';
 import '../core/models/cloud_provider.dart';
 import '../core/models/photo_asset.dart';
 import '../core/models/project.dart';
 import '../core/models/provider_account.dart';
-import '../core/models/provider_credentials.dart';
 import '../core/models/sync_job.dart';
 import '../core/storage/media_storage_service.dart';
-import '../core/sync/oauth/oauth_service.dart';
 import '../core/sync/sync_service.dart';
 
 const int kProjectNotesMaxLength = 4000;
@@ -33,17 +32,22 @@ class JoblensStore extends ChangeNotifier {
     required AppDatabase database,
     required MediaStorageService mediaStorage,
     required SyncService syncService,
-    required OAuthService oauthService,
     ImagePicker? imagePicker,
+    String? Function()? currentAuthUserIdProvider,
+    Future<void> Function()? signOutAction,
   }) : _database = database,
        _mediaStorage = mediaStorage,
        _syncService = syncService,
-       _picker = imagePicker ?? ImagePicker();
+       _picker = imagePicker ?? ImagePicker(),
+       _currentAuthUserIdProvider = currentAuthUserIdProvider,
+       _signOutAction = signOutAction;
 
   final AppDatabase _database;
   final MediaStorageService _mediaStorage;
   final SyncService _syncService;
   final ImagePicker _picker;
+  final String? Function()? _currentAuthUserIdProvider;
+  final Future<void> Function()? _signOutAction;
 
   bool _isLoading = true;
   bool _isBusy = false;
@@ -54,9 +58,6 @@ class JoblensStore extends ChangeNotifier {
   Map<int, int> _projectCounts = const {};
   List<ProviderAccount> _providers = const [];
   List<SyncJob> _syncJobs = const [];
-  Map<CloudProviderType, bool> _credentialStatus = {
-    for (final provider in CloudProviderType.values) provider: false,
-  };
 
   bool get isLoading => _isLoading;
   bool get isBusy => _isBusy;
@@ -66,17 +67,35 @@ class JoblensStore extends ChangeNotifier {
   Map<int, int> get projectCounts => _projectCounts;
   List<ProviderAccount> get providers => _providers;
   List<SyncJob> get syncJobs => _syncJobs;
-  Map<CloudProviderType, bool> get credentialStatus => _credentialStatus;
 
   Future<void> initialize() async {
-    await _database.ensureDefaultProject();
-    await _database.ensureProviderRows();
-    await refresh();
+    await _synchronizeAuthUser(_currentAuthUserIdProvider?.call());
     _isLoading = false;
     notifyListeners();
   }
 
+  Future<void> syncAuthSession(Session? session) async {
+    await _synchronizeAuthUser(session?.user.id);
+  }
+
+  Future<void> signOut() async {
+    await _runBusy(() async {
+      final signOutAction = _signOutAction;
+      if (signOutAction != null) {
+        await signOutAction();
+      }
+    });
+  }
+
   Future<void> refresh() async {
+    await _hydrateLocalState();
+    final authUserId = _currentAuthUserIdProvider?.call();
+    if (authUserId == null || authUserId.trim().isEmpty) {
+      _lastError = null;
+      notifyListeners();
+      return;
+    }
+
     String? remoteMergeError;
     try {
       await _syncService.refreshProviderConnections();
@@ -91,7 +110,6 @@ class JoblensStore extends ChangeNotifier {
     _projectCounts = await _database.getProjectCounts();
     _providers = await _database.getProviderAccounts();
     _syncJobs = await _database.getSyncJobs();
-    _credentialStatus = await _syncService.credentialStatus();
     try {
       await _syncService.mergeRemoteAssets(_projects);
       _assets = await _database.getAssets();
@@ -241,7 +259,9 @@ class JoblensStore extends ChangeNotifier {
 
     await _runBusy(() async {
       final currentProjects = await _database.getProjects();
-      final project = currentProjects.firstWhere((item) => item.id == projectId);
+      final project = currentProjects.firstWhere(
+        (item) => item.id == projectId,
+      );
       final movedAssetIds = _assets
           .where((asset) => asset.projectId == projectId)
           .map((asset) => asset.id)
@@ -251,7 +271,8 @@ class JoblensStore extends ChangeNotifier {
         projectId,
         fallbackProjectId: _defaultProjectId,
       );
-      if (project.remoteProjectId != null && project.remoteProjectId!.isNotEmpty) {
+      if (project.remoteProjectId != null &&
+          project.remoteProjectId!.isNotEmpty) {
         try {
           await _syncService.archiveProject(project.remoteProjectId!);
         } catch (error, stackTrace) {
@@ -322,43 +343,14 @@ class JoblensStore extends ChangeNotifier {
     });
   }
 
-  Future<ProviderCredentials?> getProviderCredentials(
-    CloudProviderType provider,
-  ) async {
-    return _syncService.readCredentials(provider);
-  }
-
-  Future<void> saveProviderCredentials(ProviderCredentials credentials) async {
+  Future<void> disconnectProvider(CloudProviderType provider) async {
     await _runBusy(() async {
-      await _syncService.saveCredentials(credentials);
-      _credentialStatus = await _syncService.credentialStatus();
-      notifyListeners();
-    });
-  }
-
-  Future<void> clearProviderCredentials(CloudProviderType provider) async {
-    await _runBusy(() async {
-      await _syncService.clearCredentials(provider);
       await _syncService.disconnectProvider(provider);
       await refresh();
     });
   }
 
-  Future<void> setProviderConnected(
-    CloudProviderType provider,
-    bool isConnected,
-  ) async {
-    await _runBusy(() async {
-      if (isConnected) {
-        await _syncService.validateProviderConnection(provider);
-      } else {
-        await _syncService.disconnectProvider(provider);
-      }
-      await refresh();
-    });
-  }
-
-  Future<String?> beginProviderOAuthConnection(CloudProviderType provider) async {
+  Future<String?> beginProviderConnection(CloudProviderType provider) async {
     String? authUrl;
     await _runBusy(() async {
       authUrl = await _syncService.beginProviderConnection(provider);
@@ -366,7 +358,7 @@ class JoblensStore extends ChangeNotifier {
     return authUrl;
   }
 
-  Future<void> connectNextcloudProvider({
+  Future<void> connectNextcloud({
     required String serverUrl,
     required String username,
     required String appPassword,
@@ -446,6 +438,33 @@ class JoblensStore extends ChangeNotifier {
     throw StateError('No project available');
   }
 
+  Future<void> _hydrateLocalState() async {
+    _assets = await _database.getAssets();
+    _projects = await _database.getProjects();
+    _projectCounts = await _database.getProjectCounts();
+    _providers = await _database.getProviderAccounts();
+    _syncJobs = await _database.getSyncJobs();
+  }
+
+  Future<void> _synchronizeAuthUser(String? userId) async {
+    final normalizedUserId = userId?.trim();
+    final storedUserId = await _database.getStoredAuthUserId();
+    final shouldResetLocalData =
+        storedUserId != null && storedUserId != normalizedUserId;
+
+    if (shouldResetLocalData) {
+      await _database.clearUserScopedData();
+      await _mediaStorage.clearAll();
+    }
+
+    if (storedUserId != normalizedUserId) {
+      await _database.setStoredAuthUserId(normalizedUserId);
+    }
+
+    await _database.ensureDefaultProject();
+    await _database.ensureProviderRows();
+    await refresh();
+  }
 }
 
 String normalizeProjectNotesForSave(String notes) {

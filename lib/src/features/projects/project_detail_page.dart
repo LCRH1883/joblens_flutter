@@ -203,10 +203,8 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
 
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PhotoViewerPage(
-          assets: assets,
-          initialIndex: initialIndex,
-        ),
+        builder: (_) =>
+            PhotoViewerPage(assets: assets, initialIndex: initialIndex),
       ),
     );
   }
@@ -569,10 +567,7 @@ class _ProjectAssetTile extends StatelessWidget {
 }
 
 class _ProjectAssetThumbnail extends StatefulWidget {
-  const _ProjectAssetThumbnail({
-    required this.asset,
-    required this.store,
-  });
+  const _ProjectAssetThumbnail({required this.asset, required this.store});
 
   final PhotoAsset asset;
   final JoblensStore store;

@@ -83,6 +83,16 @@ class MediaStorageService {
       lastSyncErrorCode: null,
     );
   }
+
+  Future<void> clearAll() async {
+    if (await rootDir.exists()) {
+      await rootDir.delete(recursive: true);
+    }
+
+    await rootDir.create(recursive: true);
+    await originalsDir.create(recursive: true);
+    await thumbnailsDir.create(recursive: true);
+  }
 }
 
 String _generateHashAndThumbnail(String sourcePath, String thumbPath) {

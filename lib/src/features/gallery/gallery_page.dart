@@ -227,10 +227,8 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
 
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => PhotoViewerPage(
-          assets: assets,
-          initialIndex: initialIndex,
-        ),
+        builder: (_) =>
+            PhotoViewerPage(assets: assets, initialIndex: initialIndex),
       ),
     );
   }
@@ -555,10 +553,7 @@ class _AssetTile extends StatelessWidget {
 }
 
 class _AssetThumbnail extends StatefulWidget {
-  const _AssetThumbnail({
-    required this.asset,
-    required this.store,
-  });
+  const _AssetThumbnail({required this.asset, required this.store});
 
   final PhotoAsset asset;
   final JoblensStore store;

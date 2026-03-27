@@ -48,5 +48,5 @@ Git history is not available in this workspace, so use this standard:
 
 ## Security & Configuration Tips
 - Never commit access tokens, app passwords, or secrets.
-- Store provider credentials via secure storage only.
+- Supabase Auth is the app login layer. Provider connection secrets belong in the backend, not as the app's source of truth.
 - Validate cloud sync changes against failure paths (401, 403, network timeout).

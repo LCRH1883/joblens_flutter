@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../features/auth/auth_page.dart';
 import '../features/gallery/gallery_page.dart';
 import '../features/projects/projects_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/sync/sync_page.dart';
+import 'joblens_store.dart';
 
 class JoblensApp extends StatelessWidget {
   const JoblensApp({super.key});
@@ -20,8 +24,77 @@ class JoblensApp extends StatelessWidget {
         colorScheme: scheme,
         appBarTheme: const AppBarTheme(centerTitle: false),
       ),
-      home: const AppShell(),
+      home: const AuthGate(),
     );
+  }
+}
+
+class AuthGate extends ConsumerStatefulWidget {
+  const AuthGate({super.key});
+
+  @override
+  ConsumerState<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends ConsumerState<AuthGate> {
+  late final Stream<AuthState> _authStateChanges;
+  Session? _session;
+  bool _isSynchronizingSession = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _session = Supabase.instance.client.auth.currentSession;
+    _authStateChanges = Supabase.instance.client.auth.onAuthStateChange;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = ref.watch(joblensStoreListenableProvider);
+
+    return StreamBuilder<AuthState>(
+      stream: _authStateChanges,
+      initialData: AuthState(AuthChangeEvent.initialSession, _session),
+      builder: (context, snapshot) {
+        final session = snapshot.data?.session ?? _session;
+        if (session != _session) {
+          _session = session;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _handleSessionChange(session);
+          });
+        }
+
+        if (store.isLoading || _isSynchronizingSession) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (session == null) {
+          return const AuthPage();
+        }
+
+        return const AppShell();
+      },
+    );
+  }
+
+  Future<void> _handleSessionChange(Session? session) async {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isSynchronizingSession = true;
+    });
+    try {
+      await ref.read(joblensStoreProvider).syncAuthSession(session);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSynchronizingSession = false;
+        });
+      }
+    }
   }
 }
 

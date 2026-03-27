@@ -6,12 +6,9 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:joblens_flutter/src/app/joblens_store.dart';
 import 'package:joblens_flutter/src/core/db/app_database.dart';
-import 'package:joblens_flutter/src/core/models/cloud_provider.dart';
 import 'package:joblens_flutter/src/core/models/photo_asset.dart';
 import 'package:joblens_flutter/src/core/models/project.dart';
 import 'package:joblens_flutter/src/core/storage/media_storage_service.dart';
-import 'package:joblens_flutter/src/core/sync/credential_store.dart';
-import 'package:joblens_flutter/src/core/sync/oauth/oauth_service.dart';
 import 'package:joblens_flutter/src/core/sync/sync_service.dart';
 
 void main() {
@@ -39,7 +36,6 @@ void main() {
       database: database,
       mediaStorage: mediaStorage,
       syncService: _NoopSyncService(database),
-      oauthService: OAuthService(),
     );
 
     await store.initialize();
@@ -61,13 +57,7 @@ void main() {
 }
 
 class _NoopSyncService extends SyncService {
-  _NoopSyncService(AppDatabase db)
-    : super(db, CredentialStore(), OAuthService());
-
-  @override
-  Future<Map<CloudProviderType, bool>> credentialStatus() async {
-    return {for (final provider in CloudProviderType.values) provider: false};
-  }
+  _NoopSyncService(super.db) : super();
 
   @override
   Future<void> enqueueAsset(PhotoAsset asset) async {}

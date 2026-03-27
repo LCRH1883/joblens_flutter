@@ -13,7 +13,10 @@ void main() {
 
     Future<SignedMediaUrlResponse> loader() async {
       loads += 1;
-      return SignedMediaUrlResponse(url: 'https://cdn.example/$loads', ttlSec: 0);
+      return SignedMediaUrlResponse(
+        url: 'https://cdn.example/$loads',
+        ttlSec: 0,
+      );
     }
 
     final first = await cache.resolve(
@@ -48,7 +51,10 @@ void main() {
 
     Future<SignedMediaUrlResponse> loader() async {
       loads += 1;
-      return SignedMediaUrlResponse(url: 'https://cdn.example/$loads', ttlSec: 300);
+      return SignedMediaUrlResponse(
+        url: 'https://cdn.example/$loads',
+        ttlSec: 300,
+      );
     }
 
     final first = await cache.resolve(

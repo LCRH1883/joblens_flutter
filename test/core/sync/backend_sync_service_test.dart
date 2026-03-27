@@ -14,8 +14,6 @@ import 'package:joblens_flutter/src/core/models/photo_asset.dart';
 import 'package:joblens_flutter/src/core/models/project.dart';
 import 'package:joblens_flutter/src/core/models/sync_job.dart';
 import 'package:joblens_flutter/src/core/storage/media_storage_service.dart';
-import 'package:joblens_flutter/src/core/sync/credential_store.dart';
-import 'package:joblens_flutter/src/core/sync/oauth/oauth_service.dart';
 import 'package:joblens_flutter/src/core/sync/sync_service.dart';
 
 void main() {
@@ -46,8 +44,6 @@ void main() {
     );
     final syncService = SyncService(
       harness.database,
-      CredentialStore(),
-      OAuthService(),
       backendApiClient: fakeClient,
     );
 
@@ -112,8 +108,6 @@ void main() {
     );
     final syncService = SyncService(
       harness.database,
-      CredentialStore(),
-      OAuthService(),
       backendApiClient: fakeClient,
     );
 
@@ -199,9 +193,9 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
     this.commitResponse,
     required this.projectId,
   }) : super(
-          baseUrl: 'https://example.supabase.co/functions/v1/api/v1',
-          accessTokenProvider: const _FakeTokenProvider(),
-        );
+         baseUrl: 'https://example.supabase.co/functions/v1/api/v1',
+         accessTokenProvider: const _FakeTokenProvider(),
+       );
 
   final BulkCheckAssetsResponse bulkCheckResponse;
   final PrepareAssetUploadResponse? prepareUploadResponse;

@@ -38,17 +38,15 @@ class ProviderConnectionsResponse {
   factory ProviderConnectionsResponse.fromMap(Map<String, dynamic> map) {
     final raw = _asList(map['connections'] ?? map['providers']);
     return ProviderConnectionsResponse(
-      connections: _asMapList(raw)
-          .map(ProviderConnectionSummary.fromMap)
-          .toList(growable: false),
+      connections: _asMapList(
+        raw,
+      ).map(ProviderConnectionSummary.fromMap).toList(growable: false),
     );
   }
 }
 
 class BeginProviderConnectionResponse {
-  const BeginProviderConnectionResponse({
-    required this.authorizationUrl,
-  });
+  const BeginProviderConnectionResponse({required this.authorizationUrl});
 
   final String authorizationUrl;
 
@@ -103,10 +101,7 @@ class RemoteProjectUpsertRequest {
 }
 
 class RemoteProjectRecord {
-  const RemoteProjectRecord({
-    required this.projectId,
-    required this.name,
-  });
+  const RemoteProjectRecord({required this.projectId, required this.name});
 
   final String projectId;
   final String name;
@@ -129,10 +124,7 @@ class BulkCheckAssetInput {
   final String sha256;
 
   Map<String, Object?> toMap() {
-    return {
-      'deviceAssetId': deviceAssetId,
-      'sha256': sha256,
-    };
+    return {'deviceAssetId': deviceAssetId, 'sha256': sha256};
   }
 }
 
@@ -153,9 +145,9 @@ class BulkCheckAssetsResponse {
     final rawResults = _asList(map['results']);
     return BulkCheckAssetsResponse(
       projectId: _asString(map['projectId'], fallback: ''),
-      results: _asMapList(rawResults)
-          .map(BulkCheckResult.fromMap)
-          .toList(growable: false),
+      results: _asMapList(
+        rawResults,
+      ).map(BulkCheckResult.fromMap).toList(growable: false),
       duplicateCount: _asInt(map['duplicateCount']),
       missingCount: _asInt(map['missingCount']),
     );
@@ -313,9 +305,7 @@ class DirectUploadInstruction {
       headers: _asStringMap(map['headers']),
       fields: _asStringMap(map['fields']),
       fileFieldName: _asString(map['fileFieldName'], fallback: 'file'),
-      chunkSizeBytes: _asNullableInt(
-        map['chunkSizeBytes'] ?? map['chunkSize'],
-      ),
+      chunkSizeBytes: _asNullableInt(map['chunkSizeBytes'] ?? map['chunkSize']),
       completionUrl: _asNullableString(map['completionUrl']),
       completionMethod: _asNullableString(map['completionMethod']),
       completionHeaders: _asNullableStringMap(map['completionHeaders']),
@@ -408,9 +398,7 @@ class CommitAssetResponse {
         ? null
         : _asNullableString(rawAsset['id']);
     final providerValue = _asNullableString(
-      map['provider'] ??
-          rawAsset?['provider'] ??
-          rawAsset?['providerType'],
+      map['provider'] ?? rawAsset?['provider'] ?? rawAsset?['providerType'],
     );
 
     return CommitAssetResponse(
@@ -462,10 +450,7 @@ class ListAssetsRequest {
 }
 
 class ListAssetsResponse {
-  const ListAssetsResponse({
-    required this.assets,
-    required this.nextCursor,
-  });
+  const ListAssetsResponse({required this.assets, required this.nextCursor});
 
   final List<BackendAssetRecord> assets;
   final String? nextCursor;
@@ -473,11 +458,12 @@ class ListAssetsResponse {
   factory ListAssetsResponse.fromMap(Map<String, dynamic> map) {
     final rawAssets = _asList(map['assets'] ?? map['items'] ?? map['data']);
     return ListAssetsResponse(
-      assets: _asMapList(rawAssets)
-          .map(BackendAssetRecord.fromMap)
-          .toList(growable: false),
+      assets: _asMapList(
+        rawAssets,
+      ).map(BackendAssetRecord.fromMap).toList(growable: false),
       nextCursor:
-          _asNullableString(map['nextCursor']) ?? _asNullableString(map['cursor']),
+          _asNullableString(map['nextCursor']) ??
+          _asNullableString(map['cursor']),
     );
   }
 }
@@ -526,18 +512,24 @@ class BackendAssetRecord {
       assetId: id,
       sha256: sha,
       projectId:
-          _asNullableString(map['projectId']) ?? _asNullableString(map['project_id']),
+          _asNullableString(map['projectId']) ??
+          _asNullableString(map['project_id']),
       mediaType:
-          _asNullableString(map['mediaType']) ?? _asNullableString(map['media_type']),
+          _asNullableString(map['mediaType']) ??
+          _asNullableString(map['media_type']),
       filename: _asNullableString(map['filename']),
       mimeType:
-          _asNullableString(map['mimeType']) ?? _asNullableString(map['mime_type']),
+          _asNullableString(map['mimeType']) ??
+          _asNullableString(map['mime_type']),
       bytes: _asNullableInt(map['bytes']),
       durationMs:
-          _asNullableInt(map['durationMs']) ?? _asNullableInt(map['duration_ms']),
+          _asNullableInt(map['durationMs']) ??
+          _asNullableInt(map['duration_ms']),
       takenAt:
-          _asNullableDateTime(map['takenAt']) ?? _asNullableDateTime(map['taken_at']),
-      createdAt: _asNullableDateTime(map['createdAt']) ??
+          _asNullableDateTime(map['takenAt']) ??
+          _asNullableDateTime(map['taken_at']),
+      createdAt:
+          _asNullableDateTime(map['createdAt']) ??
           _asNullableDateTime(map['created_at']),
       provider: providerValue == null
           ? null
@@ -548,16 +540,15 @@ class BackendAssetRecord {
       remotePath: _asNullableString(
         map['remotePath'] ?? map['providerPath'] ?? map['path'],
       ),
-      deleted: _asBool(map['deleted']) || _asNullableString(map['status']) == 'deleted',
+      deleted:
+          _asBool(map['deleted']) ||
+          _asNullableString(map['status']) == 'deleted',
     );
   }
 }
 
 class SignedMediaUrlResponse {
-  const SignedMediaUrlResponse({
-    required this.url,
-    required this.ttlSec,
-  });
+  const SignedMediaUrlResponse({required this.url, required this.ttlSec});
 
   final String url;
   final int ttlSec;
@@ -566,7 +557,9 @@ class SignedMediaUrlResponse {
     return SignedMediaUrlResponse(
       url: _asNullableString(map['url']) ?? _asString(map['signedUrl']),
       ttlSec:
-          _asNullableInt(map['ttlSec']) ?? _asNullableInt(map['expiresInSec']) ?? 300,
+          _asNullableInt(map['ttlSec']) ??
+          _asNullableInt(map['expiresInSec']) ??
+          300,
     );
   }
 }
@@ -582,10 +575,7 @@ List<dynamic> _asList(Object? value) {
 }
 
 List<Map<String, dynamic>> _asMapList(List<dynamic> items) {
-  return items
-      .whereType<Map>()
-      .map(_toStringKeyedMap)
-      .toList(growable: false);
+  return items.whereType<Map>().map(_toStringKeyedMap).toList(growable: false);
 }
 
 Map<String, dynamic> _toStringKeyedMap(Map<dynamic, dynamic> item) {

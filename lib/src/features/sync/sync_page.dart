@@ -14,7 +14,8 @@ class SyncPage extends ConsumerStatefulWidget {
   ConsumerState<SyncPage> createState() => _SyncPageState();
 }
 
-class _SyncPageState extends ConsumerState<SyncPage> with WidgetsBindingObserver {
+class _SyncPageState extends ConsumerState<SyncPage>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
@@ -115,14 +116,19 @@ class _SyncPageState extends ConsumerState<SyncPage> with WidgetsBindingObserver
                           FilledButton.icon(
                             onPressed: store.isBusy
                                 ? null
-                                : () => _connectProvider(context, providerAccount),
+                                : () => _connectProvider(
+                                    context,
+                                    providerAccount,
+                                  ),
                             icon: Icon(
                               providerAccount.isConnected
                                   ? Icons.refresh_outlined
                                   : Icons.link_outlined,
                             ),
                             label: Text(
-                              providerAccount.isConnected ? 'Reconnect' : 'Connect',
+                              providerAccount.isConnected
+                                  ? 'Reconnect'
+                                  : 'Connect',
                             ),
                           ),
                           if (providerAccount.tokenState !=
@@ -130,7 +136,7 @@ class _SyncPageState extends ConsumerState<SyncPage> with WidgetsBindingObserver
                             OutlinedButton.icon(
                               onPressed: store.isBusy
                                   ? null
-                                  : () => store.clearProviderCredentials(
+                                  : () => store.disconnectProvider(
                                       providerAccount.providerType,
                                     ),
                               icon: const Icon(Icons.link_off_outlined),
@@ -183,7 +189,7 @@ class _SyncPageState extends ConsumerState<SyncPage> with WidgetsBindingObserver
     }
 
     final store = ref.read(joblensStoreProvider);
-    final authUrl = await store.beginProviderOAuthConnection(
+    final authUrl = await store.beginProviderConnection(
       providerAccount.providerType,
     );
     if (!mounted || authUrl == null || authUrl.isEmpty) {
@@ -238,9 +244,7 @@ class _SyncPageState extends ConsumerState<SyncPage> with WidgetsBindingObserver
                 const SizedBox(height: 10),
                 TextField(
                   controller: appPasswordController,
-                  decoration: const InputDecoration(
-                    labelText: 'App Password',
-                  ),
+                  decoration: const InputDecoration(labelText: 'App Password'),
                   obscureText: true,
                 ),
               ],
@@ -253,7 +257,9 @@ class _SyncPageState extends ConsumerState<SyncPage> with WidgetsBindingObserver
             ),
             FilledButton(
               onPressed: () async {
-                await ref.read(joblensStoreProvider).connectNextcloudProvider(
+                await ref
+                    .read(joblensStoreProvider)
+                    .connectNextcloud(
                       serverUrl: serverController.text.trim(),
                       username: usernameController.text.trim(),
                       appPassword: appPasswordController.text,
@@ -276,10 +282,10 @@ class _SyncPageState extends ConsumerState<SyncPage> with WidgetsBindingObserver
         'Connected. New and moved photos sync into this provider through the Joblens backend.',
       ProviderTokenState.expired =>
         'Connection expired. Reconnect this provider to resume sync.',
-      ProviderTokenState.disconnected => providerAccount.providerType ==
-              CloudProviderType.nextcloud
-          ? 'Connect your Nextcloud server. Credentials are stored and refreshed by the backend.'
-          : 'Connect your ${providerAccount.providerType.label} account in the browser. Tokens are stored and refreshed by the backend.',
+      ProviderTokenState.disconnected =>
+        providerAccount.providerType == CloudProviderType.nextcloud
+            ? 'Connect your Nextcloud server. Credentials are stored and refreshed by the backend.'
+            : 'Connect your ${providerAccount.providerType.label} account in the browser. Tokens are stored and refreshed by the backend.',
     };
   }
 
@@ -312,20 +318,20 @@ class _StatusChip extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final (label, foreground, background) = switch (state) {
       ProviderTokenState.connected => (
-          'Connected',
-          scheme.onPrimaryContainer,
-          scheme.primaryContainer,
-        ),
+        'Connected',
+        scheme.onPrimaryContainer,
+        scheme.primaryContainer,
+      ),
       ProviderTokenState.expired => (
-          'Expired',
-          scheme.onTertiaryContainer,
-          scheme.tertiaryContainer,
-        ),
+        'Expired',
+        scheme.onTertiaryContainer,
+        scheme.tertiaryContainer,
+      ),
       ProviderTokenState.disconnected => (
-          'Disconnected',
-          scheme.onSurfaceVariant,
-          scheme.surfaceContainerHighest,
-        ),
+        'Disconnected',
+        scheme.onSurfaceVariant,
+        scheme.surfaceContainerHighest,
+      ),
     };
 
     return Container(
@@ -337,9 +343,9 @@ class _StatusChip extends StatelessWidget {
       child: Text(
         label,
         style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: foreground,
-              fontWeight: FontWeight.w700,
-            ),
+          color: foreground,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }

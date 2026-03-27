@@ -10,8 +10,6 @@ import 'src/core/api/joblens_backend_api_client.dart';
 import 'src/core/api/signed_media_url_cache.dart';
 import 'src/core/db/app_database.dart';
 import 'src/core/storage/media_storage_service.dart';
-import 'src/core/sync/credential_store.dart';
-import 'src/core/sync/oauth/oauth_service.dart';
 import 'src/core/sync/sync_service.dart';
 import 'src/features/camera/camera_providers.dart';
 
@@ -26,7 +24,14 @@ Future<void> main() async {
       'Missing Supabase configuration. Provide JOBLENS_SUPABASE_URL and JOBLENS_SUPABASE_ANON_KEY via --dart-define.',
     );
   }
-  await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+  await Supabase.initialize(
+    url: supabaseUrl,
+    anonKey: supabaseAnonKey,
+    authOptions: const FlutterAuthClientOptions(
+      autoRefreshToken: true,
+      detectSessionInUri: true,
+    ),
+  );
 
   List<CameraDescription> cameras;
   try {
@@ -36,8 +41,6 @@ Future<void> main() async {
   }
   final database = await AppDatabase.open();
   final mediaStorage = await MediaStorageService.create();
-  final credentialStore = CredentialStore();
-  final oauthService = OAuthService();
   final backendTokenProvider = const SupabaseAccessTokenProvider();
   final backendApiClient = JoblensBackendApiClient(
     baseUrl: configuredApiBaseUrl.isEmpty
@@ -48,8 +51,6 @@ Future<void> main() async {
   final signedMediaUrlCache = SignedMediaUrlCache();
   final syncService = SyncService(
     database,
-    credentialStore,
-    oauthService,
     backendApiClient: backendApiClient,
     signedMediaUrlCache: signedMediaUrlCache,
   );
@@ -57,7 +58,9 @@ Future<void> main() async {
     database: database,
     mediaStorage: mediaStorage,
     syncService: syncService,
-    oauthService: oauthService,
+    currentAuthUserIdProvider: () =>
+        Supabase.instance.client.auth.currentUser?.id,
+    signOutAction: () => Supabase.instance.client.auth.signOut(),
   );
 
   await store.initialize();

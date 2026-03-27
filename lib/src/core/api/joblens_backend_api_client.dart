@@ -209,15 +209,15 @@ class JoblensBackendApiClient {
     };
     final response = switch (method) {
       'PUT' => await _httpClient.put(
-          Uri.parse(url),
-          headers: mergedHeaders,
-          body: bytes,
-        ),
+        Uri.parse(url),
+        headers: mergedHeaders,
+        body: bytes,
+      ),
       'POST' => await _httpClient.post(
-          Uri.parse(url),
-          headers: mergedHeaders,
-          body: bytes,
-        ),
+        Uri.parse(url),
+        headers: mergedHeaders,
+        body: bytes,
+      ),
       _ => throw ArgumentError.value(method, 'method', 'Unsupported method'),
     };
     _ensureUploadSucceeded(response);
@@ -278,12 +278,15 @@ class JoblensBackendApiClient {
     }
   }
 
-  Future<void> _sendCompletionRequest(DirectUploadInstruction instruction) async {
+  Future<void> _sendCompletionRequest(
+    DirectUploadInstruction instruction,
+  ) async {
     final method = (instruction.completionMethod ?? 'POST').toUpperCase();
     final headers = <String, String>{
       'Accept': 'application/json',
       ...?instruction.completionHeaders,
-      if (instruction.completionBody != null) 'Content-Type': 'application/json',
+      if (instruction.completionBody != null)
+        'Content-Type': 'application/json',
     };
     final uri = Uri.parse(instruction.completionUrl!);
     final body = instruction.completionBody == null
@@ -293,10 +296,10 @@ class JoblensBackendApiClient {
       'POST' => await _httpClient.post(uri, headers: headers, body: body),
       'PUT' => await _httpClient.put(uri, headers: headers, body: body),
       _ => throw ArgumentError.value(
-          method,
-          'completionMethod',
-          'Unsupported completion method',
-        ),
+        method,
+        'completionMethod',
+        'Unsupported completion method',
+      ),
     };
     _ensureUploadSucceeded(response);
   }
