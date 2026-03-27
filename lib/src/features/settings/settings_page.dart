@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app/joblens_store.dart';
 
@@ -10,7 +9,6 @@ class SettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final store = ref.watch(joblensStoreListenableProvider);
-    final user = Supabase.instance.client.auth.currentUser;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -19,13 +17,9 @@ class SettingsPage extends ConsumerWidget {
         children: [
           Card(
             child: ListTile(
-              title: const Text('Account'),
-              subtitle: Text(user?.email ?? 'Signed in'),
-              trailing: TextButton(
-                onPressed: store.isBusy
-                    ? null
-                    : () => ref.read(joblensStoreProvider).signOut(),
-                child: const Text('Sign out'),
+              title: const Text('App Mode'),
+              subtitle: const Text(
+                'Local-first mode is available without signing in. Cloud sync requires app login and provider connection.',
               ),
             ),
           ),

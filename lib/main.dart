@@ -16,36 +16,31 @@ import 'src/features/camera/camera_providers.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  const supabaseUrl = String.fromEnvironment('JOBLENS_SUPABASE_URL');
-  const supabaseAnonKey = String.fromEnvironment('JOBLENS_SUPABASE_ANON_KEY');
-  const configuredApiBaseUrl = String.fromEnvironment('API_BASE_URL');
-  if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
-    throw StateError(
-      'Missing Supabase configuration. Provide JOBLENS_SUPABASE_URL and JOBLENS_SUPABASE_ANON_KEY via --dart-define.',
+  final config = _AppConfiguration.fromEnvironment();
+  if (config.isConfigured) {
+    await Supabase.initialize(
+      url: config.supabaseUrl,
+      anonKey: config.supabaseAnonKey,
+      authOptions: const FlutterAuthClientOptions(
+        autoRefreshToken: true,
+        detectSessionInUri: true,
+      ),
     );
   }
-  await Supabase.initialize(
-    url: supabaseUrl,
-    anonKey: supabaseAnonKey,
-    authOptions: const FlutterAuthClientOptions(
-      autoRefreshToken: true,
-      detectSessionInUri: true,
-    ),
-  );
 
   List<CameraDescription> cameras;
   try {
-    cameras = await availableCameras();
+    cameras = await availableCameras().timeout(const Duration(seconds: 4));
   } catch (_) {
     cameras = const [];
   }
   final database = await AppDatabase.open();
   final mediaStorage = await MediaStorageService.create();
-  final backendTokenProvider = const SupabaseAccessTokenProvider();
+  final backendTokenProvider = config.isConfigured
+      ? const SupabaseAccessTokenProvider()
+      : const NullAccessTokenProvider();
   final backendApiClient = JoblensBackendApiClient(
-    baseUrl: configuredApiBaseUrl.isEmpty
-        ? '$supabaseUrl/functions/v1/api/v1'
-        : configuredApiBaseUrl,
+    baseUrl: config.apiBaseUrl,
     accessTokenProvider: backendTokenProvider,
   );
   final signedMediaUrlCache = SignedMediaUrlCache();
@@ -58,9 +53,12 @@ Future<void> main() async {
     database: database,
     mediaStorage: mediaStorage,
     syncService: syncService,
-    currentAuthUserIdProvider: () =>
-        Supabase.instance.client.auth.currentUser?.id,
-    signOutAction: () => Supabase.instance.client.auth.signOut(),
+    currentAuthUserIdProvider: config.isConfigured
+        ? () => Supabase.instance.client.auth.currentUser?.id
+        : null,
+    signOutAction: config.isConfigured
+        ? () => Supabase.instance.client.auth.signOut()
+        : null,
   );
 
   await store.initialize();
@@ -74,4 +72,30 @@ Future<void> main() async {
       child: const JoblensApp(),
     ),
   );
+}
+
+class _AppConfiguration {
+  const _AppConfiguration({
+    required this.supabaseUrl,
+    required this.supabaseAnonKey,
+    required this.apiBaseUrlOverride,
+  });
+
+  _AppConfiguration.fromEnvironment()
+    : supabaseUrl = const String.fromEnvironment('JOBLENS_SUPABASE_URL'),
+      supabaseAnonKey = const String.fromEnvironment(
+        'JOBLENS_SUPABASE_ANON_KEY',
+      ),
+      apiBaseUrlOverride = const String.fromEnvironment('API_BASE_URL');
+
+  final String supabaseUrl;
+  final String supabaseAnonKey;
+  final String apiBaseUrlOverride;
+
+  bool get isConfigured =>
+      supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
+
+  String get apiBaseUrl => apiBaseUrlOverride.trim().isNotEmpty
+      ? apiBaseUrlOverride.trim()
+      : '${supabaseUrl.trim()}/functions/v1/api/v1';
 }

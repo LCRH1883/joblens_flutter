@@ -4,6 +4,13 @@ abstract class AccessTokenProvider {
   Future<String?> getAccessToken({bool forceRefresh = false});
 }
 
+class NullAccessTokenProvider implements AccessTokenProvider {
+  const NullAccessTokenProvider();
+
+  @override
+  Future<String?> getAccessToken({bool forceRefresh = false}) async => null;
+}
+
 class SupabaseAccessTokenProvider implements AccessTokenProvider {
   const SupabaseAccessTokenProvider();
 

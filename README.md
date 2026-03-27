@@ -44,6 +44,12 @@ Joblens is a cross-platform Flutter app (iOS + Android) for job photo capture an
 
 If `API_BASE_URL` is omitted, the app defaults to `${JOBLENS_SUPABASE_URL}/functions/v1/api/v1`.
 
+## Auth Notes
+
+- Joblens app login uses Supabase Auth email/password sessions.
+- The mobile app deep link for auth callbacks is `joblens://auth-callback`.
+- If email confirmation is enabled in Supabase Auth, add `joblens://auth-callback` to the project's auth redirect allow-list so confirmation links can return the user to the app.
+
 ## Validate
 
 ```bash

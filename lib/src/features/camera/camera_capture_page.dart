@@ -18,7 +18,10 @@ class CameraCapturePage extends ConsumerStatefulWidget {
   ConsumerState<CameraCapturePage> createState() => _CameraCapturePageState();
 }
 
-class _CameraCapturePageState extends ConsumerState<CameraCapturePage> {
+class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
+    with WidgetsBindingObserver {
+  static const _cameraInitializationTimeout = Duration(seconds: 8);
+
   CameraController? _controller;
   CameraSettings _settings = CameraSettings.defaults;
   List<double> _zoomStops = const [1.0];
@@ -28,12 +31,14 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage> {
   bool _isInitializing = true;
   bool _isCapturing = false;
   bool _isSwitchingLens = false;
+  bool _isForeground = true;
   String? _error;
   Future<void> _pendingIngest = Future.value();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_bootstrap());
   }
 
@@ -85,7 +90,11 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage> {
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
     try {
-      await controller.initialize();
+      await controller.initialize().timeout(_cameraInitializationTimeout);
+      if (!_isForeground) {
+        await controller.dispose();
+        return;
+      }
       var minZoom = 1.0;
       var maxZoom = 1.0;
       try {
@@ -144,8 +153,30 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage> {
       }
       setState(() {
         _isInitializing = false;
-        _error = 'Unable to initialize camera: $error';
+        _error = _cameraErrorMessage(error);
       });
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final controller = _controller;
+    final isResuming = state == AppLifecycleState.resumed;
+    _isForeground = isResuming;
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _controller = null;
+      if (controller != null) {
+        unawaited(controller.dispose());
+      }
+      return;
+    }
+
+    if (isResuming && mounted && controller == null && !_isInitializing) {
+      unawaited(_initializeCamera(preferredLens: _settings.lensDirection));
     }
   }
 
@@ -187,6 +218,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     unawaited(_persistSettings());
     _controller?.dispose();
     super.dispose();
@@ -580,5 +612,23 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage> {
 
   Future<void> _persistSettings() {
     return ref.read(cameraSettingsRepositoryProvider).write(_settings);
+  }
+
+  String _cameraErrorMessage(Object error) {
+    if (error is TimeoutException) {
+      return 'Camera startup timed out. Make sure Joblens has camera permission and no other app is using the camera.';
+    }
+
+    final message = error.toString();
+    if (message.contains('CameraAccessDenied')) {
+      return 'Camera access was denied. Enable camera permission for Joblens in iPhone Settings.';
+    }
+    if (message.contains('CameraAccessRestricted')) {
+      return 'Camera access is restricted on this device.';
+    }
+    if (message.contains('AudioAccessDenied')) {
+      return 'Microphone access was denied.';
+    }
+    return 'Unable to initialize camera: $message';
   }
 }
