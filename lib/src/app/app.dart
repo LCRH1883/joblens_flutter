@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../features/auth/auth_page.dart';
 import '../features/auth/auth_state.dart';
 import '../features/auth/password_reset_page.dart';
 import '../features/gallery/gallery_page.dart';
@@ -22,6 +23,8 @@ class JoblensApp extends ConsumerStatefulWidget {
 class _JoblensAppState extends ConsumerState<JoblensApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
   bool _showingPasswordRecovery = false;
+  bool _showingAuthPrompt = false;
+  int _handledReauthenticationRequest = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -34,6 +37,17 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       if (authState?.event == AuthChangeEvent.passwordRecovery) {
         unawaited(_presentPasswordRecovery());
       }
+    });
+    ref.listen(joblensStoreListenableProvider, (_, next) {
+      final requestCount = next.reauthenticationRequestCount;
+      if (requestCount <= _handledReauthenticationRequest) {
+        return;
+      }
+      _handledReauthenticationRequest = requestCount;
+      if (!ref.read(authConfigurationProvider)) {
+        return;
+      }
+      unawaited(_presentAuthPrompt());
     });
 
     final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF276749));
@@ -70,6 +84,28 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       );
     } finally {
       _showingPasswordRecovery = false;
+    }
+  }
+
+  Future<void> _presentAuthPrompt() async {
+    if (_showingAuthPrompt || _showingPasswordRecovery) {
+      return;
+    }
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) {
+      return;
+    }
+
+    _showingAuthPrompt = true;
+    try {
+      await navigator.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const AuthPage(),
+          fullscreenDialog: true,
+        ),
+      );
+    } finally {
+      _showingAuthPrompt = false;
     }
   }
 }

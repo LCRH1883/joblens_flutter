@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Session;
 
 import '../core/db/app_database.dart';
+import '../core/api/api_exception.dart';
 import '../core/models/cloud_provider.dart';
 import '../core/models/photo_asset.dart';
 import '../core/models/project.dart';
@@ -52,6 +53,7 @@ class JoblensStore extends ChangeNotifier {
   bool _isLoading = true;
   bool _isBusy = false;
   String? _lastError;
+  int _reauthenticationRequestCount = 0;
 
   List<PhotoAsset> _assets = const [];
   List<Project> _projects = const [];
@@ -62,6 +64,7 @@ class JoblensStore extends ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get isBusy => _isBusy;
   String? get lastError => _lastError;
+  int get reauthenticationRequestCount => _reauthenticationRequestCount;
   List<PhotoAsset> get assets => _assets;
   List<Project> get projects => _projects;
   Map<int, int> get projectCounts => _projectCounts;
@@ -75,6 +78,9 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> syncAuthSession(Session? session) async {
+    if (session?.user.id != null) {
+      _lastError = null;
+    }
     await _synchronizeAuthUser(session?.user.id);
   }
 
@@ -100,7 +106,10 @@ class JoblensStore extends ChangeNotifier {
     try {
       await _syncService.refreshProviderConnections();
     } catch (error, stackTrace) {
-      remoteMergeError = error.toString();
+      await _handleError(error);
+      remoteMergeError = _requiresReauthentication(error)
+          ? _lastError
+          : error.toString();
       if (kDebugMode) {
         debugPrint('Provider refresh failed: $error\n$stackTrace');
       }
@@ -117,7 +126,10 @@ class JoblensStore extends ChangeNotifier {
       _projectCounts = await _database.getProjectCounts();
       _syncJobs = await _database.getSyncJobs();
     } catch (error, stackTrace) {
-      remoteMergeError = error.toString();
+      await _handleError(error);
+      remoteMergeError = _requiresReauthentication(error)
+          ? _lastError
+          : error.toString();
       if (kDebugMode) {
         debugPrint('Remote merge failed: $error\n$stackTrace');
       }
@@ -415,7 +427,10 @@ class JoblensStore extends ChangeNotifier {
     try {
       await action();
     } catch (error, stackTrace) {
-      _lastError = error.toString();
+      await _handleError(error);
+      if (!_requiresReauthentication(error)) {
+        _lastError = error.toString();
+      }
       if (kDebugMode) {
         debugPrint('JoblensStore error: $error\n$stackTrace');
       }
@@ -464,6 +479,35 @@ class JoblensStore extends ChangeNotifier {
     await _database.ensureDefaultProject();
     await _database.ensureProviderRows();
     await refresh();
+  }
+
+  Future<void> _handleError(Object error) async {
+    if (!_requiresReauthentication(error)) {
+      return;
+    }
+
+    _reauthenticationRequestCount += 1;
+    _lastError = const ApiException(
+      code: 'reauthentication_required',
+      message: 'Cloud sync needs you to sign in again.',
+      statusCode: 401,
+    ).toString();
+  }
+
+  bool _requiresReauthentication(Object error) {
+    if (error is! ApiException) {
+      return false;
+    }
+
+    if (error.isAuthMissing) {
+      return true;
+    }
+
+    if (error.statusCode == 401 || error.statusCode == 403) {
+      return true;
+    }
+
+    return error.code == 'unauthorized';
   }
 }
 

@@ -20,7 +20,8 @@ String? userFacingStoreError(String? rawError) {
 
   if (normalized.contains('unauthorized') ||
       normalized.contains('invalid supabase jwt') ||
-      normalized.contains('auth_missing')) {
+      normalized.contains('auth_missing') ||
+      normalized.contains('reauthentication_required')) {
     return 'Cloud sync needs you to sign in again.';
   }
 

@@ -1,32 +1,56 @@
 # Joblens Flutter Supabase Setup
 
-This file describes how the Flutter app should be pointed at the Joblens backend/Supabase environment.
+This file describes the local-first Flutter setup for Joblens.
+
+The app should run from a local `.env` copy. Infisical is used to sync and refresh that file, not as a runtime dependency on every launch.
 
 Use this after the backend setup in:
 
 - `/Volumes/ExData/Projects/Joblens/joblens_backend/SUPABASE_SETUP.md`
 
+## Local-first model
+
+The intended workflow is:
+
+- keep the canonical mobile-safe secrets in Infisical at `/joblens/mobile`
+- export them into a local `.env` file in the Flutter repo
+- run Flutter with `--dart-define-from-file=.env`
+
+This means the app still runs from the local `.env` copy even if Infisical is temporarily unavailable.
+
 ## Required values
 
-The Flutter app needs these runtime values:
+The Flutter app needs these runtime values in `.env`:
 
-- `JOBLENS_SUPABASE_URL`
-- `JOBLENS_SUPABASE_ANON_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
 - `API_BASE_URL`
 
-For the standard Joblens self-hosted setup:
+For the standard Joblens setup:
 
-- `JOBLENS_SUPABASE_URL` should match backend `.env` `SUPABASE_URL`
-- `JOBLENS_SUPABASE_ANON_KEY` should match backend `.env` `SUPABASE_ANON_KEY`
-- `API_BASE_URL` should usually be `${JOBLENS_SUPABASE_URL}/functions/v1/api/v1`
+- `SUPABASE_URL` should match backend `SUPABASE_URL`
+- `SUPABASE_ANON_KEY` should match backend `SUPABASE_ANON_KEY`
+- `API_BASE_URL` should usually be `${SUPABASE_URL}/functions/v1/api/v1`
 
 Example:
 
 ```text
-JOBLENS_SUPABASE_URL=https://api.joblens.xyz
-JOBLENS_SUPABASE_ANON_KEY=...
+SUPABASE_URL=https://api.joblens.xyz
+SUPABASE_ANON_KEY=...
 API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
 ```
+
+## Secrets that must not be in Flutter
+
+The Flutter `.env` must not contain backend-only secrets such as:
+
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `DATABASE_URL`
+- `MAILGUN_SMTP_PASSWORD`
+- `PROVIDER_SECRET_ENCRYPTION_KEY`
+- `ENCRYPTION_MASTER_KEY`
+
+Only mobile-safe values should exist in `/joblens/mobile`.
 
 ## Important auth callback requirement
 
@@ -41,39 +65,50 @@ The live Supabase Auth configuration must allow that callback for:
 
 If the live server auth settings do not allow that deep link, sign-in-related email links will not return to the app correctly.
 
-## Automation-safe local run command
+## Export local `.env` from Infisical
 
 Run from `/Volumes/ExData/Projects/Joblens/joblens_flutter`.
 
 ```bash
-/Users/lcrh/Tools/flutter/bin/flutter run \
-  --dart-define=JOBLENS_SUPABASE_URL=https://api.joblens.xyz \
-  --dart-define=JOBLENS_SUPABASE_ANON_KEY=YOUR_ANON_KEY \
-  --dart-define=API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
+infisical export --domain=https://app.infisical.com --env=prod --path=/joblens/mobile --format=dotenv --output-file=.env
 ```
+
+Re-run that command any time you change the mobile secrets in Infisical and want to refresh your local copy.
+
+## Normal local development
+
+Run from `/Volumes/ExData/Projects/Joblens/joblens_flutter`.
+
+```bash
+/Users/lcrh/Tools/flutter/bin/flutter pub get
+/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env
+```
+
+This uses the local exported `.env` file and does not require contacting Infisical on app launch.
 
 ## iOS build notes
 
-For auth and sync testing, prefer Flutter CLI builds with `--dart-define` values.
+For auth and sync testing, prefer Flutter CLI builds using the local `.env` copy.
 
 Example:
 
 ```bash
-/Users/lcrh/Tools/flutter/bin/flutter build ios --simulator \
-  --dart-define=JOBLENS_SUPABASE_URL=https://api.joblens.xyz \
-  --dart-define=JOBLENS_SUPABASE_ANON_KEY=YOUR_ANON_KEY \
-  --dart-define=API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
+/Users/lcrh/Tools/flutter/bin/flutter build ios --simulator --dart-define-from-file=.env
 ```
 
 If you build directly from Xcode, the same values must be injected into the iOS build configuration. Codex should not assume Xcode already has them.
 
 ## Android build notes
 
-Use the same `--dart-define` values with `flutter run` or `flutter build`.
+Use the same local `.env` copy with:
+
+```bash
+/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env
+```
 
 ## What should work after setup
 
-With valid values in place, the app should be able to:
+With a valid local `.env` in place, the app should be able to:
 
 - open the shell normally
 - sign in with Supabase Auth
@@ -94,23 +129,21 @@ Run these in `/Volumes/ExData/Projects/Joblens/joblens_flutter`:
 Optional iOS compile check:
 
 ```bash
-/Users/lcrh/Tools/flutter/bin/flutter build ios --simulator \
-  --dart-define=JOBLENS_SUPABASE_URL=https://api.joblens.xyz \
-  --dart-define=JOBLENS_SUPABASE_ANON_KEY=YOUR_ANON_KEY \
-  --dart-define=API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
+/Users/lcrh/Tools/flutter/bin/flutter build ios --simulator --dart-define-from-file=.env
 ```
 
 ## Codex automation notes
 
 Codex can safely:
 
-- read backend `.env` to get `SUPABASE_URL` and `SUPABASE_ANON_KEY`
-- derive `API_BASE_URL`
-- run Flutter commands with `--dart-define`
+- export the mobile-safe secrets from Infisical into `.env`
+- verify `.env` contains only `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `API_BASE_URL`
+- run Flutter with `--dart-define-from-file=.env`
 - verify analyze, tests, and simulator builds
 
 Codex should not:
 
-- invent missing anon keys
+- invent missing secrets
+- copy backend-only secrets into Flutter
 - assume Xcode schemes already carry the correct Dart defines
 - change the app deep link without matching backend auth config changes

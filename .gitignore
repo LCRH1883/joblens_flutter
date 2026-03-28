@@ -1,6 +1,10 @@
 # OS / Editor
 .DS_Store
 .air/
+.env
+.env.local
+.infisical.json
+infisical.json
 *.swp
 *.swo
 *.log
