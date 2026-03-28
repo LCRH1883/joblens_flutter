@@ -30,6 +30,10 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
   Widget build(BuildContext context) {
     ref.listen(authStateStreamProvider, (_, next) {
       final authState = next.valueOrNull;
+      debugPrint(
+        'Joblens auth event: ${authState?.event.name ?? 'none'} '
+        'user=${authState?.session?.user.id ?? 'none'}',
+      );
       unawaited(
         ref.read(joblensStoreProvider).syncAuthSession(authState?.session),
       );

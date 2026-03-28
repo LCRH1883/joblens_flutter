@@ -3,7 +3,35 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-const _kEmailAuthRedirectUri = 'joblens://auth-callback';
+const _kAppAuthRedirectUri = 'joblens://auth-callback';
+const _kDefaultEmailAuthCallbackPath = '/functions/v1/api/v1/auth/callback';
+
+String _emailAuthRedirectUri() {
+  final apiBaseUrl = const String.fromEnvironment('API_BASE_URL').trim();
+  if (apiBaseUrl.isNotEmpty) {
+    return Uri.parse(apiBaseUrl).resolve('auth/callback').toString();
+  }
+
+  final supabaseUrl = _firstNonEmpty(
+    const String.fromEnvironment('SUPABASE_URL'),
+    const String.fromEnvironment('JOBLENS_SUPABASE_URL'),
+  );
+  if (supabaseUrl.isNotEmpty) {
+    return Uri.parse(
+      supabaseUrl,
+    ).resolve(_kDefaultEmailAuthCallbackPath).toString();
+  }
+
+  return _kAppAuthRedirectUri;
+}
+
+String _firstNonEmpty(String primary, String fallback) {
+  final primaryTrimmed = primary.trim();
+  if (primaryTrimmed.isNotEmpty) {
+    return primaryTrimmed;
+  }
+  return fallback.trim();
+}
 
 class AuthPage extends StatefulWidget {
   const AuthPage({super.key});
@@ -300,7 +328,7 @@ class _AuthPageState extends State<AuthPage> {
         final response = await auth.signUp(
           email: email,
           password: password,
-          emailRedirectTo: _kEmailAuthRedirectUri,
+          emailRedirectTo: _emailAuthRedirectUri(),
         );
         if (!mounted) {
           return;
@@ -360,7 +388,7 @@ class _AuthPageState extends State<AuthPage> {
       await Supabase.instance.client.auth.resend(
         email: email,
         type: OtpType.signup,
-        emailRedirectTo: _kEmailAuthRedirectUri,
+        emailRedirectTo: _emailAuthRedirectUri(),
       );
       if (!mounted) {
         return;
@@ -468,7 +496,7 @@ class _AuthPageState extends State<AuthPage> {
     try {
       await Supabase.instance.client.auth.resetPasswordForEmail(
         email,
-        redirectTo: _kEmailAuthRedirectUri,
+        redirectTo: _emailAuthRedirectUri(),
       );
       if (!mounted) {
         return;

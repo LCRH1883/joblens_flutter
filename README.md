@@ -36,21 +36,28 @@ Joblens is a cross-platform Flutter app (iOS + Android) for job photo capture an
 ## Run
 
 ```bash
+infisical export --domain=https://app.infisical.com --env=prod --path=/joblens/mobile --format=dotenv --output-file=.env
 /Users/lcrh/Tools/flutter/bin/flutter pub get
-/Users/lcrh/Tools/flutter/bin/flutter run \
-  --dart-define=JOBLENS_SUPABASE_URL=... \
-  --dart-define=JOBLENS_SUPABASE_ANON_KEY=... \
-  --dart-define=API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
+/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env
 ```
 
-If `API_BASE_URL` is omitted, the app defaults to `${JOBLENS_SUPABASE_URL}/functions/v1/api/v1`.
+The local `.env` is the runtime source of truth for development. Refresh it from Infisical manually when secrets change.
+
+The app accepts either:
+
+- `SUPABASE_URL` / `SUPABASE_ANON_KEY`
+- `JOBLENS_SUPABASE_URL` / `JOBLENS_SUPABASE_ANON_KEY`
+
+If `API_BASE_URL` is omitted, the app defaults to `${SUPABASE_URL}/functions/v1/api/v1`.
 
 ## Auth Notes
 
 - Joblens app login uses Supabase Auth email/password sessions.
 - The mobile app deep link for auth callbacks is `joblens://auth-callback`.
+- Email signup confirmation and forgot-password links should redirect to the public backend callback page at `https://api.joblens.xyz/functions/v1/api/v1/auth/callback`, which can hand off to `joblens://auth-callback` on phones and show a fallback page on desktop.
 - If email confirmation is enabled in Supabase Auth, add `joblens://auth-callback` to the project's auth redirect allow-list so confirmation links can return the user to the app.
 - Forgot-password recovery uses the same deep link. Supabase password reset emails should return to `joblens://auth-callback` so the app can open the reset-password screen directly.
+- For real device testing of confirmation/reset emails, use the public `https://api.joblens.xyz` auth environment. Do not rely on a local CLI Supabase stack for those email-link flows because it can generate local `127.0.0.1` verification links.
 
 ## Validate
 

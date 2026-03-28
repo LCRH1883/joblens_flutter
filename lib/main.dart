@@ -23,6 +23,7 @@ Future<void> main() async {
       url: config.supabaseUrl,
       anonKey: config.supabaseAnonKey,
       authOptions: const FlutterAuthClientOptions(
+        authFlowType: AuthFlowType.implicit,
         autoRefreshToken: true,
         detectSessionInUri: true,
       ),
@@ -84,15 +85,27 @@ class _AppConfiguration {
   });
 
   _AppConfiguration.fromEnvironment()
-    : supabaseUrl = const String.fromEnvironment('JOBLENS_SUPABASE_URL'),
-      supabaseAnonKey = const String.fromEnvironment(
-        'JOBLENS_SUPABASE_ANON_KEY',
+    : supabaseUrl = _firstNonEmpty(
+        const String.fromEnvironment('SUPABASE_URL'),
+        const String.fromEnvironment('JOBLENS_SUPABASE_URL'),
+      ),
+      supabaseAnonKey = _firstNonEmpty(
+        const String.fromEnvironment('SUPABASE_ANON_KEY'),
+        const String.fromEnvironment('JOBLENS_SUPABASE_ANON_KEY'),
       ),
       apiBaseUrlOverride = const String.fromEnvironment('API_BASE_URL');
 
   final String supabaseUrl;
   final String supabaseAnonKey;
   final String apiBaseUrlOverride;
+
+  static String _firstNonEmpty(String primary, String fallback) {
+    final primaryTrimmed = primary.trim();
+    if (primaryTrimmed.isNotEmpty) {
+      return primaryTrimmed;
+    }
+    return fallback.trim();
+  }
 
   bool get isConfigured =>
       supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;

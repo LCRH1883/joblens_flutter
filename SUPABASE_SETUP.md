@@ -65,6 +65,27 @@ The live Supabase Auth configuration must allow that callback for:
 
 If the live server auth settings do not allow that deep link, sign-in-related email links will not return to the app correctly.
 
+For email-link auth flows, Joblens should use the public backend callback page:
+
+- `https://api.joblens.xyz/functions/v1/api/v1/auth/callback`
+
+That page can:
+
+- hand off to `joblens://auth-callback` on phones
+- show a fallback confirmation page on desktop browsers
+
+## Important testing split for auth emails
+
+Use the public `https://api.joblens.xyz` auth environment when testing:
+
+- sign-up confirmation emails
+- forgot-password emails
+- any auth flow where you tap an email link on a real phone
+
+Do not treat the local CLI Supabase stack as the source of truth for those flows. In local development, confirmation/recovery links may resolve through a local `127.0.0.1` auth host, which will not work correctly on a device.
+
+For normal app development, keep using the local exported `.env`. For email-link auth verification, point the app at the public environment and use the real `api.joblens.xyz` flow.
+
 ## Export local `.env` from Infisical
 
 Run from `/Volumes/ExData/Projects/Joblens/joblens_flutter`.
