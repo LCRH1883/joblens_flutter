@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/joblens_store.dart';
 import '../../core/models/photo_asset.dart';
+import '../../core/ui/user_facing_error.dart';
 import '../camera/camera_capture_page.dart';
 import 'photo_viewer_page.dart';
 
@@ -148,7 +149,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                 child: LinearProgressIndicator(),
               ),
             ),
-          if (store.lastError != null)
+          if (userFacingStoreError(store.lastError) case final error?)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -157,7 +158,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                   child: Padding(
                     padding: const EdgeInsets.all(12),
                     child: Text(
-                      store.lastError!,
+                      error,
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.onErrorContainer,
                       ),

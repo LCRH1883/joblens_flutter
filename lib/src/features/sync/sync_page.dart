@@ -6,6 +6,7 @@ import '../../app/joblens_store.dart';
 import '../../core/models/cloud_provider.dart';
 import '../../core/models/provider_account.dart';
 import '../../core/models/sync_job.dart';
+import '../../core/ui/user_facing_error.dart';
 import '../auth/auth_page.dart';
 import '../auth/auth_state.dart';
 
@@ -102,7 +103,7 @@ class _SyncPageState extends ConsumerState<SyncPage>
                 ),
               ),
             ],
-            if (_displayableSyncError(store.lastError) case final error?) ...[
+            if (userFacingStoreError(store.lastError) case final error?) ...[
               Card(
                 color: Theme.of(context).colorScheme.errorContainer,
                 child: Padding(
@@ -348,31 +349,7 @@ class _SyncPageState extends ConsumerState<SyncPage>
     if (job.lastError == null || job.lastError!.isEmpty) {
       return base;
     }
-    return '$base\nError: ${_displayableSyncError(job.lastError) ?? 'Sync is unavailable right now.'}';
-  }
-
-  String? _displayableSyncError(String? rawError) {
-    if (rawError == null || rawError.trim().isEmpty) {
-      return null;
-    }
-
-    final normalized = rawError.toLowerCase();
-    if (normalized.contains('backend api client is not configured')) {
-      return null;
-    }
-    if (normalized.contains('socketexception') ||
-        normalized.contains('clientexception') ||
-        normalized.contains('failed host lookup') ||
-        normalized.contains('connection refused') ||
-        normalized.contains('network is unreachable') ||
-        normalized.contains('timed out')) {
-      return 'Cloud sync is unavailable right now. Your photos remain on this device and can sync later.';
-    }
-    if (normalized.contains('unauthorized') ||
-        normalized.contains('invalid supabase jwt')) {
-      return 'Cloud sync needs you to sign in again.';
-    }
-    return 'Cloud sync hit a problem. Your photos remain on this device.';
+    return '$base\nError: ${userFacingStoreError(job.lastError) ?? 'Sync is unavailable right now.'}';
   }
 }
 

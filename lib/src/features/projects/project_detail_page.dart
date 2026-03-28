@@ -7,6 +7,7 @@ import '../../app/joblens_store.dart';
 import '../../core/models/photo_asset.dart';
 import '../../core/models/project.dart';
 import '../../core/ui/edge_swipe_back.dart';
+import '../../core/ui/user_facing_error.dart';
 import '../gallery/photo_viewer_page.dart';
 
 class ProjectDetailPage extends ConsumerStatefulWidget {
@@ -123,7 +124,7 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                       ),
                       child: LinearProgressIndicator(),
                     ),
-                  if (store.lastError != null)
+                  if (userFacingStoreError(store.lastError) case final error?)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       child: Card(
@@ -131,7 +132,7 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                         child: Padding(
                           padding: const EdgeInsets.all(12),
                           child: Text(
-                            store.lastError!,
+                            error,
                             style: TextStyle(
                               color: Theme.of(
                                 context,
@@ -458,9 +459,9 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     if (!mounted) {
       return;
     }
-    if (store.lastError != null) {
+    if (userFacingStoreError(store.lastError) case final error?) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Failed to save notes: ${store.lastError}')),
+        SnackBar(content: Text('Failed to save notes: $error')),
       );
       return;
     }
