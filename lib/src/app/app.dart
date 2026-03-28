@@ -1,18 +1,45 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../features/auth/auth_state.dart';
+import '../features/auth/password_reset_page.dart';
 import '../features/gallery/gallery_page.dart';
 import '../features/projects/projects_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/sync/sync_page.dart';
+import 'joblens_store.dart';
 
-class JoblensApp extends StatelessWidget {
+class JoblensApp extends ConsumerStatefulWidget {
   const JoblensApp({super.key});
 
   @override
+  ConsumerState<JoblensApp> createState() => _JoblensAppState();
+}
+
+class _JoblensAppState extends ConsumerState<JoblensApp> {
+  final _navigatorKey = GlobalKey<NavigatorState>();
+  bool _showingPasswordRecovery = false;
+
+  @override
   Widget build(BuildContext context) {
+    ref.listen(authStateStreamProvider, (_, next) {
+      final authState = next.valueOrNull;
+      unawaited(
+        ref.read(joblensStoreProvider).syncAuthSession(authState?.session),
+      );
+
+      if (authState?.event == AuthChangeEvent.passwordRecovery) {
+        unawaited(_presentPasswordRecovery());
+      }
+    });
+
     final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF276749));
 
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'Joblens',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -22,6 +49,28 @@ class JoblensApp extends StatelessWidget {
       ),
       home: const AppShell(),
     );
+  }
+
+  Future<void> _presentPasswordRecovery() async {
+    if (_showingPasswordRecovery) {
+      return;
+    }
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) {
+      return;
+    }
+
+    _showingPasswordRecovery = true;
+    try {
+      await navigator.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const PasswordResetPage(),
+          fullscreenDialog: true,
+        ),
+      );
+    } finally {
+      _showingPasswordRecovery = false;
+    }
   }
 }
 

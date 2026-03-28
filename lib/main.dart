@@ -11,6 +11,7 @@ import 'src/core/api/signed_media_url_cache.dart';
 import 'src/core/db/app_database.dart';
 import 'src/core/storage/media_storage_service.dart';
 import 'src/core/sync/sync_service.dart';
+import 'src/features/auth/auth_state.dart';
 import 'src/features/camera/camera_providers.dart';
 
 Future<void> main() async {
@@ -68,6 +69,7 @@ Future<void> main() async {
       overrides: [
         joblensStoreProvider.overrideWithValue(store),
         availableCamerasProvider.overrideWithValue(cameras),
+        authConfigurationProvider.overrideWithValue(config.isConfigured),
       ],
       child: const JoblensApp(),
     ),

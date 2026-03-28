@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -22,9 +24,27 @@ class _AuthPageState extends State<AuthPage> {
   String? _statusMessage;
   String? _errorMessage;
   String? _pendingConfirmationEmail;
+  late final StreamSubscription<AuthState> _authSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSubscription = Supabase.instance.client.auth.onAuthStateChange.listen((
+      state,
+    ) {
+      if (!mounted || state.session?.user == null) {
+        return;
+      }
+      if (state.event == AuthChangeEvent.passwordRecovery) {
+        return;
+      }
+      Navigator.of(context).maybePop(true);
+    });
+  }
 
   @override
   void dispose() {
+    _authSubscription.cancel();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
@@ -36,6 +56,15 @@ class _AuthPageState extends State<AuthPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          _pendingConfirmationEmail != null
+              ? 'Confirm email'
+              : _isSignIn
+              ? 'Sign in'
+              : 'Create account',
+        ),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -162,6 +191,18 @@ class _AuthPageState extends State<AuthPage> {
                               _isSignIn ? 'Sign in' : 'Create account',
                             ),
                           ),
+                          if (_isSignIn) ...[
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: _isSubmitting
+                                    ? null
+                                    : _showForgotPasswordDialog,
+                                child: const Text('Forgot password?'),
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 12),
                           TextButton(
                             onPressed: _isSubmitting ? null : _toggleMode,
@@ -292,7 +333,7 @@ class _AuthPageState extends State<AuthPage> {
         return;
       }
       setState(() {
-        _errorMessage = error.toString();
+        _errorMessage = _friendlyAuthError(error);
       });
     } finally {
       if (mounted) {
@@ -339,7 +380,116 @@ class _AuthPageState extends State<AuthPage> {
         return;
       }
       setState(() {
-        _errorMessage = error.toString();
+        _errorMessage = _friendlyAuthError(error);
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _showForgotPasswordDialog() async {
+    final controller = TextEditingController(
+      text: _emailController.text.trim(),
+    );
+    String? validationMessage;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Reset password'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Enter your email and Joblens will send you a password reset link.',
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: controller,
+                    keyboardType: TextInputType.emailAddress,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      labelText: 'Email',
+                      border: const OutlineInputBorder(),
+                      errorText: validationMessage,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: _isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: _isSubmitting
+                      ? null
+                      : () async {
+                          final email = controller.text.trim();
+                          final errorMessage = _validateEmail(email);
+                          if (errorMessage != null) {
+                            setDialogState(() {
+                              validationMessage = errorMessage;
+                            });
+                            return;
+                          }
+                          Navigator.of(dialogContext).pop();
+                          await _sendPasswordResetEmail(email);
+                        },
+                  child: const Text('Send link'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    controller.dispose();
+  }
+
+  Future<void> _sendPasswordResetEmail(String email) async {
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+      _statusMessage = null;
+    });
+
+    try {
+      await Supabase.instance.client.auth.resetPasswordForEmail(
+        email,
+        redirectTo: _kEmailAuthRedirectUri,
+      );
+      if (!mounted) {
+        return;
+      }
+      _emailController.text = email;
+      setState(() {
+        _statusMessage = 'Password reset link sent to $email.';
+      });
+    } on AuthException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorMessage = error.message;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorMessage = _friendlyAuthError(error);
       });
     } finally {
       if (mounted) {
@@ -374,6 +524,29 @@ class _AuthPageState extends State<AuthPage> {
     final normalized = message.toLowerCase();
     return normalized.contains('email not confirmed') ||
         normalized.contains('email is not confirmed');
+  }
+
+  String? _validateEmail(String value) {
+    final email = value.trim();
+    if (email.isEmpty) {
+      return 'Enter your email.';
+    }
+    if (!email.contains('@')) {
+      return 'Enter a valid email.';
+    }
+    return null;
+  }
+
+  String _friendlyAuthError(Object error) {
+    final message = error.toString().toLowerCase();
+    if (message.contains('socketexception') ||
+        message.contains('clientexception') ||
+        message.contains('failed host lookup') ||
+        message.contains('timed out') ||
+        message.contains('connection refused')) {
+      return 'Joblens cannot reach sign-in right now. You can keep using the app offline and try again later.';
+    }
+    return 'Something went wrong. Please try again.';
   }
 }
 

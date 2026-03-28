@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/joblens_store.dart';
+import '../auth/auth_page.dart';
+import '../auth/auth_state.dart';
 
 class SettingsPage extends ConsumerWidget {
   const SettingsPage({super.key});
@@ -9,6 +11,8 @@ class SettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final store = ref.watch(joblensStoreListenableProvider);
+    final isAuthConfigured = ref.watch(authConfigurationProvider);
+    final authUser = ref.watch(authUserProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -16,10 +20,44 @@ class SettingsPage extends ConsumerWidget {
         padding: const EdgeInsets.all(12),
         children: [
           Card(
-            child: ListTile(
-              title: const Text('App Mode'),
-              subtitle: const Text(
-                'Local-first mode is available without signing in. Cloud sync requires app login and provider connection.',
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Account',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _accountDescription(
+                      isAuthConfigured: isAuthConfigured,
+                      authUserEmail: authUser?.email,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (isAuthConfigured && authUser == null)
+                        FilledButton.icon(
+                          onPressed: () => _openAuthPage(context),
+                          icon: const Icon(Icons.login_outlined),
+                          label: const Text('Sign in'),
+                        ),
+                      if (isAuthConfigured && authUser != null)
+                        FilledButton.icon(
+                          onPressed: store.isBusy ? null : store.signOut,
+                          icon: const Icon(Icons.logout_outlined),
+                          label: const Text('Sign out'),
+                        ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
@@ -50,5 +88,24 @@ class SettingsPage extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  static Future<void> _openAuthPage(BuildContext context) {
+    return Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const AuthPage()));
+  }
+
+  static String _accountDescription({
+    required bool isAuthConfigured,
+    required String? authUserEmail,
+  }) {
+    if (!isAuthConfigured) {
+      return 'Your photos stay on this device for now. Sign-in and cloud sync will appear here when they are available.';
+    }
+    if (authUserEmail == null || authUserEmail.trim().isEmpty) {
+      return 'You are signed out. Sign in to connect your cloud storage and sync Joblens across devices.';
+    }
+    return 'Signed in as $authUserEmail. Cloud provider connections and sync run through your Joblens account.';
   }
 }

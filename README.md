@@ -14,6 +14,7 @@ Joblens is a cross-platform Flutter app (iOS + Android) for job photo capture an
 - Provider storage is the canonical home for synced Joblens content.
 - Supabase stores app auth, provider connection state, sync metadata, asset indexes, and coordination data between devices.
 - The mobile app keeps a local private cache in app storage and syncs through the Joblens backend.
+- See `SUPABASE_SETUP.md` for automation-safe app setup instructions using backend Supabase values.
 
 ## Current App Scope
 
@@ -49,6 +50,7 @@ If `API_BASE_URL` is omitted, the app defaults to `${JOBLENS_SUPABASE_URL}/funct
 - Joblens app login uses Supabase Auth email/password sessions.
 - The mobile app deep link for auth callbacks is `joblens://auth-callback`.
 - If email confirmation is enabled in Supabase Auth, add `joblens://auth-callback` to the project's auth redirect allow-list so confirmation links can return the user to the app.
+- Forgot-password recovery uses the same deep link. Supabase password reset emails should return to `joblens://auth-callback` so the app can open the reset-password screen directly.
 
 ## Validate
 
