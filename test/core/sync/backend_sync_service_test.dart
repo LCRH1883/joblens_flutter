@@ -22,7 +22,7 @@ void main() {
     databaseFactory = databaseFactoryFfi;
   });
 
-  test('duplicate bulk-check path marks asset done without upload', () async {
+  test('duplicate bulk-check path moves remote asset into destination project', () async {
     final harness = await _createHarness();
     addTearDown(harness.dispose);
 
@@ -61,7 +61,11 @@ void main() {
     final jobs = await harness.database.getSyncJobs();
     expect(updated?.remoteAssetId, 'asset-remote');
     expect(updated?.cloudState, AssetCloudState.localAndCloud);
+    expect(updated?.remoteProvider, CloudProviderType.googleDrive.key);
+    expect(updated?.remoteFileId, 'provider-file-moved');
+    expect(updated?.uploadPath, 'Joblens/Library/asset-local.jpg');
     expect(fakeClient.uploadCalls, 0);
+    expect(fakeClient.moveCalls, 1);
     expect(jobs.single.state, SyncJobState.done);
   });
 
@@ -203,6 +207,7 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   final String projectId;
 
   int uploadCalls = 0;
+  int moveCalls = 0;
   List<int> lastUploadedBytes = const [];
 
   @override
@@ -254,6 +259,21 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   @override
   Future<CommitAssetResponse> commitAsset(CommitAssetRequest request) async {
     return commitResponse!;
+  }
+
+  @override
+  Future<MoveAssetResponse> moveAssetToProject({
+    required String assetId,
+    required String projectId,
+  }) async {
+    moveCalls += 1;
+    return const MoveAssetResponse(
+      assetId: 'asset-remote',
+      projectId: 'remote-project-1',
+      provider: CloudProviderType.googleDrive,
+      remoteFileId: 'provider-file-moved',
+      remotePath: 'Joblens/Library/asset-local.jpg',
+    );
   }
 }
 

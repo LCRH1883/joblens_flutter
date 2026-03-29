@@ -426,6 +426,41 @@ class CommitAssetResponse {
   }
 }
 
+class MoveAssetResponse {
+  const MoveAssetResponse({
+    required this.assetId,
+    required this.projectId,
+    required this.provider,
+    required this.remoteFileId,
+    required this.remotePath,
+  });
+
+  final String assetId;
+  final String projectId;
+  final CloudProviderType? provider;
+  final String? remoteFileId;
+  final String? remotePath;
+
+  factory MoveAssetResponse.fromMap(Map<String, dynamic> map) {
+    final providerValue = _asNullableString(
+      map['provider'] ?? map['providerType'],
+    );
+    return MoveAssetResponse(
+      assetId: _asString(map['assetId'] ?? map['id']),
+      projectId: _asString(map['projectId']),
+      provider: providerValue == null
+          ? null
+          : CloudProviderTypeX.fromKey(providerValue),
+      remoteFileId: _asNullableString(
+        map['remoteFileId'] ?? map['providerFileId'] ?? map['fileId'],
+      ),
+      remotePath: _asNullableString(
+        map['remotePath'] ?? map['providerPath'] ?? map['path'],
+      ),
+    );
+  }
+}
+
 class ListAssetsRequest {
   const ListAssetsRequest({
     this.cursor,

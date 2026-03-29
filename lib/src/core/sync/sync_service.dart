@@ -332,7 +332,11 @@ class SyncService {
             }
 
             if (result.isDuplicate) {
-              await _handleDuplicate(item, result.assetId);
+              await _handleDuplicate(
+                item,
+                result.assetId,
+                remoteProjectId: remoteProjectId,
+              );
               continue;
             }
 
@@ -524,8 +528,29 @@ class SyncService {
 
   Future<void> _handleDuplicate(
     _PendingAssetContext context,
-    String? remoteAssetId,
-  ) async {
+    String? remoteAssetId, {
+    required String remoteProjectId,
+  }) async {
+    final client = _backendApiClient;
+    if (client != null && remoteAssetId != null && remoteAssetId.isNotEmpty) {
+      final moved = await client.moveAssetToProject(
+        assetId: remoteAssetId,
+        projectId: remoteProjectId,
+      );
+      await _db.updateAssetCloudMetadata(
+        assetId: context.asset.id,
+        remoteAssetId: moved.assetId,
+        remoteProvider: moved.provider?.key,
+        remoteFileId: moved.remoteFileId,
+        uploadPath: moved.remotePath,
+        cloudState: AssetCloudState.localAndCloud,
+        lastSyncErrorCode: null,
+      );
+      await _db.updateAssetSyncError(context.asset.id, null);
+      await _markJobsDone(context.jobs);
+      return;
+    }
+
     await _db.updateAssetCloudMetadata(
       assetId: context.asset.id,
       remoteAssetId: remoteAssetId,

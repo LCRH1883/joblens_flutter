@@ -115,6 +115,18 @@ class JoblensBackendApiClient {
     return CommitAssetResponse.fromMap(map);
   }
 
+  Future<MoveAssetResponse> moveAssetToProject({
+    required String assetId,
+    required String projectId,
+  }) async {
+    final map = await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/assets/$assetId/move',
+      body: {'projectId': projectId},
+    );
+    return MoveAssetResponse.fromMap(map);
+  }
+
   Future<ListAssetsResponse> listAssets(ListAssetsRequest request) async {
     final map = await _authorizedJsonRequest(
       method: 'GET',
