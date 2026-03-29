@@ -126,8 +126,13 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       'provider=${callback.provider.key} status=${callback.status}',
     );
 
+    final store = ref.read(joblensStoreProvider);
     try {
-      await ref.read(joblensStoreProvider).refresh();
+      if (callback.isSuccess) {
+        await store.backfillCloudSyncAfterProviderConnection();
+      } else {
+        await store.refresh();
+      }
     } catch (error, stackTrace) {
       debugPrint('Joblens provider refresh failed: $error\n$stackTrace');
     }

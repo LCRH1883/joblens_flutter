@@ -542,6 +542,20 @@ class AppDatabase {
     );
   }
 
+  Future<void> recoverInterruptedSyncJobs() async {
+    await _db.update(
+      'sync_jobs',
+      {
+        'state': SyncJobState.queued.name,
+        'last_error':
+            '[interrupted_upload] Previous upload was interrupted and will be retried.',
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'state = ?',
+      whereArgs: [SyncJobState.uploading.name],
+    );
+  }
+
   Future<PhotoAsset?> getAssetById(String assetId) async {
     final rows = await _db.query(
       'photo_assets',

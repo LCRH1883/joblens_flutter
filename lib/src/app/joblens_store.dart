@@ -370,6 +370,23 @@ class JoblensStore extends ChangeNotifier {
     return authUrl;
   }
 
+  Future<void> backfillCloudSyncAfterProviderConnection() async {
+    await _runBusy(() async {
+      final assetsNeedingRemoteSync = (await _database.getAssets()).where(
+        (asset) =>
+            asset.status == AssetStatus.active &&
+            asset.localPath.trim().isNotEmpty &&
+            (asset.remoteAssetId == null || asset.remoteAssetId!.isEmpty),
+      );
+
+      await _syncService.retryFailed();
+      await _syncService.enqueueAssets(assetsNeedingRemoteSync);
+      _projects = await _database.getProjects();
+      await _syncService.processQueue(_projects);
+      await refresh();
+    });
+  }
+
   Future<void> connectNextcloud({
     required String serverUrl,
     required String username,

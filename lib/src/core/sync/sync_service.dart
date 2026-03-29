@@ -202,6 +202,7 @@ class SyncService {
 
     _isRunning = true;
     try {
+      await _db.recoverInterruptedSyncJobs();
       final pending = await _db.getPendingSyncJobs();
       if (pending.isEmpty) {
         return;
