@@ -1,15 +1,18 @@
 import 'dart:async';
 
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../core/models/cloud_provider.dart';
 import '../features/auth/auth_page.dart';
 import '../features/auth/auth_state.dart';
 import '../features/auth/password_reset_page.dart';
 import '../features/gallery/gallery_page.dart';
 import '../features/projects/projects_page.dart';
 import '../features/settings/settings_page.dart';
+import '../features/sync/provider_oauth_callback.dart';
 import '../features/sync/sync_page.dart';
 import 'joblens_store.dart';
 
@@ -22,9 +25,25 @@ class JoblensApp extends ConsumerStatefulWidget {
 
 class _JoblensAppState extends ConsumerState<JoblensApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
+  final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+  final _appShellKey = GlobalKey<_AppShellState>();
   bool _showingPasswordRecovery = false;
   bool _showingAuthPrompt = false;
   int _handledReauthenticationRequest = 0;
+  StreamSubscription<Uri>? _appLinkSubscription;
+  String? _lastHandledProviderCallback;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_installAppLinkHandling());
+  }
+
+  @override
+  void dispose() {
+    unawaited(_appLinkSubscription?.cancel());
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -58,6 +77,7 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
 
     return MaterialApp(
       navigatorKey: _navigatorKey,
+      scaffoldMessengerKey: _scaffoldMessengerKey,
       title: 'Joblens',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -65,7 +85,56 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
         colorScheme: scheme,
         appBarTheme: const AppBarTheme(centerTitle: false),
       ),
-      home: const AppShell(),
+      home: AppShell(key: _appShellKey),
+    );
+  }
+
+  Future<void> _installAppLinkHandling() async {
+    final appLinks = AppLinks();
+
+    _appLinkSubscription = appLinks.uriLinkStream.listen(
+      (uri) => unawaited(_handleIncomingUri(uri, source: 'stream')),
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('Joblens app-link stream error: $error\n$stackTrace');
+      },
+    );
+
+    try {
+      final initialUri = await appLinks.getInitialLink();
+      if (initialUri != null) {
+        await _handleIncomingUri(initialUri, source: 'initial');
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Joblens initial app-link error: $error\n$stackTrace');
+    }
+  }
+
+  Future<void> _handleIncomingUri(Uri uri, {required String source}) async {
+    final callback = ProviderOAuthCallback.tryParse(uri);
+    if (callback == null) {
+      return;
+    }
+
+    final callbackKey = uri.toString();
+    if (_lastHandledProviderCallback == callbackKey) {
+      return;
+    }
+    _lastHandledProviderCallback = callbackKey;
+
+    debugPrint(
+      'Joblens provider callback ($source): '
+      'provider=${callback.provider.key} status=${callback.status}',
+    );
+
+    try {
+      await ref.read(joblensStoreProvider).refresh();
+    } catch (error, stackTrace) {
+      debugPrint('Joblens provider refresh failed: $error\n$stackTrace');
+    }
+
+    _appShellKey.currentState?.showSyncTab();
+    _scaffoldMessengerKey.currentState?.showSnackBar(
+      SnackBar(content: Text(callback.userFacingMessage())),
     );
   }
 
@@ -130,6 +199,15 @@ class _AppShellState extends State<AppShell> {
     SyncPage(),
     SettingsPage(),
   ];
+
+  void showSyncTab() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _currentTab = 2;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
