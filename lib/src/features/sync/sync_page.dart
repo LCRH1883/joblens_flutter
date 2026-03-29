@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../app/joblens_store.dart';
 import '../../core/models/cloud_provider.dart';
 import '../../core/models/provider_account.dart';
+import '../../core/models/sync_log_entry.dart';
 import '../../core/models/sync_job.dart';
 import '../../core/ui/user_facing_error.dart';
 import '../auth/auth_page.dart';
@@ -44,6 +45,17 @@ class _SyncPageState extends ConsumerState<SyncPage>
     final isAuthConfigured = ref.watch(authConfigurationProvider);
     final authUser = ref.watch(authUserProvider);
     final canSyncWithCloud = isAuthConfigured && authUser != null;
+    final queuedCount = store.syncJobs
+        .where((job) => job.state == SyncJobState.queued)
+        .length;
+    final uploadingCount = store.syncJobs
+        .where((job) => job.state == SyncJobState.uploading)
+        .length;
+    final failedCount = store.syncJobs
+        .where((job) => job.state == SyncJobState.failed)
+        .length;
+    final recentLogs = store.syncLogs.take(6).toList(growable: false);
+    final latestLog = recentLogs.isEmpty ? null : recentLogs.first;
 
     return Scaffold(
       appBar: AppBar(
@@ -62,6 +74,20 @@ class _SyncPageState extends ConsumerState<SyncPage>
                 : store.retryFailedSyncJobs,
             icon: const Icon(Icons.refresh_outlined),
             tooltip: 'Retry failed',
+          ),
+          IconButton(
+            onPressed: store.syncLogs.isEmpty
+                ? null
+                : () => _exportSyncLog(context, store),
+            icon: const Icon(Icons.download_outlined),
+            tooltip: 'Export sync log',
+          ),
+          IconButton(
+            onPressed: store.isBusy || store.syncLogs.isEmpty
+                ? null
+                : () => store.clearSyncLog(),
+            icon: const Icon(Icons.delete_sweep_outlined),
+            tooltip: 'Clear sync log',
           ),
         ],
       ),
@@ -189,31 +215,99 @@ class _SyncPageState extends ConsumerState<SyncPage>
                 ),
             const SizedBox(height: 10),
             Text(
-              'Sync Queue',
+              'Sync Status',
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            if (store.syncJobs.isEmpty)
-              const Card(
-                child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('No sync jobs yet.'),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _CountChip(
+                          label: 'Queued',
+                          count: queuedCount,
+                          icon: Icons.schedule,
+                        ),
+                        _CountChip(
+                          label: 'Uploading',
+                          count: uploadingCount,
+                          icon: Icons.cloud_upload_outlined,
+                        ),
+                        _CountChip(
+                          label: 'Failed',
+                          count: failedCount,
+                          icon: Icons.error_outline,
+                          highlight: failedCount > 0,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      latestLog == null
+                          ? 'No recent sync activity yet.'
+                          : '${latestLog.isError ? 'Latest error' : 'Latest activity'}: ${latestLog.message}',
+                    ),
+                    if (latestLog != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        _formatLogMeta(latestLog),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            for (final job in store.syncJobs)
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Recent Activity',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            if (recentLogs.isEmpty)
+              Card(
+                child: const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('No sync activity logged yet.'),
+                ),
+              ),
+            for (final log in recentLogs)
               Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
-                  leading: Icon(_iconForState(job.state)),
-                  title: Text('Asset ${job.assetId.substring(0, 8)}'),
-                  subtitle: Text(_subtitleForJob(job)),
+                  leading: Icon(
+                    log.isError
+                        ? Icons.error_outline
+                        : Icons.check_circle_outline,
+                  ),
+                  title: Text(log.message),
+                  subtitle: Text(_formatLogMeta(log)),
                 ),
               ),
           ],
         ),
       ),
+    );
+  }
+
+  Future<void> _exportSyncLog(BuildContext context, JoblensStore store) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final path = await store.exportSyncLog();
+    if (!mounted) {
+      return;
+    }
+    messenger.showSnackBar(
+      SnackBar(content: Text('Sync log exported to $path')),
     );
   }
 
@@ -334,22 +428,65 @@ class _SyncPageState extends ConsumerState<SyncPage>
     };
   }
 
-  IconData _iconForState(SyncJobState state) {
-    return switch (state) {
-      SyncJobState.queued => Icons.schedule,
-      SyncJobState.uploading => Icons.cloud_upload_outlined,
-      SyncJobState.done => Icons.check_circle_outline,
-      SyncJobState.failed => Icons.error_outline,
-      SyncJobState.paused => Icons.pause_circle_outline,
-    };
+  String _formatLogMeta(SyncLogEntry log) {
+    final parts = <String>[
+      _formatTimestamp(log.createdAt),
+      log.event,
+      if (log.assetId != null && log.assetId!.isNotEmpty)
+        'asset ${log.assetId!.substring(0, 8)}',
+      if (log.projectId != null) 'project ${log.projectId}',
+    ];
+    return parts.join(' • ');
   }
 
-  String _subtitleForJob(SyncJob job) {
-    final base = 'State: ${job.state.name} • Attempts: ${job.attemptCount}';
-    if (job.lastError == null || job.lastError!.isEmpty) {
-      return base;
-    }
-    return '$base\nError: ${userFacingStoreError(job.lastError) ?? 'Sync is unavailable right now.'}';
+  String _formatTimestamp(DateTime value) {
+    final local = value.toLocal();
+    String twoDigits(int input) => input.toString().padLeft(2, '0');
+    return '${twoDigits(local.month)}/${twoDigits(local.day)} ${twoDigits(local.hour)}:${twoDigits(local.minute)}:${twoDigits(local.second)}';
+  }
+}
+
+class _CountChip extends StatelessWidget {
+  const _CountChip({
+    required this.label,
+    required this.count,
+    required this.icon,
+    this.highlight = false,
+  });
+
+  final String label;
+  final int count;
+  final IconData icon;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final foreground = highlight ? scheme.onErrorContainer : scheme.onSurface;
+    final background = highlight
+        ? scheme.errorContainer
+        : scheme.surfaceContainerHighest;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: foreground),
+          const SizedBox(width: 6),
+          Text(
+            '$label: $count',
+            style: Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(color: foreground),
+          ),
+        ],
+      ),
+    );
   }
 }
 

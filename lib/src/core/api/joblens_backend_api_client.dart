@@ -127,6 +127,13 @@ class JoblensBackendApiClient {
     return MoveAssetResponse.fromMap(map);
   }
 
+  Future<void> deleteAsset(String assetId) async {
+    await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/assets/$assetId/delete',
+    );
+  }
+
   Future<ListAssetsResponse> listAssets(ListAssetsRequest request) async {
     final map = await _authorizedJsonRequest(
       method: 'GET',

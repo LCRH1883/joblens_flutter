@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
 
@@ -12,6 +13,7 @@ import '../models/cloud_provider.dart';
 import '../models/photo_asset.dart';
 import '../models/project.dart';
 import '../models/provider_account.dart';
+import '../models/sync_log_entry.dart';
 import '../models/sync_job.dart';
 import 'cloud_adapter.dart';
 
@@ -33,6 +35,12 @@ class SyncService {
       assetId: asset.id,
       projectId: asset.projectId,
       provider: CloudProviderType.backend,
+    );
+    await _logInfo(
+      'asset_queued',
+      assetId: asset.id,
+      projectId: asset.projectId,
+      message: 'Queued asset for cloud sync.',
     );
   }
 
@@ -207,6 +215,10 @@ class SyncService {
       if (pending.isEmpty) {
         return;
       }
+      await _logInfo(
+        'process_queue_start',
+        message: 'Processing ${pending.length} pending sync job(s).',
+      );
 
       final jobsByAssetId = <String, List<SyncJob>>{};
       for (final job in pending) {
@@ -230,6 +242,11 @@ class SyncService {
         final jobs = entry.value;
         final asset = assetsById[entry.key];
         if (asset == null) {
+          await _logError(
+            'asset_missing',
+            assetId: entry.key,
+            message: 'Asset no longer exists locally.',
+          );
           await _markJobsFailed(
             jobs,
             errorCode: 'asset_missing',
@@ -240,6 +257,12 @@ class SyncService {
 
         final project = projectsById[asset.projectId];
         if (project == null) {
+          await _logError(
+            'project_missing',
+            assetId: asset.id,
+            message: 'Project ${asset.projectId} no longer exists locally.',
+            projectId: asset.projectId,
+          );
           await _db.updateAssetSyncError(asset.id, 'project_missing');
           await _markJobsFailed(
             jobs,
@@ -254,6 +277,12 @@ class SyncService {
           remoteProjectId = (await syncProject(project))?.trim() ?? '';
         } catch (error) {
           final mapped = _mapSyncError(error);
+          await _logError(
+            'project_sync_failed',
+            assetId: asset.id,
+            projectId: asset.projectId,
+            message: mapped.message,
+          );
           await _db.updateAssetSyncError(asset.id, mapped.code);
           await _markJobsFailed(
             jobs,
@@ -264,6 +293,12 @@ class SyncService {
         }
 
         if (remoteProjectId.isEmpty) {
+          await _logError(
+            'project_sync_failed',
+            assetId: asset.id,
+            projectId: asset.projectId,
+            message: 'Unable to create or resolve backend project.',
+          );
           await _db.updateAssetSyncError(asset.id, 'project_sync_failed');
           await _markJobsFailed(
             jobs,
@@ -301,6 +336,12 @@ class SyncService {
           } catch (error) {
             final mapped = _mapSyncError(error);
             for (final item in chunk) {
+              await _logError(
+                'bulk_check_failed',
+                assetId: item.asset.id,
+                projectId: item.asset.projectId,
+                message: mapped.message,
+              );
               await _db.updateAssetSyncError(item.asset.id, mapped.code);
               await _markJobsFailed(
                 item.jobs,
@@ -318,6 +359,12 @@ class SyncService {
           for (final item in chunk) {
             final result = resultsByDevice[item.asset.id];
             if (result == null) {
+              await _logError(
+                'bulk_check_missing_result',
+                assetId: item.asset.id,
+                projectId: item.asset.projectId,
+                message: 'Backend did not return a bulk-check result for this asset.',
+              );
               await _db.updateAssetSyncError(
                 item.asset.id,
                 'bulk_check_missing_result',
@@ -332,11 +379,27 @@ class SyncService {
             }
 
             if (result.isDuplicate) {
-              await _handleDuplicate(
-                item,
-                result.assetId,
-                remoteProjectId: remoteProjectId,
-              );
+              try {
+                await _handleDuplicate(
+                  item,
+                  result.assetId,
+                  remoteProjectId: remoteProjectId,
+                );
+              } catch (error) {
+                final mapped = _mapSyncError(error);
+                await _logError(
+                  'duplicate_move_failed',
+                  assetId: item.asset.id,
+                  projectId: item.asset.projectId,
+                  message: mapped.message,
+                );
+                await _db.updateAssetSyncError(item.asset.id, mapped.code);
+                await _markJobsFailed(
+                  item.jobs,
+                  errorCode: mapped.code,
+                  errorMessage: mapped.message,
+                );
+              }
               continue;
             }
 
@@ -468,6 +531,24 @@ class SyncService {
     _signedMediaUrlCache.invalidate(remoteAssetId, SignedMediaUrlKind.download);
   }
 
+  Future<void> deleteRemoteAsset(PhotoAsset asset) async {
+    final client = _backendApiClient;
+    final remoteAssetId = asset.remoteAssetId;
+    if (client == null || remoteAssetId == null || remoteAssetId.isEmpty) {
+      return;
+    }
+
+    await client.deleteAsset(remoteAssetId);
+    await _logInfo(
+      'remote_delete_requested',
+      assetId: asset.id,
+      projectId: asset.projectId,
+      message: 'Requested remote delete for synced asset.',
+    );
+    await invalidateThumbnailUrl(asset);
+    await invalidateDownloadUrl(asset);
+  }
+
   Future<void> _mergeRemoteAsset(
     BackendAssetRecord remoteAsset, {
     required int fallbackLocalProjectId,
@@ -537,6 +618,12 @@ class SyncService {
         assetId: remoteAssetId,
         projectId: remoteProjectId,
       );
+      await _logInfo(
+        'remote_move_completed',
+        assetId: context.asset.id,
+        projectId: context.asset.projectId,
+        message: 'Moved synced asset to its destination project folder.',
+      );
       await _db.updateAssetCloudMetadata(
         assetId: context.asset.id,
         remoteAssetId: moved.assetId,
@@ -557,6 +644,12 @@ class SyncService {
       cloudState: AssetCloudState.localAndCloud,
       lastSyncErrorCode: null,
     );
+    await _logInfo(
+      'duplicate_marked_synced',
+      assetId: context.asset.id,
+      projectId: context.asset.projectId,
+      message: 'Matched an existing remote asset during sync.',
+    );
     await _db.updateAssetSyncError(context.asset.id, null);
     await _markJobsDone(context.jobs);
   }
@@ -569,6 +662,12 @@ class SyncService {
       final outcome = await _uploadAndCommitWithRetry(
         context,
         remoteProjectId: remoteProjectId,
+      );
+      await _logInfo(
+        'upload_completed',
+        assetId: context.asset.id,
+        projectId: context.asset.projectId,
+        message: 'Uploaded asset to the cloud provider successfully.',
       );
       await _db.updateAssetCloudMetadata(
         assetId: context.asset.id,
@@ -584,6 +683,12 @@ class SyncService {
       await _markJobsDone(context.jobs);
     } catch (error) {
       final mapped = _mapSyncError(error);
+      await _logError(
+        'upload_failed',
+        assetId: context.asset.id,
+        projectId: context.asset.projectId,
+        message: mapped.message,
+      );
       await _db.updateAssetSyncError(context.asset.id, mapped.code);
       await _markJobsFailed(
         context.jobs,
@@ -637,6 +742,12 @@ class SyncService {
       );
 
       if (prepared.isDuplicate) {
+        await _logInfo(
+          'prepare_upload_duplicate',
+          assetId: context.asset.id,
+          projectId: context.asset.projectId,
+          message: 'Backend reported that the asset already exists remotely.',
+        );
         return _UploadOutcome(
           remoteAssetId: prepared.assetId ?? '',
           remoteProvider: prepared.provider,
@@ -658,6 +769,13 @@ class SyncService {
               'Prepare-upload response is missing upload instructions or remote path.',
         );
       }
+
+      await _logInfo(
+        'prepare_upload_ready',
+        assetId: context.asset.id,
+        projectId: context.asset.projectId,
+        message: 'Upload instructions received from backend.',
+      );
 
       await client.uploadWithInstruction(
         instruction: instruction,
@@ -692,6 +810,13 @@ class SyncService {
             message: 'Commit response did not include an asset id.',
           );
         }
+
+        await _logInfo(
+          'commit_succeeded',
+          assetId: context.asset.id,
+          projectId: context.asset.projectId,
+          message: 'Backend commit completed for uploaded asset.',
+        );
 
         return _UploadOutcome(
           remoteAssetId: remoteAssetId,
@@ -762,6 +887,42 @@ class SyncService {
       return _MappedSyncError(code: 'provider_error', message: error.message);
     }
     return _MappedSyncError(code: 'network_error', message: error.toString());
+  }
+
+  Future<void> _logInfo(
+    String event, {
+    String? assetId,
+    int? projectId,
+    required String message,
+  }) async {
+    await _db.addSyncLog(
+      level: SyncLogLevel.info,
+      event: event,
+      assetId: assetId,
+      projectId: projectId,
+      message: message,
+    );
+    if (kDebugMode) {
+      debugPrint('Joblens sync [$event] ${assetId ?? '-'} $message');
+    }
+  }
+
+  Future<void> _logError(
+    String event, {
+    String? assetId,
+    int? projectId,
+    required String message,
+  }) async {
+    await _db.addSyncLog(
+      level: SyncLogLevel.error,
+      event: event,
+      assetId: assetId,
+      projectId: projectId,
+      message: message,
+    );
+    if (kDebugMode) {
+      debugPrint('Joblens sync ERROR [$event] ${assetId ?? '-'} $message');
+    }
   }
 }
 

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Session;
 
 import '../core/db/app_database.dart';
@@ -12,6 +13,7 @@ import '../core/models/cloud_provider.dart';
 import '../core/models/photo_asset.dart';
 import '../core/models/project.dart';
 import '../core/models/provider_account.dart';
+import '../core/models/sync_log_entry.dart';
 import '../core/models/sync_job.dart';
 import '../core/storage/media_storage_service.dart';
 import '../core/sync/sync_service.dart';
@@ -60,6 +62,7 @@ class JoblensStore extends ChangeNotifier {
   Map<int, int> _projectCounts = const {};
   List<ProviderAccount> _providers = const [];
   List<SyncJob> _syncJobs = const [];
+  List<SyncLogEntry> _syncLogs = const [];
 
   bool get isLoading => _isLoading;
   bool get isBusy => _isBusy;
@@ -70,6 +73,7 @@ class JoblensStore extends ChangeNotifier {
   Map<int, int> get projectCounts => _projectCounts;
   List<ProviderAccount> get providers => _providers;
   List<SyncJob> get syncJobs => _syncJobs;
+  List<SyncLogEntry> get syncLogs => _syncLogs;
 
   Future<void> initialize() async {
     await _synchronizeAuthUser(_currentAuthUserIdProvider?.call());
@@ -336,6 +340,12 @@ class JoblensStore extends ChangeNotifier {
 
   Future<void> softDeleteAsset(String assetId) async {
     await _runBusy(() async {
+      final asset = await _database.getAssetById(assetId);
+      if (asset != null &&
+          asset.remoteAssetId != null &&
+          asset.remoteAssetId!.isNotEmpty) {
+        await _syncService.deleteRemoteAsset(asset);
+      }
       await _database.softDeleteAsset(assetId);
       await refresh();
     });
@@ -348,6 +358,12 @@ class JoblensStore extends ChangeNotifier {
     }
 
     await _runBusy(() async {
+      final assets = await _database.getAssetsByIds(uniqueIds);
+      for (final asset in assets) {
+        if (asset.remoteAssetId != null && asset.remoteAssetId!.isNotEmpty) {
+          await _syncService.deleteRemoteAsset(asset);
+        }
+      }
       for (final assetId in uniqueIds) {
         await _database.softDeleteAsset(assetId);
       }
@@ -418,6 +434,37 @@ class JoblensStore extends ChangeNotifier {
     });
   }
 
+  Future<String> exportSyncLog() async {
+    final logs = await _database.getAllSyncLogs();
+    final buffer = StringBuffer();
+    buffer.writeln('Joblens Sync Log');
+    buffer.writeln('Generated: ${DateTime.now().toIso8601String()}');
+    buffer.writeln();
+    for (final log in logs) {
+      buffer.writeln(
+        '[${log.createdAt.toIso8601String()}] ${log.level.name.toUpperCase()} ${log.event}'
+        '${log.assetId == null ? '' : ' asset=${log.assetId}'}'
+        '${log.projectId == null ? '' : ' project=${log.projectId}'}'
+        ' ${log.message}',
+      );
+    }
+
+    final directory = await getApplicationDocumentsDirectory();
+    final file = File(
+      '${directory.path}/joblens_sync_log_${DateTime.now().millisecondsSinceEpoch}.txt',
+    );
+    await file.writeAsString(buffer.toString());
+    return file.path;
+  }
+
+  Future<void> clearSyncLog() async {
+    await _runBusy(() async {
+      await _database.clearSyncLogs();
+      _syncLogs = const [];
+      notifyListeners();
+    });
+  }
+
   Future<String?> resolveThumbnailUrl(
     PhotoAsset asset, {
     bool forceRefresh = false,
@@ -476,6 +523,7 @@ class JoblensStore extends ChangeNotifier {
     _projectCounts = await _database.getProjectCounts();
     _providers = await _database.getProviderAccounts();
     _syncJobs = await _database.getSyncJobs();
+    _syncLogs = await _database.getSyncLogs();
   }
 
   Future<void> _synchronizeAuthUser(String? userId) async {

@@ -7,6 +7,7 @@ import '../models/cloud_provider.dart';
 import '../models/photo_asset.dart';
 import '../models/project.dart';
 import '../models/provider_account.dart';
+import '../models/sync_log_entry.dart';
 import '../models/sync_job.dart';
 
 class AppDatabase {
@@ -14,7 +15,7 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 5;
+  static const _schemaVersion = 6;
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -91,6 +92,18 @@ class AppDatabase {
           )
         ''');
 
+        await db.execute('''
+          CREATE TABLE sync_log_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            level TEXT NOT NULL,
+            event TEXT NOT NULL,
+            message TEXT NOT NULL,
+            asset_id TEXT,
+            project_id INTEGER,
+            created_at TEXT NOT NULL
+          )
+        ''');
+
         await db.execute(
           'CREATE INDEX idx_assets_project ON photo_assets(project_id)',
         );
@@ -156,6 +169,19 @@ class AppDatabase {
             )
           ''');
         }
+        if (oldVersion < 6) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS sync_log_entries (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              level TEXT NOT NULL,
+              event TEXT NOT NULL,
+              message TEXT NOT NULL,
+              asset_id TEXT,
+              project_id INTEGER,
+              created_at TEXT NOT NULL
+            )
+          ''');
+        }
       },
     );
 
@@ -207,6 +233,7 @@ class AppDatabase {
   Future<void> clearUserScopedData() async {
     await _db.transaction((txn) async {
       await txn.delete('sync_jobs');
+      await txn.delete('sync_log_entries');
       await txn.delete('photo_assets');
       await txn.delete('projects');
       await txn.delete('provider_accounts');
@@ -483,6 +510,22 @@ class AppDatabase {
     required CloudProviderType provider,
   }) async {
     final now = DateTime.now();
+    final updated = await _db.update(
+      'sync_jobs',
+      {
+        'project_id': projectId,
+        'attempt_count': 0,
+        'state': SyncJobState.queued.name,
+        'last_error': null,
+        'updated_at': now.toIso8601String(),
+      },
+      where: 'asset_id = ? AND provider_type = ?',
+      whereArgs: [assetId, provider.key],
+    );
+    if (updated > 0) {
+      return;
+    }
+
     await _db.insert(
       'sync_jobs',
       SyncJob(
@@ -503,6 +546,44 @@ class AppDatabase {
   Future<List<SyncJob>> getSyncJobs() async {
     final rows = await _db.query('sync_jobs', orderBy: 'updated_at DESC');
     return rows.map(SyncJob.fromMap).toList();
+  }
+
+  Future<void> addSyncLog({
+    required SyncLogLevel level,
+    required String event,
+    required String message,
+    String? assetId,
+    int? projectId,
+  }) async {
+    await _db.insert('sync_log_entries', {
+      'level': level.name,
+      'event': event,
+      'message': message,
+      'asset_id': assetId,
+      'project_id': projectId,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<List<SyncLogEntry>> getSyncLogs({int limit = 200}) async {
+    final rows = await _db.query(
+      'sync_log_entries',
+      orderBy: 'created_at DESC, id DESC',
+      limit: limit,
+    );
+    return rows.map(SyncLogEntry.fromMap).toList(growable: false);
+  }
+
+  Future<List<SyncLogEntry>> getAllSyncLogs() async {
+    final rows = await _db.query(
+      'sync_log_entries',
+      orderBy: 'created_at ASC, id ASC',
+    );
+    return rows.map(SyncLogEntry.fromMap).toList(growable: false);
+  }
+
+  Future<void> clearSyncLogs() async {
+    await _db.delete('sync_log_entries');
   }
 
   Future<List<SyncJob>> getPendingSyncJobs() async {
