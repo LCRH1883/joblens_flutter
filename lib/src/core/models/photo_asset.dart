@@ -50,6 +50,7 @@ class PhotoAsset {
   String get dayLabel => DateFormat('EEE, MMM d, y').format(createdAt);
 
   PhotoAsset copyWith({
+    String? localPath,
     int? projectId,
     AssetStatus? status,
     String? thumbPath,
@@ -63,7 +64,7 @@ class PhotoAsset {
   }) {
     return PhotoAsset(
       id: id,
-      localPath: localPath,
+      localPath: localPath ?? this.localPath,
       thumbPath: thumbPath ?? this.thumbPath,
       createdAt: createdAt,
       importedAt: importedAt,

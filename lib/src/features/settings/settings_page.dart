@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/joblens_store.dart';
 import '../auth/auth_page.dart';
 import '../auth/auth_state.dart';
+import '../sync/sync_page.dart';
 
 class SettingsPage extends ConsumerWidget {
   const SettingsPage({super.key});
@@ -63,6 +64,15 @@ class SettingsPage extends ConsumerWidget {
           ),
           Card(
             child: ListTile(
+              leading: const Icon(Icons.sync_outlined),
+              title: const Text('Cloud sync'),
+              subtitle: Text(_syncDescription(store, isAuthConfigured, authUser?.email)),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _openSyncPage(context),
+            ),
+          ),
+          Card(
+            child: ListTile(
               title: const Text('Storage model'),
               subtitle: const Text(
                 'Joblens stores captured/imported photos in app-private storage and keeps them separate from the system camera roll.',
@@ -96,6 +106,12 @@ class SettingsPage extends ConsumerWidget {
     ).push(MaterialPageRoute<void>(builder: (_) => const AuthPage()));
   }
 
+  static Future<void> _openSyncPage(BuildContext context) {
+    return Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const SyncPage()));
+  }
+
   static String _accountDescription({
     required bool isAuthConfigured,
     required String? authUserEmail,
@@ -107,5 +123,25 @@ class SettingsPage extends ConsumerWidget {
       return 'You are signed out. Sign in to connect your cloud storage and sync Joblens across devices.';
     }
     return 'Signed in as $authUserEmail. Cloud provider connections and sync run through your Joblens account.';
+  }
+
+  static String _syncDescription(
+    JoblensStore store,
+    bool isAuthConfigured,
+    String? authUserEmail,
+  ) {
+    if (!isAuthConfigured) {
+      return 'Cloud sync is unavailable right now. Your photos still work locally on this device.';
+    }
+    if (authUserEmail == null || authUserEmail.trim().isEmpty) {
+      return 'Sign in first, then connect your cloud drive and review sync status here.';
+    }
+    final queuedCount = store.syncJobs
+        .where((job) => job.state.name == 'queued')
+        .length;
+    final failedCount = store.syncJobs
+        .where((job) => job.state.name == 'failed')
+        .length;
+    return '$queuedCount queued • $failedCount failed • manage providers and sync activity';
   }
 }

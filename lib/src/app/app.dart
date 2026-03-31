@@ -9,11 +9,11 @@ import '../core/models/cloud_provider.dart';
 import '../features/auth/auth_page.dart';
 import '../features/auth/auth_state.dart';
 import '../features/auth/password_reset_page.dart';
+import '../features/camera/camera_capture_page.dart';
 import '../features/gallery/gallery_page.dart';
 import '../features/projects/projects_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/sync/provider_oauth_callback.dart';
-import '../features/sync/sync_page.dart';
 import 'joblens_store.dart';
 
 class JoblensApp extends ConsumerStatefulWidget {
@@ -137,7 +137,7 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       debugPrint('Joblens provider refresh failed: $error\n$stackTrace');
     }
 
-    _appShellKey.currentState?.showSyncTab();
+    _appShellKey.currentState?.showSettingsTab();
     _scaffoldMessengerKey.currentState?.showSnackBar(
       SnackBar(content: Text(callback.userFacingMessage())),
     );
@@ -198,19 +198,12 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _currentTab = 0;
 
-  final _pages = const [
-    GalleryPage(),
-    ProjectsPage(),
-    SyncPage(),
-    SettingsPage(),
-  ];
-
-  void showSyncTab() {
+  void showSettingsTab() {
     if (!mounted) {
       return;
     }
     setState(() {
-      _currentTab = 2;
+      _currentTab = 3;
     });
   }
 
@@ -220,7 +213,7 @@ class _AppShellState extends State<AppShell> {
       body: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onHorizontalDragEnd: _onTabSwipeEnd,
-        child: IndexedStack(index: _currentTab, children: _pages),
+        child: _buildCurrentPage(),
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentTab,
@@ -231,6 +224,10 @@ class _AppShellState extends State<AppShell> {
         },
         destinations: const [
           NavigationDestination(
+            icon: Icon(Icons.photo_camera_outlined),
+            label: 'Camera',
+          ),
+          NavigationDestination(
             icon: Icon(Icons.photo_library_outlined),
             label: 'Gallery',
           ),
@@ -238,7 +235,6 @@ class _AppShellState extends State<AppShell> {
             icon: Icon(Icons.workspaces_outline),
             label: 'Projects',
           ),
-          NavigationDestination(icon: Icon(Icons.sync_outlined), label: 'Sync'),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
             label: 'Settings',
@@ -250,7 +246,7 @@ class _AppShellState extends State<AppShell> {
 
   void _onTabSwipeEnd(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
-    if (velocity <= -450 && _currentTab < _pages.length - 1) {
+    if (velocity <= -450 && _currentTab < 3) {
       setState(() {
         _currentTab += 1;
       });
@@ -261,5 +257,14 @@ class _AppShellState extends State<AppShell> {
         _currentTab -= 1;
       });
     }
+  }
+
+  Widget _buildCurrentPage() {
+    return switch (_currentTab) {
+      0 => const CameraCapturePage(),
+      1 => const GalleryPage(),
+      2 => const ProjectsPage(),
+      _ => const SettingsPage(),
+    };
   }
 }

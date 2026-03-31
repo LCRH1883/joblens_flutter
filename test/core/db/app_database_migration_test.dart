@@ -13,7 +13,7 @@ void main() {
   });
 
   test(
-    'migrates projects table to add notes column with default value',
+    'migrates projects table to add notes and start_date columns with default values',
     () async {
       final tempDir = await Directory.systemTemp.createTemp('joblens_db_test_');
       addTearDown(() async {
@@ -70,10 +70,16 @@ void main() {
       final columns = await db.rawQuery('PRAGMA table_info(projects)');
       final names = columns.map((row) => row['name']).toList();
       expect(names, contains('notes'));
+      expect(names, contains('start_date'));
 
-      final rows = await db.query('projects', columns: ['notes'], limit: 1);
+      final rows = await db.query(
+        'projects',
+        columns: ['notes', 'start_date'],
+        limit: 1,
+      );
       expect(rows, isNotEmpty);
       expect(rows.first['notes'], '');
+      expect(rows.first['start_date'], isNull);
       await db.close();
     },
   );

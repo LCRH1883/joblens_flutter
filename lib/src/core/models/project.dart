@@ -1,10 +1,29 @@
 import 'dart:convert';
 
+enum ProjectSortMode {
+  name('name'),
+  startDate('start_date');
+
+  const ProjectSortMode(this.storageValue);
+
+  final String storageValue;
+
+  static ProjectSortMode fromStorage(String? value) {
+    for (final mode in values) {
+      if (mode.storageValue == value) {
+        return mode;
+      }
+    }
+    return ProjectSortMode.name;
+  }
+}
+
 class Project {
   const Project({
     required this.id,
     required this.name,
     required this.notes,
+    required this.startDate,
     required this.remoteProjectId,
     required this.coverAssetId,
     required this.createdAt,
@@ -15,6 +34,7 @@ class Project {
   final int id;
   final String name;
   final String notes;
+  final DateTime? startDate;
   final String? remoteProjectId;
   final String? coverAssetId;
   final DateTime createdAt;
@@ -26,6 +46,7 @@ class Project {
       'id': id,
       'name': name,
       'notes': notes,
+      'start_date': startDate?.toIso8601String(),
       'remote_project_id': remoteProjectId,
       'cover_asset_id': coverAssetId,
       'created_at': createdAt.toIso8601String(),
@@ -41,6 +62,9 @@ class Project {
       id: map['id']! as int,
       name: map['name']! as String,
       notes: (map['notes'] as String?) ?? '',
+      startDate: (map['start_date'] as String?) == null
+          ? null
+          : DateTime.parse(map['start_date']! as String),
       remoteProjectId: map['remote_project_id'] as String?,
       coverAssetId: map['cover_asset_id'] as String?,
       createdAt: DateTime.parse(map['created_at']! as String),

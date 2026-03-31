@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/joblens_store.dart';
 import '../../core/models/photo_asset.dart';
 import '../../core/ui/user_facing_error.dart';
-import '../camera/camera_capture_page.dart';
 import 'photo_viewer_page.dart';
 
 class GalleryPage extends ConsumerStatefulWidget {
@@ -94,19 +93,6 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                 ),
               ],
       ),
-      floatingActionButton: _isSelectionMode
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const CameraCapturePage(),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.photo_camera_outlined),
-              label: const Text('Capture'),
-            ),
       body: _buildBody(context, store, grouped, assets),
     );
   }
@@ -565,15 +551,37 @@ class _AssetThumbnail extends StatefulWidget {
 
 class _AssetThumbnailState extends State<_AssetThumbnail> {
   bool _forceRefresh = false;
+  bool _localThumbFailed = false;
+
+  @override
+  void didUpdateWidget(covariant _AssetThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.asset.thumbPath != widget.asset.thumbPath) {
+      _localThumbFailed = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final thumbPath = widget.asset.thumbPath;
-    if (thumbPath.isNotEmpty && File(thumbPath).existsSync()) {
+    if (thumbPath.isNotEmpty && !_localThumbFailed) {
       return Image.file(
         File(thumbPath),
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => _placeholder(context),
+        gaplessPlayback: true,
+        errorBuilder: (context, error, stackTrace) {
+          if (!_localThumbFailed) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) {
+                return;
+              }
+              setState(() {
+                _localThumbFailed = true;
+              });
+            });
+          }
+          return _placeholder(context, loading: true);
+        },
       );
     }
 

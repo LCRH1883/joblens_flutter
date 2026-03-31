@@ -135,6 +135,61 @@ void main() {
     expect(updated?.uploadPath, 'Joblens/Library/a.jpg');
     expect(jobs.single.state, SyncJobState.done);
   });
+
+  test('existing remote asset moves directly without re-uploading', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(
+      bulkCheckResponse: BulkCheckAssetsResponse(
+        projectId: 'remote-project-1',
+        duplicateCount: 0,
+        missingCount: 1,
+        results: [
+          BulkCheckResult(
+            deviceAssetId: 'asset-local',
+            sha256: 'a' * 64,
+            status: 'missing',
+            assetId: null,
+          ),
+        ],
+      ),
+      projectId: 'remote-project-1',
+    );
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+    );
+
+    final project = await harness.createProject('Library');
+    final asset = await harness.ingestAsset(projectId: project.id, seed: 3);
+    await harness.database.updateAssetCloudMetadata(
+      assetId: asset.id,
+      remoteAssetId: 'asset-remote-existing',
+      remoteProvider: CloudProviderType.googleDrive.key,
+      remoteFileId: 'provider-file-existing',
+      uploadPath: 'Joblens/Inbox/existing.jpg',
+      cloudState: AssetCloudState.localAndCloud,
+      lastSyncErrorCode: null,
+    );
+    await harness.database.enqueueSyncJob(
+      assetId: asset.id,
+      projectId: asset.projectId,
+      provider: CloudProviderType.backend,
+    );
+
+    await syncService.processQueue([project]);
+
+    final updated = await harness.database.getAssetById(asset.id);
+    final jobs = await harness.database.getSyncJobs();
+    expect(fakeClient.moveCalls, 1);
+    expect(fakeClient.uploadCalls, 0);
+    expect(updated?.remoteAssetId, 'asset-remote');
+    expect(updated?.remoteProvider, CloudProviderType.googleDrive.key);
+    expect(updated?.remoteFileId, 'provider-file-moved');
+    expect(updated?.uploadPath, 'Joblens/Library/asset-local.jpg');
+    expect(jobs.single.state, SyncJobState.done);
+  });
 }
 
 class _Harness {

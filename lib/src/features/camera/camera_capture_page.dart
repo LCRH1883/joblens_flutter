@@ -82,7 +82,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
     final previous = _controller;
     final resolutionPreset = _settings.rapidCaptureMode
         ? ResolutionPreset.medium
-        : ResolutionPreset.high;
+        : ResolutionPreset.max;
     final controller = CameraController(
       camera,
       resolutionPreset,
@@ -239,7 +239,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
           _ => Stack(
             fit: StackFit.expand,
             children: [
-              CameraPreview(controller!),
+              _buildPreview(controller!),
               Positioned(
                 top: 0,
                 left: 0,
@@ -251,10 +251,10 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
                       horizontal: 16,
                       vertical: 12,
                     ),
-                    child: Row(
+                        child: Row(
                       children: [
                         _controlButton(
-                          icon: Icons.close_rounded,
+                          icon: Icons.arrow_back_rounded,
                           onTap: () => Navigator.of(context).maybePop(),
                         ),
                         const SizedBox(width: 10),
@@ -402,6 +402,29 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
               child: const Text('Retry'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPreview(CameraController controller) {
+    final previewSize = controller.value.previewSize;
+    if (previewSize == null) {
+      return CameraPreview(controller);
+    }
+
+    return ClipRect(
+      child: OverflowBox(
+        maxWidth: double.infinity,
+        maxHeight: double.infinity,
+        alignment: Alignment.center,
+        child: FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: previewSize.height,
+            height: previewSize.width,
+            child: CameraPreview(controller),
+          ),
         ),
       ),
     );

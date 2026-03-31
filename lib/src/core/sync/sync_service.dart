@@ -308,6 +308,33 @@ class SyncService {
           continue;
         }
 
+        final existingRemoteAssetId = asset.remoteAssetId?.trim() ?? '';
+        if (existingRemoteAssetId.isNotEmpty) {
+          try {
+            await _moveExistingRemoteAsset(
+              asset,
+              jobs,
+              remoteAssetId: existingRemoteAssetId,
+              remoteProjectId: remoteProjectId,
+            );
+          } catch (error) {
+            final mapped = _mapSyncError(error);
+            await _logError(
+              'remote_move_failed',
+              assetId: asset.id,
+              projectId: asset.projectId,
+              message: mapped.message,
+            );
+            await _db.updateAssetSyncError(asset.id, mapped.code);
+            await _markJobsFailed(
+              jobs,
+              errorCode: mapped.code,
+              errorMessage: mapped.message,
+            );
+          }
+          continue;
+        }
+
         await _markJobsUploading(jobs);
         groupedByRemoteProject
             .putIfAbsent(remoteProjectId, () => [])
@@ -652,6 +679,44 @@ class SyncService {
     );
     await _db.updateAssetSyncError(context.asset.id, null);
     await _markJobsDone(context.jobs);
+  }
+
+  Future<void> _moveExistingRemoteAsset(
+    PhotoAsset asset,
+    List<SyncJob> jobs, {
+    required String remoteAssetId,
+    required String remoteProjectId,
+  }) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw const ApiException(
+        code: 'backend_unavailable',
+        message: 'Backend API client is not configured.',
+      );
+    }
+
+    await _markJobsUploading(jobs);
+    final moved = await client.moveAssetToProject(
+      assetId: remoteAssetId,
+      projectId: remoteProjectId,
+    );
+    await _logInfo(
+      'remote_move_completed',
+      assetId: asset.id,
+      projectId: asset.projectId,
+      message: 'Moved synced asset to its destination project folder.',
+    );
+    await _db.updateAssetCloudMetadata(
+      assetId: asset.id,
+      remoteAssetId: moved.assetId,
+      remoteProvider: moved.provider?.key,
+      remoteFileId: moved.remoteFileId,
+      uploadPath: moved.remotePath,
+      cloudState: AssetCloudState.localAndCloud,
+      lastSyncErrorCode: null,
+    );
+    await _db.updateAssetSyncError(asset.id, null);
+    await _markJobsDone(jobs);
   }
 
   Future<void> _handleMissingAssetUpload(

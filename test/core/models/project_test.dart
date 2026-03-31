@@ -8,6 +8,7 @@ void main() {
       id: 7,
       name: 'Library A',
       notes: 'First line\nSecond line',
+      startDate: DateTime.parse('2026-01-01T00:00:00.000'),
       remoteProjectId: 'remote-project-1',
       coverAssetId: 'asset-1',
       createdAt: DateTime.parse('2026-01-02T03:04:05.000'),
@@ -21,6 +22,7 @@ void main() {
     expect(parsed.id, original.id);
     expect(parsed.name, original.name);
     expect(parsed.notes, original.notes);
+    expect(parsed.startDate, original.startDate);
     expect(parsed.remoteProjectId, original.remoteProjectId);
     expect(parsed.coverAssetId, original.coverAssetId);
     expect(parsed.createdAt, original.createdAt);

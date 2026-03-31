@@ -125,19 +125,41 @@ class _ViewerMedia extends ConsumerStatefulWidget {
 
 class _ViewerMediaState extends ConsumerState<_ViewerMedia> {
   bool _forceRefresh = false;
+  bool _localFileFailed = false;
+
+  @override
+  void didUpdateWidget(covariant _ViewerMedia oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.asset.localPath != widget.asset.localPath) {
+      _localFileFailed = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final localPath = widget.asset.localPath;
-    if (localPath.isNotEmpty && File(localPath).existsSync()) {
+    if (localPath.isNotEmpty && !_localFileFailed) {
       return Image.file(
         File(localPath),
         fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) => const Icon(
-          Icons.broken_image_outlined,
-          color: Colors.white70,
-          size: 40,
-        ),
+        gaplessPlayback: true,
+        errorBuilder: (context, error, stackTrace) {
+          if (!_localFileFailed) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) {
+                return;
+              }
+              setState(() {
+                _localFileFailed = true;
+              });
+            });
+          }
+          return const SizedBox(
+            width: 32,
+            height: 32,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          );
+        },
       );
     }
 

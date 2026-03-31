@@ -579,15 +579,37 @@ class _ProjectAssetThumbnail extends StatefulWidget {
 
 class _ProjectAssetThumbnailState extends State<_ProjectAssetThumbnail> {
   bool _forceRefresh = false;
+  bool _localThumbFailed = false;
+
+  @override
+  void didUpdateWidget(covariant _ProjectAssetThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.asset.thumbPath != widget.asset.thumbPath) {
+      _localThumbFailed = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final thumbPath = widget.asset.thumbPath;
-    if (thumbPath.isNotEmpty && File(thumbPath).existsSync()) {
+    if (thumbPath.isNotEmpty && !_localThumbFailed) {
       return Image.file(
         File(thumbPath),
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) => _placeholder(context),
+        gaplessPlayback: true,
+        errorBuilder: (context, error, stackTrace) {
+          if (!_localThumbFailed) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) {
+                return;
+              }
+              setState(() {
+                _localThumbFailed = true;
+              });
+            });
+          }
+          return _placeholder(context, loading: true);
+        },
       );
     }
 

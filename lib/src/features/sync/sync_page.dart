@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/joblens_store.dart';
@@ -302,13 +303,44 @@ class _SyncPageState extends ConsumerState<SyncPage>
 
   Future<void> _exportSyncLog(BuildContext context, JoblensStore store) async {
     final messenger = ScaffoldMessenger.of(context);
-    final path = await store.exportSyncLog();
-    if (!mounted) {
-      return;
+    final shareOrigin = _sharePositionOrigin(context);
+    try {
+      final file = await store.exportSyncLog();
+      final result = await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'text/plain')],
+        text: 'Joblens sync log',
+        subject: 'Joblens Sync Log',
+        sharePositionOrigin: shareOrigin,
+      );
+      if (!mounted) {
+        return;
+      }
+      final message = switch (result.status) {
+        ShareResultStatus.success =>
+          'Sync log shared successfully.',
+        ShareResultStatus.dismissed =>
+          'Share sheet closed. You can export again any time.',
+        _ => 'Sync log ready to share or save from the share sheet.',
+      };
+      messenger.showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Unable to open share sheet: $error'),
+        ),
+      );
     }
-    messenger.showSnackBar(
-      SnackBar(content: Text('Sync log exported to $path')),
-    );
+  }
+
+  Rect? _sharePositionOrigin(BuildContext context) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) {
+      return null;
+    }
+    return box.localToGlobal(Offset.zero) & box.size;
   }
 
   Future<void> _openAuthPage(BuildContext context) {

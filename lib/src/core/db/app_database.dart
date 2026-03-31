@@ -15,7 +15,7 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 6;
+  static const _schemaVersion = 7;
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -29,6 +29,7 @@ class AppDatabase {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
             notes TEXT NOT NULL DEFAULT '',
+            start_date TEXT,
             remote_project_id TEXT,
             cover_asset_id TEXT,
             created_at TEXT NOT NULL,
@@ -182,6 +183,11 @@ class AppDatabase {
             )
           ''');
         }
+        if (oldVersion < 7) {
+          await db.execute(
+            "ALTER TABLE projects ADD COLUMN start_date TEXT",
+          );
+        }
       },
     );
 
@@ -194,6 +200,47 @@ class AppDatabase {
   }
 
   Future<void> close() async => _db.close();
+
+  Future<int> normalizeAssetMediaPaths(String currentMediaRootPath) async {
+    final rows = await _db.query(
+      'photo_assets',
+      columns: ['id', 'local_path', 'thumb_path'],
+      where: 'local_path != ? OR thumb_path != ?',
+      whereArgs: ['', ''],
+    );
+    var updatedCount = 0;
+
+    for (final row in rows) {
+      final assetId = row['id']! as String;
+      final currentLocalPath = row['local_path']! as String;
+      final currentThumbPath = row['thumb_path']! as String;
+      final normalizedLocalPath = rebaseMediaPath(
+        currentLocalPath,
+        currentMediaRootPath,
+      );
+      final normalizedThumbPath = rebaseMediaPath(
+        currentThumbPath,
+        currentMediaRootPath,
+      );
+      if (normalizedLocalPath == currentLocalPath &&
+          normalizedThumbPath == currentThumbPath) {
+        continue;
+      }
+
+      await _db.update(
+        'photo_assets',
+        {
+          'local_path': normalizedLocalPath,
+          'thumb_path': normalizedThumbPath,
+        },
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+      updatedCount += 1;
+    }
+
+    return updatedCount;
+  }
 
   Future<String?> getStoredAuthUserId() async {
     final rows = await _db.query(
@@ -230,6 +277,27 @@ class AppDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<ProjectSortMode> getProjectSortMode() async {
+    final rows = await _db.query(
+      'app_state',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['project_sort_mode'],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return ProjectSortMode.name;
+    }
+    return ProjectSortMode.fromStorage(rows.first['value'] as String?);
+  }
+
+  Future<void> setProjectSortMode(ProjectSortMode mode) async {
+    await _db.insert('app_state', {
+      'key': 'project_sort_mode',
+      'value': mode.storageValue,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   Future<void> clearUserScopedData() async {
     await _db.transaction((txn) async {
       await txn.delete('sync_jobs');
@@ -255,6 +323,7 @@ class AppDatabase {
     return _db.insert('projects', {
       'name': 'Inbox',
       'notes': '',
+      'start_date': null,
       'remote_project_id': null,
       'cover_asset_id': null,
       'created_at': now,
@@ -264,7 +333,7 @@ class AppDatabase {
   }
 
   Future<List<Project>> getProjects() async {
-    final rows = await _db.query('projects', orderBy: 'updated_at DESC');
+    final rows = await _db.query('projects', orderBy: 'created_at ASC, id ASC');
     return rows.map(Project.fromMap).toList();
   }
 
@@ -282,11 +351,12 @@ class AppDatabase {
     return rows.first['id'] as int;
   }
 
-  Future<int> createProject(String name) async {
+  Future<int> createProject(String name, {DateTime? startDate}) async {
     final now = DateTime.now().toIso8601String();
     return _db.insert('projects', {
       'name': name,
       'notes': '',
+      'start_date': startDate?.toIso8601String(),
       'remote_project_id': null,
       'cover_asset_id': null,
       'created_at': now,
@@ -314,6 +384,23 @@ class AppDatabase {
     await _db.update(
       'projects',
       {'name': name, 'updated_at': DateTime.now().toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [projectId],
+    );
+  }
+
+  Future<void> updateProjectMetadata(
+    int projectId, {
+    required String name,
+    DateTime? startDate,
+  }) async {
+    await _db.update(
+      'projects',
+      {
+        'name': name,
+        'start_date': startDate?.toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      },
       where: 'id = ?',
       whereArgs: [projectId],
     );
@@ -783,4 +870,28 @@ class AppDatabase {
     }
     return map;
   }
+}
+
+String rebaseMediaPath(String originalPath, String currentMediaRootPath) {
+  final trimmedPath = originalPath.trim();
+  if (trimmedPath.isEmpty) {
+    return originalPath;
+  }
+
+  final normalizedOriginal = trimmedPath.replaceAll('\\', '/');
+  const marker = '/joblens_media/';
+  final markerIndex = normalizedOriginal.indexOf(marker);
+  if (markerIndex == -1) {
+    return originalPath;
+  }
+
+  final suffix = normalizedOriginal.substring(markerIndex + marker.length);
+  if (suffix.trim().isEmpty) {
+    return originalPath;
+  }
+
+  return p.joinAll([
+    currentMediaRootPath,
+    ...suffix.split('/').where((segment) => segment.isNotEmpty),
+  ]);
 }

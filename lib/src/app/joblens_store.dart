@@ -54,8 +54,11 @@ class JoblensStore extends ChangeNotifier {
 
   bool _isLoading = true;
   bool _isBusy = false;
+  bool _isDisposed = false;
   String? _lastError;
   int _reauthenticationRequestCount = 0;
+  Future<void> _pendingBackgroundSync = Future.value();
+  ProjectSortMode _projectSortMode = ProjectSortMode.name;
 
   List<PhotoAsset> _assets = const [];
   List<Project> _projects = const [];
@@ -69,16 +72,17 @@ class JoblensStore extends ChangeNotifier {
   String? get lastError => _lastError;
   int get reauthenticationRequestCount => _reauthenticationRequestCount;
   List<PhotoAsset> get assets => _assets;
-  List<Project> get projects => _projects;
+  List<Project> get projects => _sortProjects(_projects, _projectSortMode);
   Map<int, int> get projectCounts => _projectCounts;
   List<ProviderAccount> get providers => _providers;
   List<SyncJob> get syncJobs => _syncJobs;
   List<SyncLogEntry> get syncLogs => _syncLogs;
+  ProjectSortMode get projectSortMode => _projectSortMode;
 
   Future<void> initialize() async {
     await _synchronizeAuthUser(_currentAuthUserIdProvider?.call());
     _isLoading = false;
-    notifyListeners();
+    _notifyListenersIfActive();
   }
 
   Future<void> syncAuthSession(Session? session) async {
@@ -98,11 +102,14 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
+    if (_isDisposed) {
+      return;
+    }
     await _hydrateLocalState();
     final authUserId = _currentAuthUserIdProvider?.call();
     if (authUserId == null || authUserId.trim().isEmpty) {
       _lastError = null;
-      notifyListeners();
+      _notifyListenersIfActive();
       return;
     }
 
@@ -141,7 +148,7 @@ class JoblensStore extends ChangeNotifier {
     if (remoteMergeError != null) {
       _lastError = remoteMergeError;
     }
-    notifyListeners();
+    _notifyListenersIfActive();
   }
 
   Future<void> ingestCapturedFile(
@@ -163,12 +170,13 @@ class JoblensStore extends ChangeNotifier {
 
       await _database.upsertAsset(asset);
       await _syncService.enqueueAsset(asset);
+      await _hydrateLocalState();
+      notifyListeners();
       if (processSyncNow) {
-        await _syncService.processQueue(_projects);
+        await _runBackgroundSyncRefresh();
       } else {
-        unawaited(_syncService.processQueue(_projects));
+        unawaited(_runBackgroundSyncRefresh());
       }
-      await refresh();
     });
   }
 
@@ -200,23 +208,50 @@ class JoblensStore extends ChangeNotifier {
         await _syncService.enqueueAsset(asset);
       }
 
-      await _syncService.processQueue(_projects);
-      await refresh();
+      await _hydrateLocalState();
+      notifyListeners();
+      unawaited(_runBackgroundSyncRefresh());
     });
   }
 
-  Future<void> createProject(String name) async {
+  Future<void> captureWithPhoneCamera({int? projectId}) async {
+    final selected = await _picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 100,
+      preferredCameraDevice: CameraDevice.rear,
+      requestFullMetadata: true,
+    );
+    if (selected == null) {
+      return;
+    }
+
+    final source = File(selected.path);
+    if (!source.existsSync()) {
+      _lastError = 'The captured photo could not be read from this device.';
+      notifyListeners();
+      return;
+    }
+
+    await ingestCapturedFile(source, projectId: projectId, processSyncNow: false);
+  }
+
+  Future<void> createProject(String name, {DateTime? startDate}) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) {
       return;
     }
 
     await _runBusy(() async {
-      final projectId = await _database.createProject(trimmed);
+      final normalizedStartDate = _normalizeProjectStartDate(startDate);
+      final projectId = await _database.createProject(
+        trimmed,
+        startDate: normalizedStartDate,
+      );
       final localProject = Project(
         id: projectId,
         name: trimmed,
         notes: '',
+        startDate: normalizedStartDate,
         remoteProjectId: null,
         coverAssetId: null,
         createdAt: DateTime.now(),
@@ -236,6 +271,35 @@ class JoblensStore extends ChangeNotifier {
 
     await _runBusy(() async {
       await _database.renameProject(projectId, trimmed);
+      final project = (await _database.getProjects()).firstWhere(
+        (item) => item.id == projectId,
+      );
+      await _syncService.syncProject(project);
+      await refresh();
+    });
+  }
+
+  Future<void> updateProjectMetadata(
+    int projectId, {
+    required String name,
+    DateTime? startDate,
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      return;
+    }
+
+    await _runBusy(() async {
+      final existing = (await _database.getProjects()).firstWhere(
+        (item) => item.id == projectId,
+      );
+      final normalizedStartDate = _normalizeProjectStartDate(startDate);
+      final normalizedName = existing.name == 'Inbox' ? 'Inbox' : trimmed;
+      await _database.updateProjectMetadata(
+        projectId,
+        name: normalizedName,
+        startDate: normalizedStartDate,
+      );
       final project = (await _database.getProjects()).firstWhere(
         (item) => item.id == projectId,
       );
@@ -312,9 +376,10 @@ class JoblensStore extends ChangeNotifier {
       final movedAsset = await _database.getAssetById(assetId);
       if (movedAsset != null) {
         await _syncService.enqueueAsset(movedAsset);
-        unawaited(_syncService.processQueue(await _database.getProjects()));
       }
-      await refresh();
+      await _hydrateLocalState();
+      notifyListeners();
+      unawaited(_runBackgroundSyncRefresh());
     });
   }
 
@@ -333,8 +398,9 @@ class JoblensStore extends ChangeNotifier {
       }
       final movedAssets = await _database.getAssetsByIds(uniqueIds);
       await _syncService.enqueueAssets(movedAssets);
-      unawaited(_syncService.processQueue(await _database.getProjects()));
-      await refresh();
+      await _hydrateLocalState();
+      notifyListeners();
+      unawaited(_runBackgroundSyncRefresh());
     });
   }
 
@@ -434,7 +500,7 @@ class JoblensStore extends ChangeNotifier {
     });
   }
 
-  Future<String> exportSyncLog() async {
+  Future<File> exportSyncLog() async {
     final logs = await _database.getAllSyncLogs();
     final buffer = StringBuffer();
     buffer.writeln('Joblens Sync Log');
@@ -454,7 +520,7 @@ class JoblensStore extends ChangeNotifier {
       '${directory.path}/joblens_sync_log_${DateTime.now().millisecondsSinceEpoch}.txt',
     );
     await file.writeAsString(buffer.toString());
-    return file.path;
+    return file;
   }
 
   Future<void> clearSyncLog() async {
@@ -463,6 +529,15 @@ class JoblensStore extends ChangeNotifier {
       _syncLogs = const [];
       notifyListeners();
     });
+  }
+
+  Future<void> setProjectSortMode(ProjectSortMode mode) async {
+    if (_projectSortMode == mode) {
+      return;
+    }
+    _projectSortMode = mode;
+    await _database.setProjectSortMode(mode);
+    _notifyListenersIfActive();
   }
 
   Future<String?> resolveThumbnailUrl(
@@ -486,7 +561,7 @@ class JoblensStore extends ChangeNotifier {
 
     _isBusy = true;
     _lastError = null;
-    notifyListeners();
+    _notifyListenersIfActive();
 
     try {
       await action();
@@ -500,7 +575,7 @@ class JoblensStore extends ChangeNotifier {
       }
     } finally {
       _isBusy = false;
-      notifyListeners();
+      _notifyListenersIfActive();
     }
   }
 
@@ -524,6 +599,49 @@ class JoblensStore extends ChangeNotifier {
     _providers = await _database.getProviderAccounts();
     _syncJobs = await _database.getSyncJobs();
     _syncLogs = await _database.getSyncLogs();
+    _projectSortMode = await _database.getProjectSortMode();
+  }
+
+  Future<void> _runBackgroundSyncRefresh() {
+    _pendingBackgroundSync = _pendingBackgroundSync.then((_) async {
+      if (_isDisposed) {
+        return;
+      }
+      try {
+        final projects = await _database.getProjects();
+        await _syncService.processQueue(projects);
+        if (_isDisposed) {
+          return;
+        }
+        await refresh();
+      } catch (error, stackTrace) {
+        if (_isDisposed) {
+          return;
+        }
+        await _handleError(error);
+        if (!_requiresReauthentication(error)) {
+          _lastError = error.toString();
+        }
+        if (kDebugMode) {
+          debugPrint('Background sync refresh failed: $error\n$stackTrace');
+        }
+        _notifyListenersIfActive();
+      }
+    });
+    return _pendingBackgroundSync;
+  }
+
+  void _notifyListenersIfActive() {
+    if (_isDisposed) {
+      return;
+    }
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    super.dispose();
   }
 
   Future<void> _synchronizeAuthUser(String? userId) async {
@@ -541,6 +659,7 @@ class JoblensStore extends ChangeNotifier {
       await _database.setStoredAuthUserId(normalizedUserId);
     }
 
+    await _database.normalizeAssetMediaPaths(_mediaStorage.rootDir.path);
     await _database.ensureDefaultProject();
     await _database.ensureProviderRows();
     await refresh();
@@ -574,6 +693,45 @@ class JoblensStore extends ChangeNotifier {
 
     return error.code == 'unauthorized';
   }
+
+  List<Project> _sortProjects(
+    List<Project> projects,
+    ProjectSortMode mode,
+  ) {
+    final sorted = List<Project>.from(projects);
+    sorted.sort((a, b) {
+      final aIsInbox = a.name == 'Inbox';
+      final bIsInbox = b.name == 'Inbox';
+      if (aIsInbox && !bIsInbox) {
+        return -1;
+      }
+      if (!aIsInbox && bIsInbox) {
+        return 1;
+      }
+
+      if (mode == ProjectSortMode.startDate) {
+        final aDate = a.startDate;
+        final bDate = b.startDate;
+        if (aDate != null && bDate != null) {
+          final byDate = aDate.compareTo(bDate);
+          if (byDate != 0) {
+            return byDate;
+          }
+        } else if (aDate != null) {
+          return -1;
+        } else if (bDate != null) {
+          return 1;
+        }
+      }
+
+      final byName = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      if (byName != 0) {
+        return byName;
+      }
+      return a.id.compareTo(b.id);
+    });
+    return sorted;
+  }
 }
 
 String normalizeProjectNotesForSave(String notes) {
@@ -588,3 +746,10 @@ String normalizeProjectNotesForSave(String notes) {
 
 String _normalizeProjectNotesForSave(String notes) =>
     normalizeProjectNotesForSave(notes);
+
+DateTime? _normalizeProjectStartDate(DateTime? startDate) {
+  if (startDate == null) {
+    return null;
+  }
+  return DateTime(startDate.year, startDate.month, startDate.day);
+}
