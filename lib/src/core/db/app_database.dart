@@ -380,15 +380,6 @@ class AppDatabase {
     );
   }
 
-  Future<void> renameProject(int projectId, String name) async {
-    await _db.update(
-      'projects',
-      {'name': name, 'updated_at': DateTime.now().toIso8601String()},
-      where: 'id = ?',
-      whereArgs: [projectId],
-    );
-  }
-
   Future<void> updateProjectMetadata(
     int projectId, {
     required String name,

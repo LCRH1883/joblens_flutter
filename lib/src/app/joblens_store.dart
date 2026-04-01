@@ -125,17 +125,10 @@ class JoblensStore extends ChangeNotifier {
         debugPrint('Provider refresh failed: $error\n$stackTrace');
       }
     }
-    _assets = await _database.getAssets();
-    _projects = await _database.getProjects();
-    _projectCounts = await _database.getProjectCounts();
-    _providers = await _database.getProviderAccounts();
-    _syncJobs = await _database.getSyncJobs();
+    await _hydrateLocalState();
     try {
       await _syncService.mergeRemoteAssets(_projects);
-      _assets = await _database.getAssets();
-      _projects = await _database.getProjects();
-      _projectCounts = await _database.getProjectCounts();
-      _syncJobs = await _database.getSyncJobs();
+      await _hydrateLocalState();
     } catch (error, stackTrace) {
       await _handleError(error);
       remoteMergeError = _requiresReauthentication(error)
@@ -171,7 +164,7 @@ class JoblensStore extends ChangeNotifier {
       await _database.upsertAsset(asset);
       await _syncService.enqueueAsset(asset);
       await _hydrateLocalState();
-      notifyListeners();
+      _notifyListenersIfActive();
       if (processSyncNow) {
         await _runBackgroundSyncRefresh();
       } else {
@@ -209,30 +202,9 @@ class JoblensStore extends ChangeNotifier {
       }
 
       await _hydrateLocalState();
-      notifyListeners();
+      _notifyListenersIfActive();
       unawaited(_runBackgroundSyncRefresh());
     });
-  }
-
-  Future<void> captureWithPhoneCamera({int? projectId}) async {
-    final selected = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 100,
-      preferredCameraDevice: CameraDevice.rear,
-      requestFullMetadata: true,
-    );
-    if (selected == null) {
-      return;
-    }
-
-    final source = File(selected.path);
-    if (!source.existsSync()) {
-      _lastError = 'The captured photo could not be read from this device.';
-      notifyListeners();
-      return;
-    }
-
-    await ingestCapturedFile(source, projectId: projectId, processSyncNow: false);
   }
 
   Future<void> createProject(String name, {DateTime? startDate}) async {
@@ -259,22 +231,6 @@ class JoblensStore extends ChangeNotifier {
         syncFolderMap: const {},
       );
       await _syncService.syncProject(localProject);
-      await refresh();
-    });
-  }
-
-  Future<void> renameProject(int projectId, String name) async {
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) {
-      return;
-    }
-
-    await _runBusy(() async {
-      await _database.renameProject(projectId, trimmed);
-      final project = (await _database.getProjects()).firstWhere(
-        (item) => item.id == projectId,
-      );
-      await _syncService.syncProject(project);
       await refresh();
     });
   }
@@ -313,7 +269,7 @@ class JoblensStore extends ChangeNotifier {
     if (normalized.length > kProjectNotesMaxLength) {
       _lastError =
           'Project notes must be at most $kProjectNotesMaxLength characters.';
-      notifyListeners();
+      _notifyListenersIfActive();
       return;
     }
     await _runBusy(() async {
@@ -378,7 +334,7 @@ class JoblensStore extends ChangeNotifier {
         await _syncService.enqueueAsset(movedAsset);
       }
       await _hydrateLocalState();
-      notifyListeners();
+      _notifyListenersIfActive();
       unawaited(_runBackgroundSyncRefresh());
     });
   }
@@ -399,7 +355,7 @@ class JoblensStore extends ChangeNotifier {
       final movedAssets = await _database.getAssetsByIds(uniqueIds);
       await _syncService.enqueueAssets(movedAssets);
       await _hydrateLocalState();
-      notifyListeners();
+      _notifyListenersIfActive();
       unawaited(_runBackgroundSyncRefresh());
     });
   }
@@ -527,7 +483,7 @@ class JoblensStore extends ChangeNotifier {
     await _runBusy(() async {
       await _database.clearSyncLogs();
       _syncLogs = const [];
-      notifyListeners();
+      _notifyListenersIfActive();
     });
   }
 

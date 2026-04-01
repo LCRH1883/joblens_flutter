@@ -197,6 +197,11 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _currentTab = 0;
+  final _nonCameraPages = const [
+    GalleryPage(),
+    ProjectsPage(),
+    SettingsPage(),
+  ];
 
   void showSettingsTab() {
     if (!mounted) {
@@ -260,11 +265,12 @@ class _AppShellState extends State<AppShell> {
   }
 
   Widget _buildCurrentPage() {
-    return switch (_currentTab) {
-      0 => const CameraCapturePage(),
-      1 => const GalleryPage(),
-      2 => const ProjectsPage(),
-      _ => const SettingsPage(),
-    };
+    if (_currentTab == 0) {
+      return const CameraCapturePage();
+    }
+    return IndexedStack(
+      index: _currentTab - 1,
+      children: _nonCameraPages,
+    );
   }
 }
