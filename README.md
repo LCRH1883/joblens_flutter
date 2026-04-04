@@ -43,6 +43,13 @@ infisical export --domain=https://app.infisical.com --env=prod --path=/joblens/m
 
 The local `.env` is the runtime source of truth for development. Refresh it from Infisical manually when secrets change.
 
+The app now supports two local-first paths:
+
+- preferred CLI path: `flutter run --dart-define-from-file=.env`
+- IDE fallback path: if Dart defines are not passed, the app loads the bundled local `.env` asset at runtime
+
+That means Android Studio and Xcode debug builds can still use the local `.env` copy without contacting Infisical at launch.
+
 The app accepts either:
 
 - `SUPABASE_URL` / `SUPABASE_ANON_KEY`

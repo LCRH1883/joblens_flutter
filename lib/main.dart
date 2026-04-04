@@ -7,6 +7,7 @@ import 'src/app/app.dart';
 import 'src/app/joblens_store.dart';
 import 'src/core/api/backend_auth.dart';
 import 'src/core/api/joblens_backend_api_client.dart';
+import 'src/core/config/app_runtime_configuration.dart';
 import 'src/core/api/signed_media_url_cache.dart';
 import 'src/core/db/app_database.dart';
 import 'src/core/storage/media_storage_service.dart';
@@ -17,7 +18,7 @@ import 'src/features/camera/camera_providers.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final config = _AppConfiguration.fromEnvironment();
+  final config = await AppRuntimeConfiguration.load();
   if (config.isConfigured) {
     await Supabase.initialize(
       url: config.supabaseUrl,
@@ -50,6 +51,7 @@ Future<void> main() async {
     database,
     backendApiClient: backendApiClient,
     signedMediaUrlCache: signedMediaUrlCache,
+    mediaStorage: mediaStorage,
   );
   final store = JoblensStore(
     database: database,
@@ -71,46 +73,9 @@ Future<void> main() async {
         joblensStoreProvider.overrideWithValue(store),
         availableCamerasProvider.overrideWithValue(cameras),
         authConfigurationProvider.overrideWithValue(config.isConfigured),
+        appRuntimeConfigurationProvider.overrideWithValue(config),
       ],
       child: const JoblensApp(),
     ),
   );
-}
-
-class _AppConfiguration {
-  const _AppConfiguration({
-    required this.supabaseUrl,
-    required this.supabaseAnonKey,
-    required this.apiBaseUrlOverride,
-  });
-
-  _AppConfiguration.fromEnvironment()
-    : supabaseUrl = _firstNonEmpty(
-        const String.fromEnvironment('SUPABASE_URL'),
-        const String.fromEnvironment('JOBLENS_SUPABASE_URL'),
-      ),
-      supabaseAnonKey = _firstNonEmpty(
-        const String.fromEnvironment('SUPABASE_ANON_KEY'),
-        const String.fromEnvironment('JOBLENS_SUPABASE_ANON_KEY'),
-      ),
-      apiBaseUrlOverride = const String.fromEnvironment('API_BASE_URL');
-
-  final String supabaseUrl;
-  final String supabaseAnonKey;
-  final String apiBaseUrlOverride;
-
-  static String _firstNonEmpty(String primary, String fallback) {
-    final primaryTrimmed = primary.trim();
-    if (primaryTrimmed.isNotEmpty) {
-      return primaryTrimmed;
-    }
-    return fallback.trim();
-  }
-
-  bool get isConfigured =>
-      supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
-
-  String get apiBaseUrl => apiBaseUrlOverride.trim().isNotEmpty
-      ? apiBaseUrlOverride.trim()
-      : '${supabaseUrl.trim()}/functions/v1/api/v1';
 }

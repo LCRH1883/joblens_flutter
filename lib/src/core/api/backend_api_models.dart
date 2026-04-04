@@ -114,6 +114,21 @@ class RemoteProjectRecord {
   }
 }
 
+class ListProjectsResponse {
+  const ListProjectsResponse({required this.projects});
+
+  final List<RemoteProjectRecord> projects;
+
+  factory ListProjectsResponse.fromMap(Map<String, dynamic> map) {
+    final raw = _asList(map['projects']);
+    return ListProjectsResponse(
+      projects: _asMapList(
+        raw,
+      ).map(RemoteProjectRecord.fromMap).toList(growable: false),
+    );
+  }
+}
+
 class BulkCheckAssetInput {
   const BulkCheckAssetInput({
     required this.deviceAssetId,

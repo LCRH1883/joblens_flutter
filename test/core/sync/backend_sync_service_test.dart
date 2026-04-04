@@ -45,6 +45,7 @@ void main() {
     final syncService = SyncService(
       harness.database,
       backendApiClient: fakeClient,
+      mediaStorage: harness.mediaStorage,
     );
 
     final project = await harness.createProject('Library');
@@ -190,6 +191,74 @@ void main() {
     expect(updated?.uploadPath, 'Joblens/Library/asset-local.jpg');
     expect(jobs.single.state, SyncJobState.done);
   });
+
+  test('fresh device discovers remote projects and merges cloud assets', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(
+      bulkCheckResponse: const BulkCheckAssetsResponse(
+        projectId: 'unused',
+        duplicateCount: 0,
+        missingCount: 0,
+        results: [],
+      ),
+      projectId: 'unused',
+      listProjectsResponse: const ListProjectsResponse(
+        projects: [
+          RemoteProjectRecord(projectId: 'remote-inbox', name: 'Inbox'),
+          RemoteProjectRecord(projectId: 'remote-library', name: 'Library'),
+        ],
+      ),
+      listAssetsResponses: {
+        'remote-inbox': const ListAssetsResponse(assets: [], nextCursor: null),
+        'remote-library': ListAssetsResponse(
+          assets: [
+            BackendAssetRecord(
+              assetId: 'asset-remote-1',
+              sha256: 'b' * 64,
+              projectId: 'remote-library',
+              filename: 'cloud.jpg',
+              createdAt: DateTime(2026, 1, 2),
+              provider: CloudProviderType.googleDrive,
+              remoteFileId: 'provider-file-1',
+              remotePath: 'Joblens/Library/cloud.jpg',
+            ),
+          ],
+          nextCursor: null,
+        ),
+      },
+      downloadBytes: List<int>.generate(256, (index) => index % 255),
+    );
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+      mediaStorage: harness.mediaStorage,
+    );
+
+    final initialProjects = await harness.database.getProjects();
+    expect(initialProjects.single.name, 'Inbox');
+    expect(initialProjects.single.remoteProjectId, isNull);
+
+    final syncedProjects = await syncService.syncRemoteProjects(initialProjects);
+    await syncService.mergeRemoteAssets(syncedProjects);
+
+    final projects = await harness.database.getProjects();
+    final inbox = projects.firstWhere((project) => project.name == 'Inbox');
+    final library = projects.firstWhere((project) => project.name == 'Library');
+    final assets = await harness.database.getAssets(projectId: library.id);
+
+    expect(inbox.remoteProjectId, 'remote-inbox');
+    expect(library.remoteProjectId, 'remote-library');
+    expect(assets, hasLength(1));
+    expect(assets.single.remoteAssetId, 'asset-remote-1');
+    expect(assets.single.remoteProvider, CloudProviderType.googleDrive.key);
+    expect(assets.single.cloudState, AssetCloudState.localAndCloud);
+    expect(assets.single.localPath, isNotEmpty);
+    expect(assets.single.thumbPath, isNotEmpty);
+    expect(File(assets.single.localPath).existsSync(), isTrue);
+    expect(File(assets.single.thumbPath).existsSync(), isTrue);
+  });
 }
 
 class _Harness {
@@ -251,6 +320,9 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
     this.prepareUploadResponse,
     this.commitResponse,
     required this.projectId,
+    this.listProjectsResponse,
+    this.listAssetsResponses = const {},
+    this.downloadBytes = const [1, 2, 3, 4],
   }) : super(
          baseUrl: 'https://example.supabase.co/functions/v1/api/v1',
          accessTokenProvider: const _FakeTokenProvider(),
@@ -260,6 +332,9 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   final PrepareAssetUploadResponse? prepareUploadResponse;
   final CommitAssetResponse? commitResponse;
   final String projectId;
+  final ListProjectsResponse? listProjectsResponse;
+  final Map<String, ListAssetsResponse> listAssetsResponses;
+  final List<int> downloadBytes;
 
   int uploadCalls = 0;
   int moveCalls = 0;
@@ -270,6 +345,22 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
     RemoteProjectUpsertRequest request,
   ) async {
     return RemoteProjectRecord(projectId: projectId, name: request.name);
+  }
+
+  @override
+  Future<ListProjectsResponse> listProjects() async {
+    return listProjectsResponse ?? const ListProjectsResponse(projects: []);
+  }
+
+  @override
+  Future<ListAssetsResponse> listAssets(ListAssetsRequest request) async {
+    return listAssetsResponses[request.projectId] ??
+        const ListAssetsResponse(assets: [], nextCursor: null);
+  }
+
+  @override
+  Future<Uint8List> downloadAssetBytes(String assetId) async {
+    return Uint8List.fromList(downloadBytes);
   }
 
   @override

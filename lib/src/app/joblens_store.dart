@@ -127,6 +127,18 @@ class JoblensStore extends ChangeNotifier {
     }
     await _hydrateLocalState();
     try {
+      _projects = await _syncService.syncRemoteProjects(_projects);
+      await _hydrateLocalState();
+    } catch (error, stackTrace) {
+      await _handleError(error);
+      remoteMergeError = _requiresReauthentication(error)
+          ? _lastError
+          : error.toString();
+      if (kDebugMode) {
+        debugPrint('Remote project sync failed: $error\n$stackTrace');
+      }
+    }
+    try {
       await _syncService.mergeRemoteAssets(_projects);
       await _hydrateLocalState();
     } catch (error, stackTrace) {

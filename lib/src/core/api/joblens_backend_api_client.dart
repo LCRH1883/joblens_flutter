@@ -72,6 +72,14 @@ class JoblensBackendApiClient {
     );
   }
 
+  Future<ListProjectsResponse> listProjects() async {
+    final map = await _authorizedJsonRequest(
+      method: 'GET',
+      path: '/projects',
+    );
+    return ListProjectsResponse.fromMap(map);
+  }
+
   Future<void> archiveProject(String remoteProjectId) async {
     await _authorizedJsonRequest(
       method: 'POST',
@@ -157,6 +165,20 @@ class JoblensBackendApiClient {
       path: '/assets/$assetId/download-url',
     );
     return SignedMediaUrlResponse.fromMap(map);
+  }
+
+  Future<Uint8List> downloadAssetBytes(String assetId) async {
+    final signed = await getDownloadUrl(assetId);
+    final response = await _httpClient.get(Uri.parse(signed.url));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(
+        code: 'remote_download_failed',
+        message:
+            'Remote asset download failed with HTTP ${response.statusCode}.',
+        statusCode: response.statusCode,
+      );
+    }
+    return response.bodyBytes;
   }
 
   Future<SignedMediaUrlResponse> getVideoPreviewUrl(String assetId) async {

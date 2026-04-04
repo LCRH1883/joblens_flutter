@@ -84,6 +84,26 @@ class MediaStorageService {
     );
   }
 
+  Future<({String localPath, String thumbPath, String hash})> storeDownloadedBytes({
+    required String assetId,
+    required Uint8List bytes,
+    String? filename,
+  }) async {
+    final safeAssetId = assetId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final extension = p.extension(filename ?? '').isEmpty
+        ? '.jpg'
+        : p.extension(filename!);
+    final storedPath = p.join(originalsDir.path, '$safeAssetId$extension');
+    final thumbPath = p.join(thumbnailsDir.path, '$safeAssetId.jpg');
+
+    await File(storedPath).writeAsBytes(bytes, flush: true);
+    final hash = await Isolate.run(
+      () => _generateHashAndThumbnail(storedPath, thumbPath),
+    );
+
+    return (localPath: storedPath, thumbPath: thumbPath, hash: hash);
+  }
+
   Future<void> clearAll() async {
     if (await rootDir.exists()) {
       await rootDir.delete(recursive: true);

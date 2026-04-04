@@ -16,6 +16,8 @@ The intended workflow is:
 - export them into a local `.env` file in the Flutter repo
 - run Flutter with `--dart-define-from-file=.env`
 
+The app also bundles the local `.env` as a runtime fallback for local development, so IDE-launched Android/iOS debug builds can still read the same mobile-safe values even if the launch configuration does not pass Dart defines explicitly.
+
 This means the app still runs from the local `.env` copy even if Infisical is temporarily unavailable.
 
 ## Required values
@@ -106,6 +108,8 @@ Run from `/Volumes/ExData/Projects/Joblens/joblens_flutter`.
 ```
 
 This uses the local exported `.env` file and does not require contacting Infisical on app launch.
+
+If you launch from Android Studio or Xcode without explicit Dart defines, the app falls back to the bundled local `.env` asset.
 
 ## iOS build notes
 

@@ -808,6 +808,26 @@ class AppDatabase {
     );
   }
 
+  Future<void> updateAssetLocalMedia({
+    required String assetId,
+    required String localPath,
+    required String thumbPath,
+    required String hash,
+    String? cloudState,
+  }) async {
+    await _db.update(
+      'photo_assets',
+      {
+        'local_path': localPath,
+        'thumb_path': thumbPath,
+        'hash': hash,
+        'cloud_state': cloudState,
+      },
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
   Future<void> updateAssetSyncError(String assetId, String? errorCode) async {
     await _db.update(
       'photo_assets',

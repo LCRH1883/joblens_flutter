@@ -1,5 +1,4 @@
 import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
@@ -15,6 +14,7 @@ import '../models/project.dart';
 import '../models/provider_account.dart';
 import '../models/sync_log_entry.dart';
 import '../models/sync_job.dart';
+import '../storage/media_storage_service.dart';
 import 'cloud_adapter.dart';
 
 class SyncService {
@@ -22,12 +22,15 @@ class SyncService {
     this._db, {
     JoblensBackendApiClient? backendApiClient,
     SignedMediaUrlCache? signedMediaUrlCache,
+    MediaStorageService? mediaStorage,
   }) : _backendApiClient = backendApiClient,
-       _signedMediaUrlCache = signedMediaUrlCache ?? SignedMediaUrlCache();
+       _signedMediaUrlCache = signedMediaUrlCache ?? SignedMediaUrlCache(),
+       _mediaStorage = mediaStorage;
 
   final AppDatabase _db;
   final JoblensBackendApiClient? _backendApiClient;
   final SignedMediaUrlCache _signedMediaUrlCache;
+  final MediaStorageService? _mediaStorage;
   bool _isRunning = false;
 
   Future<void> enqueueAsset(PhotoAsset asset) async {
@@ -188,6 +191,87 @@ class SyncService {
     );
     await _db.updateProjectRemoteId(project.id, response.projectId);
     return response.projectId;
+  }
+
+  Future<List<Project>> syncRemoteProjects(List<Project> localProjects) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      return localProjects;
+    }
+
+    final response = await client.listProjects();
+    if (response.projects.isEmpty) {
+      return localProjects;
+    }
+
+    var workingProjects = await _db.getProjects();
+    final inboxMatches = workingProjects
+        .where((project) => project.name == 'Inbox')
+        .toList(growable: false);
+    final inbox = inboxMatches.isEmpty ? null : inboxMatches.first;
+
+    for (final remoteProject in response.projects) {
+      final remoteProjectId = remoteProject.projectId.trim();
+      if (remoteProjectId.isEmpty) {
+        continue;
+      }
+
+      final existingLocalProjectId = await _db.getLocalProjectIdByRemoteId(
+        remoteProjectId,
+      );
+      if (existingLocalProjectId != null) {
+        final existing = workingProjects.firstWhere(
+          (project) => project.id == existingLocalProjectId,
+        );
+        final normalizedName = existing.name == 'Inbox'
+            ? 'Inbox'
+            : remoteProject.name.trim().isEmpty
+            ? existing.name
+            : remoteProject.name.trim();
+        if (existing.name != normalizedName) {
+          await _db.updateProjectMetadata(
+            existing.id,
+            name: normalizedName,
+            startDate: existing.startDate,
+          );
+        }
+        continue;
+      }
+
+      if (remoteProject.name.trim() == 'Inbox' &&
+          inbox != null &&
+          (inbox.remoteProjectId == null || inbox.remoteProjectId!.isEmpty)) {
+        await _db.updateProjectRemoteId(inbox.id, remoteProjectId);
+        continue;
+      }
+
+      final existingByNameMatches = workingProjects
+          .where(
+            (project) =>
+                (project.remoteProjectId == null ||
+                    project.remoteProjectId!.isEmpty) &&
+                project.name.trim() == remoteProject.name.trim(),
+          )
+          .toList(growable: false);
+      final existingByName = existingByNameMatches.isEmpty
+          ? null
+          : existingByNameMatches.first;
+      if (existingByName != null) {
+        await _db.updateProjectRemoteId(existingByName.id, remoteProjectId);
+        continue;
+      }
+
+      final localProjectId = await _db.createProject(remoteProject.name.trim());
+      await _db.updateProjectRemoteId(localProjectId, remoteProjectId);
+      await _logInfo(
+        'remote_project_discovered',
+        projectId: localProjectId,
+        message: 'Discovered existing remote project "${remoteProject.name}".',
+      );
+      workingProjects = await _db.getProjects();
+    }
+
+    return await _db.getProjects();
   }
 
   Future<void> archiveProject(String remoteProjectId) async {
@@ -618,6 +702,20 @@ class SyncService {
         cloudState: cloudState,
         lastSyncErrorCode: null,
       );
+      if (!remoteAsset.deleted && existingByHash.localPath.isEmpty) {
+        await _downloadRemoteAssetLocally(
+          existingByHash.copyWith(
+            projectId: localProjectId,
+            cloudState: cloudState,
+            remoteAssetId: remoteAsset.assetId,
+            remoteProvider: remoteAsset.provider?.key,
+            remoteFileId: remoteAsset.remoteFileId,
+            uploadPath: remoteAsset.remotePath,
+            lastSyncErrorCode: null,
+          ),
+          remoteAsset: remoteAsset,
+        );
+      }
       return;
     }
 
@@ -632,6 +730,61 @@ class SyncService {
       createdAt: remoteAsset.takenAt ?? remoteAsset.createdAt ?? DateTime.now(),
       deleted: remoteAsset.deleted,
     );
+    if (!remoteAsset.deleted) {
+      final localAsset = await _db.getAssetByRemoteId(remoteAsset.assetId);
+      if (localAsset != null) {
+        await _downloadRemoteAssetLocally(localAsset, remoteAsset: remoteAsset);
+      }
+    }
+  }
+
+  Future<void> _downloadRemoteAssetLocally(
+    PhotoAsset asset, {
+    required BackendAssetRecord remoteAsset,
+  }) async {
+    final client = _backendApiClient;
+    final mediaStorage = _mediaStorage;
+    if (client == null || mediaStorage == null) {
+      return;
+    }
+    if (asset.localPath.isNotEmpty || asset.status == AssetStatus.deleted) {
+      return;
+    }
+    final remoteAssetId = asset.remoteAssetId;
+    if (remoteAssetId == null || remoteAssetId.isEmpty) {
+      return;
+    }
+
+    try {
+      final bytes = await client.downloadAssetBytes(remoteAssetId);
+      final stored = await mediaStorage.storeDownloadedBytes(
+        assetId: asset.id,
+        bytes: bytes,
+        filename: remoteAsset.filename,
+      );
+      await _db.updateAssetLocalMedia(
+        assetId: asset.id,
+        localPath: stored.localPath,
+        thumbPath: stored.thumbPath,
+        hash: stored.hash,
+        cloudState: AssetCloudState.localAndCloud,
+      );
+      await _logInfo(
+        'remote_asset_downloaded',
+        assetId: asset.id,
+        projectId: asset.projectId,
+        message: 'Downloaded remote asset to local storage.',
+      );
+    } catch (error) {
+      final mapped = _mapSyncError(error);
+      await _db.updateAssetSyncError(asset.id, mapped.code);
+      await _logError(
+        'remote_asset_download_failed',
+        assetId: asset.id,
+        projectId: asset.projectId,
+        message: mapped.message,
+      );
+    }
   }
 
   Future<void> _handleDuplicate(
