@@ -34,10 +34,16 @@ class JoblensBackendApiClient {
   Future<BeginProviderConnectionResponse> beginProviderConnection(
     CloudProviderType provider,
   ) async {
+    final callbackUri = Uri.parse(
+      '$_baseUrl/providers/${provider.key}/oauth/callback',
+    ).toString();
     final map = await _authorizedJsonRequest(
       method: 'POST',
       path: '/providers/${provider.key}/connect',
-      body: const {'redirectTo': 'joblens://auth-callback'},
+      body: {
+        'redirectUri': callbackUri,
+        'redirectTo': 'joblens://auth-callback',
+      },
     );
     return BeginProviderConnectionResponse.fromMap(map);
   }

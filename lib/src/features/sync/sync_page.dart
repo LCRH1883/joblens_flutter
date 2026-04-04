@@ -21,6 +21,8 @@ class SyncPage extends ConsumerStatefulWidget {
 
 class _SyncPageState extends ConsumerState<SyncPage>
     with WidgetsBindingObserver {
+  CloudProviderType? _connectingProvider;
+
   @override
   void initState() {
     super.initState();
@@ -46,6 +48,12 @@ class _SyncPageState extends ConsumerState<SyncPage>
     final isAuthConfigured = ref.watch(authConfigurationProvider);
     final authUser = ref.watch(authUserProvider);
     final canSyncWithCloud = isAuthConfigured && authUser != null;
+    final activeProviderAccounts = store.providers
+        .where((provider) => provider.tokenState != ProviderTokenState.disconnected)
+        .toList(growable: false);
+    final lockedProvider = activeProviderAccounts.isEmpty
+        ? null
+        : activeProviderAccounts.first;
     final queuedCount = store.syncJobs
         .where((job) => job.state == SyncJobState.queued)
         .length;
@@ -152,68 +160,89 @@ class _SyncPageState extends ConsumerState<SyncPage>
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            if (canSyncWithCloud)
-              for (final providerAccount in store.providers)
-                Card(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                providerAccount.providerType.label,
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                            ),
-                            _StatusChip(state: providerAccount.tokenState),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Text(_providerSubtitle(providerAccount)),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            FilledButton.icon(
-                              onPressed: store.isBusy
-                                  ? null
-                                  : () => _connectProvider(
-                                      context,
-                                      providerAccount,
-                                    ),
-                              icon: Icon(
-                                providerAccount.isConnected
-                                    ? Icons.refresh_outlined
-                                    : Icons.link_outlined,
-                              ),
-                              label: Text(
-                                providerAccount.isConnected
-                                    ? 'Reconnect'
-                                    : 'Connect',
-                              ),
-                            ),
-                            if (providerAccount.tokenState !=
-                                ProviderTokenState.disconnected)
-                              OutlinedButton.icon(
-                                onPressed: store.isBusy
-                                    ? null
-                                    : () => store.disconnectProvider(
-                                        providerAccount.providerType,
-                                      ),
-                                icon: const Icon(Icons.link_off_outlined),
-                                label: const Text('Disconnect'),
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
+            if (canSyncWithCloud && lockedProvider != null) ...[
+              Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                child: ListTile(
+                  leading: const Icon(Icons.lock_outline),
+                  title: Text('${lockedProvider.providerType.label} selected'),
+                  subtitle: Text(
+                    'Only one cloud provider can be connected at a time. Disconnect ${lockedProvider.providerType.label} before choosing a different provider.',
                   ),
                 ),
+              ),
+            ],
+            if (canSyncWithCloud)
+              for (final providerAccount in store.providers)
+                () {
+                  final isLocked = _isProviderLocked(providerAccount, lockedProvider);
+                  final canStartConnect =
+                      !store.isBusy &&
+                      _connectingProvider != providerAccount.providerType &&
+                      !isLocked;
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  providerAccount.providerType.label,
+                                  style: Theme.of(context).textTheme.titleMedium,
+                                ),
+                              ),
+                              _StatusChip(state: providerAccount.tokenState),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(_providerSubtitle(providerAccount, lockedProvider)),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              FilledButton.icon(
+                                onPressed: canStartConnect
+                                    ? () => _connectProvider(
+                                          context,
+                                          providerAccount,
+                                        )
+                                    : null,
+                                icon: Icon(
+                                  providerAccount.isConnected
+                                      ? Icons.refresh_outlined
+                                      : Icons.link_outlined,
+                                ),
+                                label: Text(
+                                  _connectingProvider == providerAccount.providerType
+                                      ? 'Opening...'
+                                      : providerAccount.isConnected
+                                      ? 'Reconnect'
+                                      : 'Connect',
+                                ),
+                              ),
+                              if (providerAccount.tokenState !=
+                                  ProviderTokenState.disconnected)
+                                OutlinedButton.icon(
+                                  onPressed: store.isBusy
+                                      ? null
+                                      : () => store.disconnectProvider(
+                                            providerAccount.providerType,
+                                          ),
+                                  icon: const Icon(Icons.link_off_outlined),
+                                  label: const Text('Disconnect'),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }(),
             const SizedBox(height: 10),
             Text(
               'Sync Status',
@@ -360,30 +389,71 @@ class _SyncPageState extends ConsumerState<SyncPage>
     }
 
     final store = ref.read(joblensStoreProvider);
-    final authUrl = await store.beginProviderConnection(
-      providerAccount.providerType,
-    );
-    if (!mounted || authUrl == null || authUrl.isEmpty) {
+    if (_connectingProvider == providerAccount.providerType) {
       return;
     }
 
-    final launched = await launchUrl(
-      Uri.parse(authUrl),
-      mode: LaunchMode.externalApplication,
-    );
-    if (!mounted) {
-      return;
-    }
+    setState(() {
+      _connectingProvider = providerAccount.providerType;
+    });
 
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          launched
-              ? 'Complete sign-in in your browser, then return to Joblens.'
-              : 'Unable to open provider sign-in link.',
+    try {
+      debugPrint(
+        'Joblens provider connect request start: ${providerAccount.providerType.key}',
+      );
+      final authUrl = await store.beginProviderConnection(
+        providerAccount.providerType,
+      );
+      debugPrint(
+        'Joblens provider authorization URL received: ${providerAccount.providerType.key}',
+      );
+      if (!mounted || authUrl == null || authUrl.isEmpty) {
+        return;
+      }
+
+      final launched = await launchUrl(
+        Uri.parse(authUrl),
+        mode: LaunchMode.externalApplication,
+      );
+      debugPrint(
+        'Joblens provider browser launch: ${providerAccount.providerType.key} launched=$launched',
+      );
+      if (!mounted) {
+        return;
+      }
+
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            launched
+                ? 'Complete sign-in in your browser, then return to Joblens.'
+                : 'Unable to open provider sign-in link.',
+          ),
         ),
-      ),
-    );
+      );
+    } catch (error, stackTrace) {
+      debugPrint(
+        'Joblens provider connect failed: ${providerAccount.providerType.key} $error\n$stackTrace',
+      );
+      if (!mounted) {
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Unable to start ${providerAccount.providerType.label} sign-in: $error',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          if (_connectingProvider == providerAccount.providerType) {
+            _connectingProvider = null;
+          }
+        });
+      }
+    }
   }
 
   Future<void> _configureNextcloud(BuildContext context) async {
@@ -447,7 +517,25 @@ class _SyncPageState extends ConsumerState<SyncPage>
     );
   }
 
-  String _providerSubtitle(ProviderAccount providerAccount) {
+  bool _isProviderLocked(
+    ProviderAccount providerAccount,
+    ProviderAccount? lockedProvider,
+  ) {
+    if (lockedProvider == null) {
+      return false;
+    }
+    return providerAccount.providerType != lockedProvider.providerType &&
+        providerAccount.tokenState == ProviderTokenState.disconnected;
+  }
+
+  String _providerSubtitle(
+    ProviderAccount providerAccount,
+    ProviderAccount? lockedProvider,
+  ) {
+    if (_isProviderLocked(providerAccount, lockedProvider) &&
+        lockedProvider != null) {
+      return 'Only one cloud provider can be connected at a time. Disconnect ${lockedProvider.providerType.label} before choosing ${providerAccount.providerType.label}.';
+    }
     return switch (providerAccount.tokenState) {
       ProviderTokenState.connected =>
         'Connected. New and moved photos sync into this provider through the Joblens backend.',

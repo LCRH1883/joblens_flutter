@@ -9,6 +9,7 @@ import 'package:joblens_flutter/src/core/api/api_exception.dart';
 import 'package:joblens_flutter/src/core/api/backend_api_models.dart';
 import 'package:joblens_flutter/src/core/api/backend_auth.dart';
 import 'package:joblens_flutter/src/core/api/joblens_backend_api_client.dart';
+import 'package:joblens_flutter/src/core/models/cloud_provider.dart';
 
 void main() {
   test('adds authorization header to backend requests', () async {
@@ -37,6 +38,42 @@ void main() {
     );
 
     expect(capturedRequest.headers['authorization'], 'Bearer token-123');
+  });
+
+  test('provider connect sends backend callback and app redirect', () async {
+    late Map<String, dynamic> capturedBody;
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        capturedBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'provider': 'dropbox',
+            'authorizationUrl': 'https://www.dropbox.com/oauth2/authorize?state=abc',
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final response = await client.beginProviderConnection(
+      CloudProviderType.dropbox,
+    );
+
+    expect(
+      capturedBody,
+      {
+        'redirectUri':
+            'https://api.joblens.xyz/functions/v1/api/v1/providers/dropbox/oauth/callback',
+        'redirectTo': 'joblens://auth-callback',
+      },
+    );
+    expect(
+      response.authorizationUrl,
+      'https://www.dropbox.com/oauth2/authorize?state=abc',
+    );
   });
 
   test('maps uploaded_object_not_found backend error', () async {

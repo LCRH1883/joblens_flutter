@@ -129,8 +129,15 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
     final store = ref.read(joblensStoreProvider);
     try {
       if (callback.isSuccess) {
+        debugPrint(
+          'Joblens provider callback success: ${callback.provider.key}',
+        );
         await store.backfillCloudSyncAfterProviderConnection();
       } else {
+        debugPrint(
+          'Joblens provider callback error: ${callback.provider.key} '
+          'code=${callback.code ?? 'unknown'} message=${callback.message ?? 'none'}',
+        );
         await store.refresh();
       }
     } catch (error, stackTrace) {

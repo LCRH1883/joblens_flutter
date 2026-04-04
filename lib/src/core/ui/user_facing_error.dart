@@ -25,6 +25,10 @@ String? userFacingStoreError(String? rawError) {
     return 'Cloud sync needs you to sign in again.';
   }
 
+  if (normalized.contains('provider_already_connected')) {
+    return 'Only one cloud provider can be connected at a time. Disconnect the current provider before choosing another one.';
+  }
+
   if (normalized.contains('project notes must be at most')) {
     return rawError;
   }
