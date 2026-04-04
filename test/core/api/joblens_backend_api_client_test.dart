@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -128,6 +129,67 @@ void main() {
     final response = await client.getThumbnailUrl('asset-1');
     expect(response.url, 'https://cdn.example/thumb.jpg');
     expect(response.ttlSec, 300);
+  });
+
+  test('rewrites internal backend media proxy URLs onto the public API host', () async {
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'url':
+                'http://supabase_edge_runtime_backend:8081/functions/v1/api/v1/media/asset-1/thumbnail?token=abc',
+            'ttlSec': 300,
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final response = await client.getThumbnailUrl('asset-1');
+    expect(
+      response.url,
+      'https://api.joblens.xyz/functions/v1/api/v1/media/asset-1/thumbnail?token=abc',
+    );
+  });
+
+  test('downloads asset bytes through normalized proxy URL', () async {
+    var requestCount = 0;
+    late Uri downloadedUri;
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        requestCount += 1;
+        if (requestCount == 1) {
+          return http.Response(
+            jsonEncode({
+              'url':
+                  'http://supabase_edge_runtime_backend:8081/functions/v1/api/v1/media/asset-1/original?token=xyz',
+              'ttlSec': 300,
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+
+        downloadedUri = request.url;
+        return http.Response.bytes(
+          Uint8List.fromList([1, 2, 3]),
+          200,
+          headers: {'content-type': 'application/octet-stream'},
+        );
+      }),
+    );
+
+    final bytes = await client.downloadAssetBytes('asset-1');
+    expect(bytes, Uint8List.fromList([1, 2, 3]));
+    expect(
+      downloadedUri.toString(),
+      'https://api.joblens.xyz/functions/v1/api/v1/media/asset-1/original?token=xyz',
+    );
   });
 }
 

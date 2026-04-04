@@ -156,7 +156,7 @@ class JoblensBackendApiClient {
       method: 'GET',
       path: '/assets/$assetId/thumbnail-url',
     );
-    return SignedMediaUrlResponse.fromMap(map);
+    return _normalizeSignedMediaUrlResponse(SignedMediaUrlResponse.fromMap(map));
   }
 
   Future<SignedMediaUrlResponse> getDownloadUrl(String assetId) async {
@@ -164,7 +164,7 @@ class JoblensBackendApiClient {
       method: 'GET',
       path: '/assets/$assetId/download-url',
     );
-    return SignedMediaUrlResponse.fromMap(map);
+    return _normalizeSignedMediaUrlResponse(SignedMediaUrlResponse.fromMap(map));
   }
 
   Future<Uint8List> downloadAssetBytes(String assetId) async {
@@ -186,7 +186,52 @@ class JoblensBackendApiClient {
       method: 'GET',
       path: '/assets/$assetId/video-preview-url',
     );
-    return SignedMediaUrlResponse.fromMap(map);
+    return _normalizeSignedMediaUrlResponse(SignedMediaUrlResponse.fromMap(map));
+  }
+
+  SignedMediaUrlResponse _normalizeSignedMediaUrlResponse(
+    SignedMediaUrlResponse response,
+  ) {
+    return SignedMediaUrlResponse(
+      url: _normalizeMediaUrl(response.url),
+      ttlSec: response.ttlSec,
+    );
+  }
+
+  String _normalizeMediaUrl(String rawUrl) {
+    final trimmed = rawUrl.trim();
+    if (trimmed.isEmpty) {
+      return trimmed;
+    }
+
+    final mediaUri = Uri.tryParse(trimmed);
+    final baseUri = Uri.tryParse(_baseUrl);
+    if (mediaUri == null || baseUri == null) {
+      return trimmed;
+    }
+    if (!mediaUri.hasAuthority) {
+      return trimmed;
+    }
+
+    final shouldRewriteHost =
+        mediaUri.host == 'supabase_edge_runtime_backend' ||
+        mediaUri.host == 'localhost' ||
+        mediaUri.host == '127.0.0.1';
+    final isBackendMediaPath =
+        mediaUri.path.startsWith('/functions/v1/api/v1/media/');
+
+    if (!shouldRewriteHost || !isBackendMediaPath) {
+      return trimmed;
+    }
+
+    return Uri(
+      scheme: baseUri.scheme,
+      host: baseUri.host,
+      port: baseUri.hasPort ? baseUri.port : null,
+      path: mediaUri.path,
+      query: mediaUri.hasQuery ? mediaUri.query : null,
+      fragment: mediaUri.hasFragment ? mediaUri.fragment : null,
+    ).toString();
   }
 
   Future<void> uploadWithInstruction({

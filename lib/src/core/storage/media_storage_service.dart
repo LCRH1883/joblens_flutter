@@ -56,12 +56,13 @@ class MediaStorageService {
         ? '.jpg'
         : p.extension(source.path);
     final storedPath = p.join(originalsDir.path, '$id$extension');
-    final thumbPath = p.join(thumbnailsDir.path, '$id.jpg');
+    final generatedThumbPath = p.join(thumbnailsDir.path, '$id.jpg');
 
     await source.copy(storedPath);
-    final hash = await Isolate.run(
-      () => _generateHashAndThumbnail(storedPath, thumbPath),
+    final result = await Isolate.run(
+      () => _generateHashAndThumbnail(storedPath, generatedThumbPath),
     );
+    final thumbPath = result.generatedThumbnail ? generatedThumbPath : storedPath;
 
     final now = DateTime.now();
     return PhotoAsset(
@@ -71,7 +72,7 @@ class MediaStorageService {
       createdAt: createdAt ?? now,
       importedAt: now,
       projectId: projectId,
-      hash: hash,
+      hash: result.hash,
       status: AssetStatus.active,
       sourceType: sourceType,
       cloudState: AssetCloudState.localAndCloud,
@@ -94,14 +95,15 @@ class MediaStorageService {
         ? '.jpg'
         : p.extension(filename!);
     final storedPath = p.join(originalsDir.path, '$safeAssetId$extension');
-    final thumbPath = p.join(thumbnailsDir.path, '$safeAssetId.jpg');
+    final generatedThumbPath = p.join(thumbnailsDir.path, '$safeAssetId.jpg');
 
     await File(storedPath).writeAsBytes(bytes, flush: true);
-    final hash = await Isolate.run(
-      () => _generateHashAndThumbnail(storedPath, thumbPath),
+    final result = await Isolate.run(
+      () => _generateHashAndThumbnail(storedPath, generatedThumbPath),
     );
+    final thumbPath = result.generatedThumbnail ? generatedThumbPath : storedPath;
 
-    return (localPath: storedPath, thumbPath: thumbPath, hash: hash);
+    return (localPath: storedPath, thumbPath: thumbPath, hash: result.hash);
   }
 
   Future<void> clearAll() async {
@@ -115,18 +117,20 @@ class MediaStorageService {
   }
 }
 
-String _generateHashAndThumbnail(String sourcePath, String thumbPath) {
+({String hash, bool generatedThumbnail}) _generateHashAndThumbnail(
+  String sourcePath,
+  String thumbPath,
+) {
   final sourceBytes = File(sourcePath).readAsBytesSync();
   final hash = sha256.convert(sourceBytes).toString();
 
   final decoded = img.decodeImage(Uint8List.fromList(sourceBytes));
   if (decoded == null) {
-    File(thumbPath).writeAsBytesSync(sourceBytes, flush: true);
-    return hash;
+    return (hash: hash, generatedThumbnail: false);
   }
 
   final resized = img.copyResize(decoded, width: 512);
   final encoded = img.encodeJpg(resized, quality: 85);
   File(thumbPath).writeAsBytesSync(encoded, flush: true);
-  return hash;
+  return (hash: hash, generatedThumbnail: true);
 }
