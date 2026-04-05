@@ -176,6 +176,14 @@ class SyncService {
     );
   }
 
+  Future<void> deleteAccount() async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw const CloudSyncException('Backend API client is not configured.');
+    }
+    await client.deleteAccount();
+  }
+
   Future<String?> syncProject(Project project) async {
     final client = _backendApiClient;
     if (client == null) {

@@ -4,6 +4,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/cloud_provider.dart';
+import '../models/library_import_mode.dart';
 import '../models/photo_asset.dart';
 import '../models/project.dart';
 import '../models/provider_account.dart';
@@ -15,7 +16,7 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 7;
+  static const _schemaVersion = 8;
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -55,6 +56,7 @@ class AppDatabase {
             upload_session_id TEXT,
             upload_path TEXT,
             cloud_state TEXT NOT NULL DEFAULT 'local_and_cloud',
+            exists_in_phone_storage INTEGER NOT NULL DEFAULT 0,
             last_sync_error_code TEXT,
             FOREIGN KEY(project_id) REFERENCES projects(id)
           )
@@ -188,6 +190,11 @@ class AppDatabase {
             "ALTER TABLE projects ADD COLUMN start_date TEXT",
           );
         }
+        if (oldVersion < 8) {
+          await db.execute(
+            "ALTER TABLE photo_assets ADD COLUMN exists_in_phone_storage INTEGER NOT NULL DEFAULT 0",
+          );
+        }
       },
     );
 
@@ -294,6 +301,27 @@ class AppDatabase {
   Future<void> setProjectSortMode(ProjectSortMode mode) async {
     await _db.insert('app_state', {
       'key': 'project_sort_mode',
+      'value': mode.storageValue,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<LibraryImportMode> getLibraryImportMode() async {
+    final rows = await _db.query(
+      'app_state',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['library_import_mode'],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return LibraryImportMode.copy;
+    }
+    return LibraryImportMode.fromStorage(rows.first['value'] as String?);
+  }
+
+  Future<void> setLibraryImportMode(LibraryImportMode mode) async {
+    await _db.insert('app_state', {
+      'key': 'library_import_mode',
       'value': mode.storageValue,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
@@ -469,6 +497,7 @@ class AppDatabase {
       'cloud_state': deleted
           ? AssetCloudState.deleted
           : AssetCloudState.cloudOnly,
+      'exists_in_phone_storage': 0,
       'last_sync_error_code': null,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
@@ -520,6 +549,18 @@ class AppDatabase {
     await _db.update(
       'photo_assets',
       {'status': AssetStatus.deleted.name},
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
+  Future<void> setAssetExistsInPhoneStorage(
+    String assetId,
+    bool existsInPhoneStorage,
+  ) async {
+    await _db.update(
+      'photo_assets',
+      {'exists_in_phone_storage': existsInPhoneStorage ? 1 : 0},
       where: 'id = ?',
       whereArgs: [assetId],
     );

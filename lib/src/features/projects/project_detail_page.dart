@@ -83,6 +83,13 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                   icon: const Icon(Icons.drive_file_move_outline),
                 ),
                 IconButton(
+                  tooltip: 'Copy selected to phone gallery',
+                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
+                      ? null
+                      : () => _copySelectedToPhoneGallery(context, store, assets),
+                  icon: const Icon(Icons.add_to_photos_outlined),
+                ),
+                IconButton(
                   tooltip: 'Delete selected',
                   onPressed: store.isBusy || _selectedAssetIds.isEmpty
                       ? null
@@ -383,6 +390,44 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     }
 
     setState(_exitSelectionModeState);
+  }
+
+  Future<void> _copySelectedToPhoneGallery(
+    BuildContext context,
+    JoblensStore store,
+    List<PhotoAsset> assets,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final selectedAssets = assets
+        .where((asset) => _selectedAssetIds.contains(asset.id))
+        .toList(growable: false);
+    if (selectedAssets.isEmpty) {
+      return;
+    }
+
+    final result = await store.copyAssetsToPhoneStorage(selectedAssets);
+    if (!mounted) {
+      return;
+    }
+
+    final copied = result.copiedCount;
+    final skipped = result.skippedCount;
+    if (store.lastError != null) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.lastError!)),
+      );
+      return;
+    }
+
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          skipped > 0
+              ? 'Copied $copied photo(s) to phone gallery. Skipped $skipped already on phone storage.'
+              : 'Copied $copied photo(s) to phone gallery.',
+        ),
+      ),
+    );
   }
 
   void _clearSelection() {

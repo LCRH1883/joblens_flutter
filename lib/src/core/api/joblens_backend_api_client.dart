@@ -63,6 +63,13 @@ class JoblensBackendApiClient {
     );
   }
 
+  Future<void> deleteAccount() async {
+    await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/account/delete',
+    );
+  }
+
   Future<RemoteProjectRecord> upsertProject(
     RemoteProjectUpsertRequest request,
   ) async {

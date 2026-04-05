@@ -76,6 +76,7 @@ class MediaStorageService {
       status: AssetStatus.active,
       sourceType: sourceType,
       cloudState: AssetCloudState.localAndCloud,
+      existsInPhoneStorage: false,
       remoteAssetId: null,
       remoteProvider: null,
       remoteFileId: null,

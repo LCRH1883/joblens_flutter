@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app/joblens_store.dart';
 import '../auth/auth_page.dart';
 import '../auth/auth_state.dart';
+import 'storage_page.dart';
 import '../sync/sync_page.dart';
 
 class SettingsPage extends ConsumerWidget {
@@ -12,8 +14,6 @@ class SettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final store = ref.watch(joblensStoreListenableProvider);
-    final isAuthConfigured = ref.watch(authConfigurationProvider);
-    final authUser = ref.watch(authUserProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -21,45 +21,11 @@ class SettingsPage extends ConsumerWidget {
         padding: const EdgeInsets.all(12),
         children: [
           Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Account',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  if (isAuthConfigured &&
-                      authUser != null &&
-                      authUser.email != null &&
-                      authUser.email!.trim().isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(authUser.email!),
-                  ],
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      if (isAuthConfigured && authUser == null)
-                        FilledButton.icon(
-                          onPressed: () => _openAuthPage(context),
-                          icon: const Icon(Icons.login_outlined),
-                          label: const Text('Sign in'),
-                        ),
-                      if (isAuthConfigured && authUser != null)
-                        FilledButton.icon(
-                          onPressed: store.isBusy ? null : store.signOut,
-                          icon: const Icon(Icons.logout_outlined),
-                          label: const Text('Sign out'),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
+            child: ListTile(
+              leading: const Icon(Icons.person_outline),
+              title: const Text('Account'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _openAccountPage(context),
             ),
           ),
           Card(
@@ -72,18 +38,10 @@ class SettingsPage extends ConsumerWidget {
           ),
           Card(
             child: ListTile(
-              title: const Text('Storage model'),
-              subtitle: const Text(
-                'Joblens stores captured/imported photos in app-private storage and keeps them separate from the system camera roll.',
-              ),
-            ),
-          ),
-          Card(
-            child: ListTile(
-              title: const Text('Delete policy'),
-              subtitle: const Text(
-                'Deleting in Joblens only removes local Joblens visibility. Cloud copies are not automatically deleted.',
-              ),
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('Storage'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _openStoragePage(context),
             ),
           ),
           Card(
@@ -109,5 +67,277 @@ class SettingsPage extends ConsumerWidget {
     return Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const SyncPage()));
+  }
+
+  static Future<void> _openStoragePage(BuildContext context) {
+    return Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const StoragePage()));
+  }
+
+  static Future<void> _openAccountPage(BuildContext context) {
+    return Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const _AccountPage()));
+  }
+}
+
+class _AccountPage extends ConsumerWidget {
+  const _AccountPage();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final store = ref.watch(joblensStoreListenableProvider);
+    final isAuthConfigured = ref.watch(authConfigurationProvider);
+    final authUser = ref.watch(authUserProvider);
+    final email = authUser?.email?.trim();
+    final hasEmail = email != null && email.isNotEmpty;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Account')),
+      body: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.alternate_email_rounded),
+              title: Text(hasEmail ? email : 'Not signed in'),
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: Icon(
+                authUser == null ? Icons.login_outlined : Icons.logout_outlined,
+              ),
+              title: Text(authUser == null ? 'Sign in' : 'Sign out'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: !isAuthConfigured
+                  ? null
+                  : authUser == null
+                  ? () => SettingsPage._openAuthPage(context)
+                  : store.isBusy
+                  ? null
+                  : () async {
+                      await store.signOut();
+                      if (context.mounted) {
+                        Navigator.of(context).pop();
+                      }
+                    },
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.mail_outline),
+              title: const Text('Change email'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: !isAuthConfigured || authUser == null
+                  ? null
+                  : () => _showChangeEmailDialog(context),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: ListTile(
+              title: Text(
+                'Delete account',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              onTap: !isAuthConfigured || authUser == null || store.isBusy
+                  ? null
+                  : () => _showDeleteAccountDialog(context, store),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showChangeEmailDialog(BuildContext context) async {
+    final controller = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    var isSubmitting = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Change email'),
+              content: Form(
+                key: formKey,
+                child: TextFormField(
+                  controller: controller,
+                  keyboardType: TextInputType.emailAddress,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'New email',
+                  ),
+                  validator: (value) {
+                    final email = value?.trim() ?? '';
+                    if (email.isEmpty) {
+                      return 'Enter your email.';
+                    }
+                    if (!email.contains('@')) {
+                      return 'Enter a valid email.';
+                    }
+                    return null;
+                  },
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          if (!formKey.currentState!.validate()) {
+                            return;
+                          }
+                          setState(() {
+                            isSubmitting = true;
+                          });
+                          try {
+                            await Supabase.instance.client.auth.updateUser(
+                              UserAttributes(email: controller.text.trim()),
+                            );
+                            if (!context.mounted) {
+                              return;
+                            }
+                            Navigator.of(context).pop();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Check your new email to confirm the change.',
+                                ),
+                              ),
+                            );
+                          } catch (error) {
+                            if (!context.mounted) {
+                              return;
+                            }
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Unable to change email: $error')),
+                            );
+                          } finally {
+                            if (context.mounted) {
+                              setState(() {
+                                isSubmitting = false;
+                              });
+                            }
+                          }
+                        },
+                  child: Text(isSubmitting ? 'Saving...' : 'Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _showDeleteAccountDialog(
+    BuildContext context,
+    JoblensStore store,
+  ) async {
+    final controller = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    var isSubmitting = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setState) {
+            return AlertDialog(
+              title: const Text('Delete account'),
+              content: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'This deletes your Joblens account and backend data. Files, folders, and notes in your cloud drive are not deleted.',
+                    ),
+                    const SizedBox(height: 12),
+                    const Text('Type DELETE to confirm.'),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: controller,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Confirmation',
+                      ),
+                      validator: (value) {
+                        if ((value ?? '').trim().toUpperCase() != 'DELETE') {
+                          return 'Type DELETE to continue.';
+                        }
+                        return null;
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          if (!formKey.currentState!.validate()) {
+                            return;
+                          }
+                          setState(() {
+                            isSubmitting = true;
+                          });
+                          await store.deleteAccount();
+                          if (!dialogContext.mounted) {
+                            return;
+                          }
+                          if (store.lastError != null) {
+                            setState(() {
+                              isSubmitting = false;
+                            });
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              SnackBar(content: Text(store.lastError!)),
+                            );
+                            return;
+                          }
+                          Navigator.of(dialogContext).pop();
+                          if (!context.mounted) {
+                            return;
+                          }
+                          Navigator.of(context).pop();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Account deleted.')),
+                          );
+                        },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.error,
+                    foregroundColor: Theme.of(context).colorScheme.onError,
+                  ),
+                  child: Text(isSubmitting ? 'Deleting...' : 'Delete account'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 }

@@ -22,6 +22,7 @@ class PhotoAsset {
     required this.status,
     required this.sourceType,
     required this.cloudState,
+    required this.existsInPhoneStorage,
     this.remoteAssetId,
     this.remoteProvider,
     this.remoteFileId,
@@ -40,6 +41,7 @@ class PhotoAsset {
   final AssetStatus status;
   final AssetSourceType sourceType;
   final String cloudState;
+  final bool existsInPhoneStorage;
   final String? remoteAssetId;
   final String? remoteProvider;
   final String? remoteFileId;
@@ -55,6 +57,7 @@ class PhotoAsset {
     AssetStatus? status,
     String? thumbPath,
     String? cloudState,
+    bool? existsInPhoneStorage,
     String? remoteAssetId,
     String? remoteProvider,
     String? remoteFileId,
@@ -73,6 +76,7 @@ class PhotoAsset {
       status: status ?? this.status,
       sourceType: sourceType,
       cloudState: cloudState ?? this.cloudState,
+      existsInPhoneStorage: existsInPhoneStorage ?? this.existsInPhoneStorage,
       remoteAssetId: remoteAssetId ?? this.remoteAssetId,
       remoteProvider: remoteProvider ?? this.remoteProvider,
       remoteFileId: remoteFileId ?? this.remoteFileId,
@@ -99,6 +103,7 @@ class PhotoAsset {
       'upload_session_id': uploadSessionId,
       'upload_path': uploadPath,
       'cloud_state': cloudState,
+      'exists_in_phone_storage': existsInPhoneStorage ? 1 : 0,
       'last_sync_error_code': lastSyncErrorCode,
     };
   }
@@ -116,6 +121,8 @@ class PhotoAsset {
       sourceType: AssetSourceType.values.byName(map['source_type']! as String),
       cloudState:
           (map['cloud_state'] as String?) ?? AssetCloudState.localAndCloud,
+      existsInPhoneStorage:
+          ((map['exists_in_phone_storage'] as int?) ?? 0) == 1,
       remoteAssetId: map['remote_asset_id'] as String?,
       remoteProvider: map['remote_provider'] as String?,
       remoteFileId: map['remote_file_id'] as String?,

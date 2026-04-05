@@ -26,6 +26,7 @@ dependencies:
   url_launcher: ^6.3.2
   app_links: ^7.0.0
   share_plus: ^10.1.4
+  photo_manager: ^3.9.0
 
 dev_dependencies:
   flutter_test:

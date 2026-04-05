@@ -5,11 +5,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
+import 'package:photo_manager/photo_manager.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Session;
 
 import '../core/db/app_database.dart';
 import '../core/api/api_exception.dart';
 import '../core/models/cloud_provider.dart';
+import '../core/models/library_import_mode.dart';
 import '../core/models/photo_asset.dart';
 import '../core/models/project.dart';
 import '../core/models/provider_account.dart';
@@ -37,7 +40,7 @@ class JoblensStore extends ChangeNotifier {
     required SyncService syncService,
     ImagePicker? imagePicker,
     String? Function()? currentAuthUserIdProvider,
-    Future<void> Function()? signOutAction,
+  Future<void> Function()? signOutAction,
   }) : _database = database,
        _mediaStorage = mediaStorage,
        _syncService = syncService,
@@ -59,6 +62,7 @@ class JoblensStore extends ChangeNotifier {
   int _reauthenticationRequestCount = 0;
   Future<void> _pendingBackgroundSync = Future.value();
   ProjectSortMode _projectSortMode = ProjectSortMode.name;
+  LibraryImportMode _libraryImportMode = LibraryImportMode.copy;
 
   List<PhotoAsset> _assets = const [];
   List<Project> _projects = const [];
@@ -78,6 +82,7 @@ class JoblensStore extends ChangeNotifier {
   List<SyncJob> get syncJobs => _syncJobs;
   List<SyncLogEntry> get syncLogs => _syncLogs;
   ProjectSortMode get projectSortMode => _projectSortMode;
+  LibraryImportMode get libraryImportMode => _libraryImportMode;
 
   Future<void> initialize() async {
     await _synchronizeAuthUser(_currentAuthUserIdProvider?.call());
@@ -98,6 +103,24 @@ class JoblensStore extends ChangeNotifier {
       if (signOutAction != null) {
         await signOutAction();
       }
+    });
+  }
+
+  Future<void> deleteAccount() async {
+    await _runBusy(() async {
+      await _syncService.deleteAccount();
+      final signOutAction = _signOutAction;
+      if (signOutAction != null) {
+        try {
+          await signOutAction();
+        } catch (error) {
+          // Auth user may already be deleted server-side.
+          if (kDebugMode) {
+            debugPrint('Sign out after account deletion failed: $error');
+          }
+        }
+      }
+      await _synchronizeAuthUser(null);
     });
   }
 
@@ -210,7 +233,58 @@ class JoblensStore extends ChangeNotifier {
         }
 
         await _database.upsertAsset(asset);
+        await _database.setAssetExistsInPhoneStorage(asset.id, true);
         await _syncService.enqueueAsset(asset);
+      }
+
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
+      unawaited(_runBackgroundSyncRefresh());
+    });
+  }
+
+  Future<void> importFromPhoneLibraryAssets(
+    List<AssetEntity> assets, {
+    int? projectId,
+    required LibraryImportMode mode,
+  }) async {
+    await _runBusy(() async {
+      if (assets.isEmpty) {
+        return;
+      }
+
+      final importedAssetIds = <String>[];
+      final targetProjectId = projectId ?? _defaultProjectId;
+      final tempDir = await getTemporaryDirectory();
+
+      for (final entity in assets) {
+        final source = await _resolveLibraryAssetFile(entity, tempDir);
+        if (source == null || !source.existsSync()) {
+          continue;
+        }
+
+        final asset = await _mediaStorage.ingestFile(
+          source: source,
+          sourceType: AssetSourceType.imported,
+          projectId: targetProjectId,
+          createdAt: entity.createDateTime,
+        );
+
+        if (await _database.assetExistsByHash(asset.hash)) {
+          continue;
+        }
+
+        await _database.upsertAsset(asset);
+        await _database.setAssetExistsInPhoneStorage(
+          asset.id,
+          mode == LibraryImportMode.copy,
+        );
+        await _syncService.enqueueAsset(asset);
+        importedAssetIds.add(entity.id);
+      }
+
+      if (mode == LibraryImportMode.move && importedAssetIds.isNotEmpty) {
+        await PhotoManager.editor.deleteWithIds(importedAssetIds);
       }
 
       await _hydrateLocalState();
@@ -517,6 +591,69 @@ class JoblensStore extends ChangeNotifier {
     _notifyListenersIfActive();
   }
 
+  Future<void> setLibraryImportMode(LibraryImportMode mode) async {
+    if (_libraryImportMode == mode) {
+      return;
+    }
+    _libraryImportMode = mode;
+    await _database.setLibraryImportMode(mode);
+    _notifyListenersIfActive();
+  }
+
+  Future<({int copiedCount, int skippedCount})> copyAssetsToPhoneStorage(
+    Iterable<PhotoAsset> assets,
+  ) async {
+    var copiedCount = 0;
+    var skippedCount = 0;
+
+    await _runBusy(() async {
+      final permission = await PhotoManager.requestPermissionExtend(
+        requestOption: const PermissionRequestOption(
+          androidPermission: AndroidPermission(
+            type: RequestType.image,
+            mediaLocation: false,
+          ),
+        ),
+      );
+      if (!permission.hasAccess) {
+        throw const ApiException(
+          code: 'phone_storage_permission_denied',
+          message: 'Allow photo library access before copying photos to phone storage.',
+        );
+      }
+
+      for (final asset in assets) {
+        if (asset.existsInPhoneStorage) {
+          skippedCount += 1;
+          continue;
+        }
+        if (asset.localPath.trim().isEmpty) {
+          skippedCount += 1;
+          continue;
+        }
+
+        final file = File(asset.localPath);
+        if (!file.existsSync()) {
+          skippedCount += 1;
+          continue;
+        }
+
+        await PhotoManager.editor.saveImageWithPath(
+          file.path,
+          title: p.basename(file.path),
+          creationDate: asset.createdAt,
+        );
+        await _database.setAssetExistsInPhoneStorage(asset.id, true);
+        copiedCount += 1;
+      }
+
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
+    });
+
+    return (copiedCount: copiedCount, skippedCount: skippedCount);
+  }
+
   Future<String?> resolveThumbnailUrl(
     PhotoAsset asset, {
     bool forceRefresh = false,
@@ -577,6 +714,7 @@ class JoblensStore extends ChangeNotifier {
     _syncJobs = await _database.getSyncJobs();
     _syncLogs = await _database.getSyncLogs();
     _projectSortMode = await _database.getProjectSortMode();
+    _libraryImportMode = await _database.getLibraryImportMode();
   }
 
   Future<void> _runBackgroundSyncRefresh() {
@@ -669,6 +807,36 @@ class JoblensStore extends ChangeNotifier {
     }
 
     return error.code == 'unauthorized';
+  }
+
+  Future<File?> _resolveLibraryAssetFile(
+    AssetEntity entity,
+    Directory tempDir,
+  ) async {
+    final originFile = await entity.originFile;
+    if (originFile != null && originFile.existsSync()) {
+      return originFile;
+    }
+
+    final file = await entity.file;
+    if (file != null && file.existsSync()) {
+      return file;
+    }
+
+    final bytes = await entity.originBytes;
+    if (bytes == null || bytes.isEmpty) {
+      return null;
+    }
+
+    final title = await entity.titleAsync;
+    final extension = title.contains('.')
+        ? '.${title.split('.').last}'
+        : '.jpg';
+    final tempFile = File(
+      '${tempDir.path}/${entity.id.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_')}$extension',
+    );
+    await tempFile.writeAsBytes(bytes, flush: true);
+    return tempFile;
   }
 
   List<Project> _sortProjects(
