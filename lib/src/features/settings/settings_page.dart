@@ -32,13 +32,13 @@ class SettingsPage extends ConsumerWidget {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _accountDescription(
-                      isAuthConfigured: isAuthConfigured,
-                      authUserEmail: authUser?.email,
-                    ),
-                  ),
+                  if (isAuthConfigured &&
+                      authUser != null &&
+                      authUser.email != null &&
+                      authUser.email!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(authUser.email!),
+                  ],
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
@@ -66,7 +66,6 @@ class SettingsPage extends ConsumerWidget {
             child: ListTile(
               leading: const Icon(Icons.sync_outlined),
               title: const Text('Cloud sync'),
-              subtitle: Text(_syncDescription(store, isAuthConfigured, authUser?.email)),
               trailing: const Icon(Icons.chevron_right_rounded),
               onTap: () => _openSyncPage(context),
             ),
@@ -110,38 +109,5 @@ class SettingsPage extends ConsumerWidget {
     return Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const SyncPage()));
-  }
-
-  static String _accountDescription({
-    required bool isAuthConfigured,
-    required String? authUserEmail,
-  }) {
-    if (!isAuthConfigured) {
-      return 'Your photos stay on this device for now. Sign-in and cloud sync will appear here when they are available.';
-    }
-    if (authUserEmail == null || authUserEmail.trim().isEmpty) {
-      return 'You are signed out. Sign in to connect your cloud storage and sync Joblens across devices.';
-    }
-    return 'Signed in as $authUserEmail. Cloud provider connections and sync run through your Joblens account.';
-  }
-
-  static String _syncDescription(
-    JoblensStore store,
-    bool isAuthConfigured,
-    String? authUserEmail,
-  ) {
-    if (!isAuthConfigured) {
-      return 'Cloud sync is unavailable right now. Your photos still work locally on this device.';
-    }
-    if (authUserEmail == null || authUserEmail.trim().isEmpty) {
-      return 'Sign in first, then connect your cloud drive and review sync status here.';
-    }
-    final queuedCount = store.syncJobs
-        .where((job) => job.state.name == 'queued')
-        .length;
-    final failedCount = store.syncJobs
-        .where((job) => job.state.name == 'failed')
-        .length;
-    return '$queuedCount queued • $failedCount failed • manage providers and sync activity';
   }
 }

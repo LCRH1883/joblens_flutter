@@ -63,9 +63,6 @@ class _SyncPageState extends ConsumerState<SyncPage>
     final failedCount = store.syncJobs
         .where((job) => job.state == SyncJobState.failed)
         .length;
-    final recentLogs = store.syncLogs.take(6).toList(growable: false);
-    final latestLog = recentLogs.isEmpty ? null : recentLogs.first;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Sync'),
@@ -83,20 +80,6 @@ class _SyncPageState extends ConsumerState<SyncPage>
                 : store.retryFailedSyncJobs,
             icon: const Icon(Icons.refresh_outlined),
             tooltip: 'Retry failed',
-          ),
-          IconButton(
-            onPressed: store.syncLogs.isEmpty
-                ? null
-                : () => _exportSyncLog(context, store),
-            icon: const Icon(Icons.download_outlined),
-            tooltip: 'Export sync log',
-          ),
-          IconButton(
-            onPressed: store.isBusy || store.syncLogs.isEmpty
-                ? null
-                : () => store.clearSyncLog(),
-            icon: const Icon(Icons.delete_sweep_outlined),
-            tooltip: 'Clear sync log',
           ),
         ],
       ),
@@ -132,9 +115,6 @@ class _SyncPageState extends ConsumerState<SyncPage>
                 child: ListTile(
                   leading: const Icon(Icons.verified_user_outlined),
                   title: Text(authUser.email ?? 'Signed in'),
-                  subtitle: const Text(
-                    'Your cloud drive connections are tied to this Joblens account.',
-                  ),
                 ),
               ),
             ],
@@ -154,24 +134,31 @@ class _SyncPageState extends ConsumerState<SyncPage>
               const SizedBox(height: 8),
             ],
             Text(
+              'Sync Status',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            _SyncStatusCard(
+              queuedCount: queuedCount,
+              uploadingCount: uploadingCount,
+              failedCount: failedCount,
+              selectedProvider: lockedProvider?.providerType,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const _SyncActivityPage(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
               'Cloud Providers',
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            if (canSyncWithCloud && lockedProvider != null) ...[
-              Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: ListTile(
-                  leading: const Icon(Icons.lock_outline),
-                  title: Text('${lockedProvider.providerType.label} selected'),
-                  subtitle: Text(
-                    'Only one cloud provider can be connected at a time. Disconnect ${lockedProvider.providerType.label} before choosing a different provider.',
-                  ),
-                ),
-              ),
-            ],
             if (canSyncWithCloud)
               for (final providerAccount in store.providers)
                 () {
@@ -198,133 +185,10 @@ class _SyncPageState extends ConsumerState<SyncPage>
                         : null,
                   );
                 }(),
-            const SizedBox(height: 10),
-            Text(
-              'Sync Status',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _CountChip(
-                          label: 'Queued',
-                          count: queuedCount,
-                          icon: Icons.schedule,
-                        ),
-                        _CountChip(
-                          label: 'Uploading',
-                          count: uploadingCount,
-                          icon: Icons.cloud_upload_outlined,
-                        ),
-                        _CountChip(
-                          label: 'Failed',
-                          count: failedCount,
-                          icon: Icons.error_outline,
-                          highlight: failedCount > 0,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      latestLog == null
-                          ? 'No recent sync activity yet.'
-                          : '${latestLog.isError ? 'Latest error' : 'Latest activity'}: ${latestLog.message}',
-                    ),
-                    if (latestLog != null) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        _formatLogMeta(latestLog),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'Recent Activity',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            if (recentLogs.isEmpty)
-              Card(
-                child: const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('No sync activity logged yet.'),
-                ),
-              ),
-            for (final log in recentLogs)
-              Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  leading: Icon(
-                    log.isError
-                        ? Icons.error_outline
-                        : Icons.check_circle_outline,
-                  ),
-                  title: Text(log.message),
-                  subtitle: Text(_formatLogMeta(log)),
-                ),
-              ),
           ],
         ),
       ),
     );
-  }
-
-  Future<void> _exportSyncLog(BuildContext context, JoblensStore store) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final shareOrigin = _sharePositionOrigin(context);
-    try {
-      final file = await store.exportSyncLog();
-      final result = await Share.shareXFiles(
-        [XFile(file.path, mimeType: 'text/plain')],
-        text: 'Joblens sync log',
-        subject: 'Joblens Sync Log',
-        sharePositionOrigin: shareOrigin,
-      );
-      if (!mounted) {
-        return;
-      }
-      final message = switch (result.status) {
-        ShareResultStatus.success =>
-          'Sync log shared successfully.',
-        ShareResultStatus.dismissed =>
-          'Share sheet closed. You can export again any time.',
-        _ => 'Sync log ready to share or save from the share sheet.',
-      };
-      messenger.showSnackBar(SnackBar(content: Text(message)));
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Unable to open share sheet: $error'),
-        ),
-      );
-    }
-  }
-
-  Rect? _sharePositionOrigin(BuildContext context) {
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) {
-      return null;
-    }
-    return box.localToGlobal(Offset.zero) & box.size;
   }
 
   Future<void> _openAuthPage(BuildContext context) {
@@ -483,21 +347,82 @@ class _SyncPageState extends ConsumerState<SyncPage>
         providerAccount.tokenState == ProviderTokenState.disconnected;
   }
 
-  String _formatLogMeta(SyncLogEntry log) {
-    final parts = <String>[
-      _formatTimestamp(log.createdAt),
-      log.event,
-      if (log.assetId != null && log.assetId!.isNotEmpty)
-        'asset ${log.assetId!.substring(0, 8)}',
-      if (log.projectId != null) 'project ${log.projectId}',
-    ];
-    return parts.join(' • ');
-  }
+}
 
-  String _formatTimestamp(DateTime value) {
-    final local = value.toLocal();
-    String twoDigits(int input) => input.toString().padLeft(2, '0');
-    return '${twoDigits(local.month)}/${twoDigits(local.day)} ${twoDigits(local.hour)}:${twoDigits(local.minute)}:${twoDigits(local.second)}';
+class _SyncStatusCard extends StatelessWidget {
+  const _SyncStatusCard({
+    required this.queuedCount,
+    required this.uploadingCount,
+    required this.failedCount,
+    required this.selectedProvider,
+    required this.onTap,
+  });
+
+  final int queuedCount;
+  final int uploadingCount;
+  final int failedCount;
+  final CloudProviderType? selectedProvider;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          selectedProvider == null
+                              ? 'No cloud provider connected'
+                              : '${selectedProvider!.label} connected',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Icon(Icons.chevron_right_rounded),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _CountChip(
+                    label: 'Queued',
+                    count: queuedCount,
+                    icon: Icons.schedule,
+                  ),
+                  _CountChip(
+                    label: 'Uploading',
+                    count: uploadingCount,
+                    icon: Icons.cloud_upload_outlined,
+                  ),
+                  _CountChip(
+                    label: 'Failed',
+                    count: failedCount,
+                    icon: Icons.error_outline,
+                    highlight: failedCount > 0,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -543,6 +468,121 @@ class _CountChip extends StatelessWidget {
       ),
     );
   }
+}
+
+class _SyncActivityPage extends ConsumerWidget {
+  const _SyncActivityPage();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final store = ref.watch(joblensStoreListenableProvider);
+    final recentLogs = store.syncLogs.take(100).toList(growable: false);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Sync Activity'),
+        actions: [
+          IconButton(
+            onPressed: store.syncLogs.isEmpty
+                ? null
+                : () => _shareSyncLog(context, store),
+            icon: const Icon(Icons.download_outlined),
+            tooltip: 'Export sync log',
+          ),
+          IconButton(
+            onPressed: store.isBusy || store.syncLogs.isEmpty
+                ? null
+                : store.clearSyncLog,
+            icon: const Icon(Icons.delete_sweep_outlined),
+            tooltip: 'Clear sync log',
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          if (recentLogs.isEmpty)
+            Card(
+              child: const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('No sync activity logged yet.'),
+              ),
+            )
+          else
+            for (final log in recentLogs)
+              Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  leading: Icon(
+                    log.isError
+                        ? Icons.error_outline
+                        : Icons.check_circle_outline,
+                  ),
+                  title: Text(log.message),
+                  subtitle: Text(_formatSyncLogMeta(log)),
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _shareSyncLog(BuildContext context, JoblensStore store) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final shareOrigin = _sharePositionOrigin(context);
+    try {
+      final file = await store.exportSyncLog();
+      final result = await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'text/plain')],
+        text: 'Joblens sync log',
+        subject: 'Joblens Sync Log',
+        sharePositionOrigin: shareOrigin,
+      );
+      if (!context.mounted) {
+        return;
+      }
+      final message = switch (result.status) {
+        ShareResultStatus.success =>
+          'Sync log shared successfully.',
+        ShareResultStatus.dismissed =>
+          'Share sheet closed. You can export again any time.',
+        _ => 'Sync log ready to share or save from the share sheet.',
+      };
+      messenger.showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(content: Text('Unable to open share sheet: $error')),
+      );
+    }
+  }
+}
+
+String _formatSyncLogMeta(SyncLogEntry log) {
+  final parts = <String>[
+    _formatSyncTimestamp(log.createdAt),
+    log.event,
+    if (log.assetId != null && log.assetId!.isNotEmpty)
+      'asset ${log.assetId!.substring(0, 8)}',
+    if (log.projectId != null) 'project ${log.projectId}',
+  ];
+  return parts.join(' • ');
+}
+
+String _formatSyncTimestamp(DateTime value) {
+  final local = value.toLocal();
+  String twoDigits(int input) => input.toString().padLeft(2, '0');
+  return '${twoDigits(local.month)}/${twoDigits(local.day)} ${twoDigits(local.hour)}:${twoDigits(local.minute)}:${twoDigits(local.second)}';
+}
+
+Rect? _sharePositionOrigin(BuildContext context) {
+  final box = context.findRenderObject() as RenderBox?;
+  if (box == null || !box.hasSize) {
+    return null;
+  }
+  return box.localToGlobal(Offset.zero) & box.size;
 }
 
 class _ProviderConnectionCard extends StatelessWidget {
