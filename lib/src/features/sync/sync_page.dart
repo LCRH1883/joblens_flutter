@@ -180,67 +180,22 @@ class _SyncPageState extends ConsumerState<SyncPage>
                       !store.isBusy &&
                       _connectingProvider != providerAccount.providerType &&
                       !isLocked;
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  providerAccount.providerType.label,
-                                  style: Theme.of(context).textTheme.titleMedium,
-                                ),
-                              ),
-                              _StatusChip(state: providerAccount.tokenState),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(_providerSubtitle(providerAccount, lockedProvider)),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              FilledButton.icon(
-                                onPressed: canStartConnect
-                                    ? () => _connectProvider(
-                                          context,
-                                          providerAccount,
-                                        )
-                                    : null,
-                                icon: Icon(
-                                  providerAccount.isConnected
-                                      ? Icons.refresh_outlined
-                                      : Icons.link_outlined,
-                                ),
-                                label: Text(
-                                  _connectingProvider == providerAccount.providerType
-                                      ? 'Opening...'
-                                      : providerAccount.isConnected
-                                      ? 'Reconnect'
-                                      : 'Connect',
-                                ),
-                              ),
-                              if (providerAccount.tokenState !=
-                                  ProviderTokenState.disconnected)
-                                OutlinedButton.icon(
-                                  onPressed: store.isBusy
-                                      ? null
-                                      : () => store.disconnectProvider(
-                                            providerAccount.providerType,
-                                          ),
-                                  icon: const Icon(Icons.link_off_outlined),
-                                  label: const Text('Disconnect'),
-                                ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
+                  return _ProviderConnectionCard(
+                    providerAccount: providerAccount,
+                    isOpening:
+                        _connectingProvider == providerAccount.providerType,
+                    canConnect: canStartConnect,
+                    onConnect: canStartConnect
+                        ? () => _connectProvider(context, providerAccount)
+                        : null,
+                    onDisconnect:
+                        providerAccount.tokenState !=
+                                ProviderTokenState.disconnected &&
+                            !store.isBusy
+                        ? () => store.disconnectProvider(
+                            providerAccount.providerType,
+                          )
+                        : null,
                   );
                 }(),
             const SizedBox(height: 10),
@@ -528,26 +483,6 @@ class _SyncPageState extends ConsumerState<SyncPage>
         providerAccount.tokenState == ProviderTokenState.disconnected;
   }
 
-  String _providerSubtitle(
-    ProviderAccount providerAccount,
-    ProviderAccount? lockedProvider,
-  ) {
-    if (_isProviderLocked(providerAccount, lockedProvider) &&
-        lockedProvider != null) {
-      return 'Only one cloud provider can be connected at a time. Disconnect ${lockedProvider.providerType.label} before choosing ${providerAccount.providerType.label}.';
-    }
-    return switch (providerAccount.tokenState) {
-      ProviderTokenState.connected =>
-        'Connected. New and moved photos sync into this provider through the Joblens backend.',
-      ProviderTokenState.expired =>
-        'Connection expired. Reconnect this provider to resume sync.',
-      ProviderTokenState.disconnected =>
-        providerAccount.providerType == CloudProviderType.nextcloud
-            ? 'Connect your Nextcloud server. Credentials are stored and refreshed by the backend.'
-            : 'Connect your ${providerAccount.providerType.label} account in the browser. Tokens are stored and refreshed by the backend.',
-    };
-  }
-
   String _formatLogMeta(SyncLogEntry log) {
     final parts = <String>[
       _formatTimestamp(log.createdAt),
@@ -610,46 +545,372 @@ class _CountChip extends StatelessWidget {
   }
 }
 
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.state});
+class _ProviderConnectionCard extends StatelessWidget {
+  const _ProviderConnectionCard({
+    required this.providerAccount,
+    required this.isOpening,
+    required this.canConnect,
+    required this.onConnect,
+    required this.onDisconnect,
+  });
 
-  final ProviderTokenState state;
+  final ProviderAccount providerAccount;
+  final bool isOpening;
+  final bool canConnect;
+  final VoidCallback? onConnect;
+  final VoidCallback? onDisconnect;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final (label, foreground, background) = switch (state) {
-      ProviderTokenState.connected => (
-        'Connected',
-        scheme.onPrimaryContainer,
-        scheme.primaryContainer,
-      ),
-      ProviderTokenState.expired => (
-        'Expired',
-        scheme.onTertiaryContainer,
-        scheme.tertiaryContainer,
-      ),
-      ProviderTokenState.disconnected => (
-        'Disconnected',
-        scheme.onSurfaceVariant,
-        scheme.surfaceContainerHighest,
-      ),
+    final accent = _providerAccent(providerAccount.providerType);
+    final isConnected = providerAccount.isConnected;
+    final canReconnect = canConnect && isConnected;
+    final canShowConnect = canConnect && !isConnected;
+    final titleStyle = Theme.of(context).textTheme.titleMedium?.copyWith(
+      fontWeight: FontWeight.w700,
+      letterSpacing: -0.2,
+    );
+    final statusText = switch (providerAccount.tokenState) {
+      ProviderTokenState.connected => 'Connected',
+      ProviderTokenState.expired => 'Needs attention',
+      ProviderTokenState.disconnected => 'Not connected',
     };
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: foreground,
-          fontWeight: FontWeight.w700,
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _ProviderLogoCircle(
+              provider: providerAccount.providerType,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(providerAccount.providerType.label, style: titleStyle),
+                  const SizedBox(height: 3),
+                  Text(
+                    statusText,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: accent,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isConnected) ...[
+              IconButton(
+                onPressed: canReconnect ? onConnect : null,
+                tooltip: 'Reconnect',
+                style: IconButton.styleFrom(
+                  backgroundColor: scheme.surfaceContainerHighest,
+                  foregroundColor: accent,
+                ),
+                icon: isOpening
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded),
+              ),
+              const SizedBox(width: 8),
+            ],
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 110),
+              child: isConnected
+                  ? FilledButton(
+                      onPressed: onDisconnect,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: accent,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                      ),
+                      child: const Text('Disconnect'),
+                    )
+                  : FilledButton(
+                      onPressed: canShowConnect ? onConnect : null,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: accent,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                      ),
+                      child: Text(
+                        isOpening ? 'Opening...' : 'Connect',
+                      ),
+                    ),
+            ),
+          ],
         ),
       ),
     );
+  }
+}
+
+class _ProviderLogoCircle extends StatelessWidget {
+  const _ProviderLogoCircle({
+    required this.provider,
+  });
+
+  final CloudProviderType provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: 54,
+      height: 54,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: _providerLogoBackground(provider),
+        border: Border.all(
+          color: provider == CloudProviderType.googleDrive
+              ? scheme.outlineVariant
+              : Colors.transparent,
+        ),
+      ),
+      child: Center(
+        child: SizedBox(
+          width: 30,
+          height: 30,
+          child: CustomPaint(
+            painter: _ProviderLogoPainter(provider),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Color _providerAccent(CloudProviderType provider) {
+  return switch (provider) {
+    CloudProviderType.googleDrive => const Color(0xFF1A73E8),
+    CloudProviderType.oneDrive => const Color(0xFF0078D4),
+    CloudProviderType.dropbox => const Color(0xFF0061FF),
+    CloudProviderType.nextcloud => const Color(0xFF0082C9),
+    CloudProviderType.box => const Color(0xFF0061D5),
+    CloudProviderType.backend => const Color(0xFF276749),
+  };
+}
+
+Color _providerLogoBackground(CloudProviderType provider) {
+  return switch (provider) {
+    CloudProviderType.googleDrive => Colors.white,
+    CloudProviderType.oneDrive => const Color(0xFF0078D4),
+    CloudProviderType.dropbox => const Color(0xFF0061FF),
+    CloudProviderType.nextcloud => const Color(0xFF0082C9),
+    CloudProviderType.box => const Color(0xFF0061D5),
+    CloudProviderType.backend => const Color(0xFF276749),
+  };
+}
+
+class _ProviderLogoPainter extends CustomPainter {
+  _ProviderLogoPainter(this.provider);
+
+  final CloudProviderType provider;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    switch (provider) {
+      case CloudProviderType.googleDrive:
+        _paintGoogleDrive(canvas, size);
+      case CloudProviderType.oneDrive:
+        _paintOneDrive(canvas, size);
+      case CloudProviderType.dropbox:
+        _paintDropbox(canvas, size);
+      case CloudProviderType.nextcloud:
+        _paintNextcloud(canvas, size);
+      case CloudProviderType.box:
+        _paintBox(canvas, size);
+      case CloudProviderType.backend:
+        _paintBackend(canvas, size);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ProviderLogoPainter oldDelegate) {
+    return oldDelegate.provider != provider;
+  }
+
+  void _paintGoogleDrive(Canvas canvas, Size size) {
+    final green = Paint()..color = const Color(0xFF0F9D58);
+    final yellow = Paint()..color = const Color(0xFFF4B400);
+    final blue = Paint()..color = const Color(0xFF4285F4);
+
+    final left = Path()
+      ..moveTo(size.width * 0.28, size.height * 0.72)
+      ..lineTo(size.width * 0.46, size.height * 0.40)
+      ..lineTo(size.width * 0.56, size.height * 0.40)
+      ..lineTo(size.width * 0.38, size.height * 0.72)
+      ..close();
+    canvas.drawPath(left, green);
+
+    final right = Path()
+      ..moveTo(size.width * 0.54, size.height * 0.22)
+      ..lineTo(size.width * 0.78, size.height * 0.64)
+      ..lineTo(size.width * 0.68, size.height * 0.64)
+      ..lineTo(size.width * 0.46, size.height * 0.28)
+      ..close();
+    canvas.drawPath(right, yellow);
+
+    final bottom = Path()
+      ..moveTo(size.width * 0.38, size.height * 0.72)
+      ..lineTo(size.width * 0.68, size.height * 0.72)
+      ..lineTo(size.width * 0.78, size.height * 0.64)
+      ..lineTo(size.width * 0.48, size.height * 0.64)
+      ..close();
+    canvas.drawPath(bottom, blue);
+  }
+
+  void _paintOneDrive(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = Colors.white;
+    final path = Path();
+    path.moveTo(size.width * 0.22, size.height * 0.62);
+    path.cubicTo(
+      size.width * 0.22,
+      size.height * 0.46,
+      size.width * 0.34,
+      size.height * 0.36,
+      size.width * 0.48,
+      size.height * 0.40,
+    );
+    path.cubicTo(
+      size.width * 0.54,
+      size.height * 0.26,
+      size.width * 0.73,
+      size.height * 0.24,
+      size.width * 0.82,
+      size.height * 0.38,
+    );
+    path.cubicTo(
+      size.width * 0.92,
+      size.height * 0.40,
+      size.width * 0.96,
+      size.height * 0.49,
+      size.width * 0.92,
+      size.height * 0.60,
+    );
+    path.cubicTo(
+      size.width * 0.88,
+      size.height * 0.71,
+      size.width * 0.78,
+      size.height * 0.76,
+      size.width * 0.66,
+      size.height * 0.76,
+    );
+    path.lineTo(size.width * 0.36, size.height * 0.76);
+    path.cubicTo(
+      size.width * 0.27,
+      size.height * 0.76,
+      size.width * 0.19,
+      size.height * 0.71,
+      size.width * 0.17,
+      size.height * 0.64,
+    );
+    path.close();
+    canvas.drawPath(path, paint);
+  }
+
+  void _paintDropbox(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = Colors.white;
+
+    Path diamond(double cx, double cy, double w, double h) {
+      return Path()
+        ..moveTo(cx, cy - h / 2)
+        ..lineTo(cx + w / 2, cy)
+        ..lineTo(cx, cy + h / 2)
+        ..lineTo(cx - w / 2, cy)
+        ..close();
+    }
+
+    final w = size.width * 0.24;
+    final h = size.height * 0.20;
+    canvas.drawPath(diamond(size.width * 0.34, size.height * 0.34, w, h), paint);
+    canvas.drawPath(diamond(size.width * 0.66, size.height * 0.34, w, h), paint);
+    canvas.drawPath(diamond(size.width * 0.34, size.height * 0.58, w, h), paint);
+    canvas.drawPath(diamond(size.width * 0.66, size.height * 0.58, w, h), paint);
+    canvas.drawPath(diamond(size.width * 0.50, size.height * 0.78, w * 0.9, h * 0.75), paint);
+  }
+
+  void _paintNextcloud(Canvas canvas, Size size) {
+    final line = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = size.width * 0.10
+      ..strokeCap = StrokeCap.round
+      ..color = Colors.white;
+    final fill = Paint()
+      ..style = PaintingStyle.fill
+      ..color = Colors.white;
+    final left = Offset(size.width * 0.22, size.height * 0.56);
+    final center = Offset(size.width * 0.50, size.height * 0.56);
+    final right = Offset(size.width * 0.78, size.height * 0.56);
+    canvas.drawLine(left, center, line);
+    canvas.drawLine(center, right, line);
+    canvas.drawCircle(left, size.width * 0.12, fill);
+    canvas.drawCircle(center, size.width * 0.17, fill);
+    canvas.drawCircle(right, size.width * 0.12, fill);
+  }
+
+  void _paintBox(Canvas canvas, Size size) {
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: 'box',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size.width * 0.42,
+          fontWeight: FontWeight.w900,
+          letterSpacing: -1.3,
+          height: 1,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    textPainter.paint(
+      canvas,
+      Offset(
+        (size.width - textPainter.width) / 2,
+        (size.height - textPainter.height) / 2,
+      ),
+    );
+  }
+
+  void _paintBackend(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = size.width * 0.10
+      ..strokeCap = StrokeCap.round
+      ..color = Colors.white;
+    final path = Path()
+      ..moveTo(size.width * 0.22, size.height * 0.68)
+      ..lineTo(size.width * 0.42, size.height * 0.48)
+      ..lineTo(size.width * 0.56, size.height * 0.60)
+      ..lineTo(size.width * 0.78, size.height * 0.34);
+    canvas.drawPath(path, paint);
   }
 }
 
