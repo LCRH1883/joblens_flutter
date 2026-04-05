@@ -320,6 +320,12 @@ class SyncService {
       final projectsById = {
         for (final project in projects) project.id: project,
       };
+      final providerAccounts = await _db.getProviderAccounts();
+      final activeProviderKey = providerAccounts
+          .where((provider) => provider.tokenState != ProviderTokenState.disconnected)
+          .map((provider) => provider.providerType.key)
+          .cast<String?>()
+          .firstWhere((provider) => provider != null, orElse: () => null);
 
       final groupedByRemoteProject = <String, List<_PendingAssetContext>>{};
       for (final entry in jobsByAssetId.entries) {
@@ -393,7 +399,15 @@ class SyncService {
         }
 
         final existingRemoteAssetId = asset.remoteAssetId?.trim() ?? '';
-        if (existingRemoteAssetId.isNotEmpty) {
+        final assetRemoteProvider = asset.remoteProvider?.trim();
+        final needsProviderMigration =
+            existingRemoteAssetId.isNotEmpty &&
+            activeProviderKey != null &&
+            assetRemoteProvider != null &&
+            assetRemoteProvider.isNotEmpty &&
+            assetRemoteProvider != activeProviderKey;
+
+        if (existingRemoteAssetId.isNotEmpty && !needsProviderMigration) {
           try {
             await _moveExistingRemoteAsset(
               asset,

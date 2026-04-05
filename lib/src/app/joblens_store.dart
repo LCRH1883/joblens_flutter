@@ -422,11 +422,20 @@ class JoblensStore extends ChangeNotifier {
 
   Future<void> backfillCloudSyncAfterProviderConnection() async {
     await _runBusy(() async {
+      await _syncService.refreshProviderConnections();
+      final providerAccounts = await _database.getProviderAccounts();
+      final selectedProvider = providerAccounts
+          .where((provider) => provider.tokenState != ProviderTokenState.disconnected)
+          .map((provider) => provider.providerType.key)
+          .cast<String?>()
+          .firstWhere((provider) => provider != null, orElse: () => null);
+
       final assetsNeedingRemoteSync = (await _database.getAssets()).where(
         (asset) =>
             asset.status == AssetStatus.active &&
             asset.localPath.trim().isNotEmpty &&
-            (asset.remoteAssetId == null || asset.remoteAssetId!.isEmpty),
+            ((asset.remoteAssetId == null || asset.remoteAssetId!.isEmpty) ||
+                (selectedProvider != null && asset.remoteProvider != selectedProvider)),
       );
 
       await _syncService.retryFailed();
