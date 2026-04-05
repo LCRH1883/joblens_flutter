@@ -5,6 +5,11 @@
 .env.local
 .infisical.json
 infisical.json
+.env.release
+/release/android/*
+!/release/android/.gitkeep
+/release/ios/*
+!/release/ios/.gitkeep
 *.swp
 *.swo
 *.log
