@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/models/cloud_provider.dart';
@@ -48,11 +49,18 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
 
   @override
   Widget build(BuildContext context) {
+    final runtimeConfig = ref.watch(appRuntimeConfigurationProvider);
     ref.listen(authStateStreamProvider, (_, next) {
       final authState = next.valueOrNull;
       debugPrint(
         'Joblens auth event: ${authState?.event.name ?? 'none'} '
         'user=${authState?.session?.user.id ?? 'none'}',
+      );
+      unawaited(
+        _syncSentryUser(
+          authState?.session?.user,
+          enabled: runtimeConfig.isSentryConfigured,
+        ),
       );
       unawaited(
         ref.read(joblensStoreProvider).syncAuthSession(authState?.session),
@@ -75,7 +83,9 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
     });
 
     final store = ref.watch(joblensStoreListenableProvider);
-    final lightScheme = ColorScheme.fromSeed(seedColor: const Color(0xFF276749));
+    final lightScheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFF276749),
+    );
     final darkScheme = ColorScheme.fromSeed(
       seedColor: const Color(0xFF276749),
       brightness: Brightness.dark,
@@ -84,6 +94,9 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
     return MaterialApp(
       navigatorKey: _navigatorKey,
       scaffoldMessengerKey: _scaffoldMessengerKey,
+      navigatorObservers: runtimeConfig.isSentryConfigured
+          ? [SentryNavigatorObserver()]
+          : const [],
       title: 'Joblens',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -103,6 +116,20 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       },
       home: AppShell(key: _appShellKey),
     );
+  }
+
+  Future<void> _syncSentryUser(User? user, {required bool enabled}) async {
+    if (!enabled) {
+      return;
+    }
+
+    await Sentry.configureScope((scope) {
+      if (user == null) {
+        scope.setUser(null);
+        return;
+      }
+      scope.setUser(SentryUser(id: user.id, email: user.email));
+    });
   }
 
   Future<void> _installAppLinkHandling() async {
@@ -220,11 +247,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _currentTab = 0;
-  final _nonCameraPages = const [
-    GalleryPage(),
-    ProjectsPage(),
-    SettingsPage(),
-  ];
+  final _nonCameraPages = const [GalleryPage(), ProjectsPage(), SettingsPage()];
 
   void showSettingsTab() {
     if (!mounted) {
@@ -291,9 +314,6 @@ class _AppShellState extends State<AppShell> {
     if (_currentTab == 0) {
       return const CameraCapturePage();
     }
-    return IndexedStack(
-      index: _currentTab - 1,
-      children: _nonCameraPages,
-    );
+    return IndexedStack(index: _currentTab - 1, children: _nonCameraPages);
   }
 }

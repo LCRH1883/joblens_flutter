@@ -1,6 +1,8 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'src/app/app.dart';
@@ -67,15 +69,29 @@ Future<void> main() async {
 
   await store.initialize();
 
-  runApp(
-    ProviderScope(
-      overrides: [
-        joblensStoreProvider.overrideWithValue(store),
-        availableCamerasProvider.overrideWithValue(cameras),
-        authConfigurationProvider.overrideWithValue(config.isConfigured),
-        appRuntimeConfigurationProvider.overrideWithValue(config),
-      ],
-      child: const JoblensApp(),
-    ),
+  final app = ProviderScope(
+    overrides: [
+      joblensStoreProvider.overrideWithValue(store),
+      availableCamerasProvider.overrideWithValue(cameras),
+      authConfigurationProvider.overrideWithValue(config.isConfigured),
+      appRuntimeConfigurationProvider.overrideWithValue(config),
+    ],
+    child: const JoblensApp(),
   );
+
+  if (!config.isSentryConfigured) {
+    runApp(app);
+    return;
+  }
+
+  await SentryFlutter.init((options) {
+    options.dsn = config.sentryDsn;
+    options.environment = config.resolvedSentryEnvironment.isNotEmpty
+        ? config.resolvedSentryEnvironment
+        : (kReleaseMode ? 'production' : 'development');
+    options.attachStacktrace = true;
+    options.sendDefaultPii = false;
+    options.enableAutoSessionTracking = false;
+    options.tracesSampleRate = kReleaseMode ? 0.01 : 0.0;
+  }, appRunner: () => runApp(app));
 }

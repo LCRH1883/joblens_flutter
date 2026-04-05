@@ -28,6 +28,11 @@ The Flutter app needs these runtime values in `.env`:
 - `SUPABASE_ANON_KEY`
 - `API_BASE_URL`
 
+Optional mobile-safe values:
+
+- `SENTRY_DSN`
+- `SENTRY_ENVIRONMENT`
+
 For the standard Joblens setup:
 
 - `SUPABASE_URL` should match backend `SUPABASE_URL`
@@ -40,6 +45,8 @@ Example:
 SUPABASE_URL=https://api.joblens.xyz
 SUPABASE_ANON_KEY=...
 API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
+SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0
+SENTRY_ENVIRONMENT=development
 ```
 
 ## Secrets that must not be in Flutter
@@ -53,6 +60,8 @@ The Flutter `.env` must not contain backend-only secrets such as:
 - `ENCRYPTION_MASTER_KEY`
 
 Only mobile-safe values should exist in `/joblens/mobile`.
+
+`SENTRY_DSN` is safe to include in the mobile env. Do not put a Sentry auth token or any backend-only ingestion credentials into Flutter.
 
 ## Important auth callback requirement
 
@@ -163,6 +172,7 @@ Codex can safely:
 
 - export the mobile-safe secrets from Infisical into `.env`
 - verify `.env` contains only `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `API_BASE_URL`
+- optionally verify `SENTRY_DSN` and `SENTRY_ENVIRONMENT` if crash reporting is enabled
 - run Flutter with `--dart-define-from-file=.env`
 - verify analyze, tests, and simulator builds
 

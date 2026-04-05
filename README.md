@@ -57,6 +57,23 @@ The app accepts either:
 
 If `API_BASE_URL` is omitted, the app defaults to `${SUPABASE_URL}/functions/v1/api/v1`.
 
+For crash reporting, the app also accepts:
+
+- `SENTRY_DSN`
+- `SENTRY_ENVIRONMENT` (optional)
+
+If `SENTRY_DSN` is omitted, Sentry stays disabled and the app runs normally.
+
+Example with Sentry enabled:
+
+```text
+SUPABASE_URL=https://api.joblens.xyz
+SUPABASE_ANON_KEY=...
+API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
+SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0
+SENTRY_ENVIRONMENT=development
+```
+
 ## Auth Notes
 
 - Joblens app login uses Supabase Auth email/password sessions.
