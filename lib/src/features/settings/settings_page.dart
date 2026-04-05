@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app/joblens_store.dart';
+import '../../core/models/app_theme_mode.dart';
 import '../auth/auth_page.dart';
 import '../auth/auth_state.dart';
 import 'storage_page.dart';
@@ -46,6 +47,14 @@ class SettingsPage extends ConsumerWidget {
           ),
           Card(
             child: ListTile(
+              leading: const Icon(Icons.palette_outlined),
+              title: const Text('Appearance'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _openAppearancePage(context),
+            ),
+          ),
+          Card(
+            child: ListTile(
               title: const Text('Library status'),
               subtitle: Text(
                 '${store.assets.length} photos • ${store.projects.length} projects • ${store.syncJobs.length} sync jobs',
@@ -75,10 +84,69 @@ class SettingsPage extends ConsumerWidget {
     ).push(MaterialPageRoute<void>(builder: (_) => const StoragePage()));
   }
 
+  static Future<void> _openAppearancePage(BuildContext context) {
+    return Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const _AppearancePage()));
+  }
+
   static Future<void> _openAccountPage(BuildContext context) {
     return Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const _AccountPage()));
+  }
+}
+
+class _AppearancePage extends ConsumerWidget {
+  const _AppearancePage();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final store = ref.watch(joblensStoreListenableProvider);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Appearance')),
+      body: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'App theme',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SegmentedButton<AppThemeMode>(
+                    segments: AppThemeMode.values
+                        .map(
+                          (mode) => ButtonSegment<AppThemeMode>(
+                            value: mode,
+                            label: Text(mode.label),
+                          ),
+                        )
+                        .toList(growable: false),
+                    selected: {store.appThemeMode},
+                    onSelectionChanged: (selection) {
+                      final nextMode = selection.firstOrNull;
+                      if (nextMode == null) {
+                        return;
+                      }
+                      ref.read(joblensStoreProvider).setAppThemeMode(nextMode);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

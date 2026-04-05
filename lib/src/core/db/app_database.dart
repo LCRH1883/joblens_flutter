@@ -4,6 +4,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/cloud_provider.dart';
+import '../models/app_theme_mode.dart';
 import '../models/library_import_mode.dart';
 import '../models/photo_asset.dart';
 import '../models/project.dart';
@@ -301,6 +302,27 @@ class AppDatabase {
   Future<void> setProjectSortMode(ProjectSortMode mode) async {
     await _db.insert('app_state', {
       'key': 'project_sort_mode',
+      'value': mode.storageValue,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<AppThemeMode> getAppThemeMode() async {
+    final rows = await _db.query(
+      'app_state',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['app_theme_mode'],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return AppThemeMode.system;
+    }
+    return AppThemeMode.fromStorage(rows.first['value'] as String?);
+  }
+
+  Future<void> setAppThemeMode(AppThemeMode mode) async {
+    await _db.insert('app_state', {
+      'key': 'app_theme_mode',
       'value': mode.storageValue,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }

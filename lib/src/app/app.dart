@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/models/cloud_provider.dart';
+import '../core/models/app_theme_mode.dart';
 import '../features/auth/auth_page.dart';
 import '../features/auth/auth_state.dart';
 import '../features/auth/password_reset_page.dart';
@@ -73,7 +74,12 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       unawaited(_presentAuthPrompt());
     });
 
-    final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF276749));
+    final store = ref.watch(joblensStoreListenableProvider);
+    final lightScheme = ColorScheme.fromSeed(seedColor: const Color(0xFF276749));
+    final darkScheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFF276749),
+      brightness: Brightness.dark,
+    );
 
     return MaterialApp(
       navigatorKey: _navigatorKey,
@@ -82,9 +88,19 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: scheme,
+        colorScheme: lightScheme,
         appBarTheme: const AppBarTheme(centerTitle: false),
       ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: darkScheme,
+        appBarTheme: const AppBarTheme(centerTitle: false),
+      ),
+      themeMode: switch (store.appThemeMode) {
+        AppThemeMode.system => ThemeMode.system,
+        AppThemeMode.light => ThemeMode.light,
+        AppThemeMode.dark => ThemeMode.dark,
+      },
       home: AppShell(key: _appShellKey),
     );
   }

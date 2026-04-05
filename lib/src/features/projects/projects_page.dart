@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../app/joblens_store.dart';
+import '../../core/models/photo_asset.dart';
 import '../../core/models/project.dart';
 import 'project_detail_page.dart';
 
@@ -15,13 +16,9 @@ class ProjectsPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final store = ref.watch(joblensStoreListenableProvider);
     final projects = store.projects;
-    final assetsById = <String, String>{};
+    final latestAssetByProjectId = <int, PhotoAsset>{};
     for (final asset in store.assets) {
-      final thumbPath = asset.thumbPath.trim();
-      if (thumbPath.isEmpty) {
-        continue;
-      }
-      assetsById[asset.id] = thumbPath;
+      latestAssetByProjectId.putIfAbsent(asset.projectId, () => asset);
     }
 
     return Scaffold(
@@ -60,9 +57,7 @@ class ProjectsPage extends ConsumerWidget {
           itemBuilder: (context, index) {
             final project = projects[index];
             final count = store.projectCounts[project.id] ?? 0;
-            final coverPath = project.coverAssetId == null
-                ? null
-                : assetsById[project.coverAssetId!];
+            final latestAsset = latestAssetByProjectId[project.id];
 
             return Card(
               margin: const EdgeInsets.only(bottom: 10),
@@ -76,16 +71,12 @@ class ProjectsPage extends ConsumerWidget {
                 },
                 leading: ClipRRect(
                   borderRadius: BorderRadius.circular(10),
-                  child: coverPath != null
-                      ? Image.file(
-                          File(coverPath),
-                          width: 56,
-                          height: 56,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) =>
-                              _placeholder(context),
-                        )
-                      : _placeholder(context),
+                  child: latestAsset == null
+                      ? _placeholder(context)
+                      : _ProjectCoverThumbnail(
+                          asset: latestAsset,
+                          store: store,
+                        ),
                 ),
                 title: Text(project.name),
                 subtitle: _ProjectSubtitle(
@@ -185,6 +176,107 @@ class ProjectsPage extends ConsumerWidget {
       }
     }
     return null;
+  }
+}
+
+class _ProjectCoverThumbnail extends StatefulWidget {
+  const _ProjectCoverThumbnail({required this.asset, required this.store});
+
+  final PhotoAsset asset;
+  final JoblensStore store;
+
+  @override
+  State<_ProjectCoverThumbnail> createState() => _ProjectCoverThumbnailState();
+}
+
+class _ProjectCoverThumbnailState extends State<_ProjectCoverThumbnail> {
+  bool _forceRefresh = false;
+  bool _localThumbFailed = false;
+
+  @override
+  void didUpdateWidget(covariant _ProjectCoverThumbnail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.asset.thumbPath != widget.asset.thumbPath) {
+      _localThumbFailed = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final thumbPath = widget.asset.thumbPath.trim();
+    if (thumbPath.isNotEmpty && !_localThumbFailed) {
+      return Image.file(
+        File(thumbPath),
+        width: 56,
+        height: 56,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (context, error, stackTrace) {
+          if (!_localThumbFailed) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) {
+                return;
+              }
+              setState(() {
+                _localThumbFailed = true;
+              });
+            });
+          }
+          return _placeholder(context, loading: true);
+        },
+      );
+    }
+
+    return FutureBuilder<String?>(
+      future: widget.store.resolveThumbnailUrl(
+        widget.asset,
+        forceRefresh: _forceRefresh,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return _placeholder(context, loading: true);
+        }
+        final url = snapshot.data;
+        if (url == null || url.isEmpty) {
+          return _placeholder(context);
+        }
+        return Image.network(
+          url,
+          width: 56,
+          height: 56,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            if (!_forceRefresh) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) {
+                  return;
+                }
+                setState(() {
+                  _forceRefresh = true;
+                });
+              });
+            }
+            return _placeholder(context);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _placeholder(BuildContext context, {bool loading = false}) {
+    return Container(
+      width: 56,
+      height: 56,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      alignment: Alignment.center,
+      child: loading
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.workspaces_outline),
+    );
   }
 }
 

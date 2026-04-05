@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart' show Session;
 
 import '../core/db/app_database.dart';
 import '../core/api/api_exception.dart';
+import '../core/models/app_theme_mode.dart';
 import '../core/models/cloud_provider.dart';
 import '../core/models/library_import_mode.dart';
 import '../core/models/photo_asset.dart';
@@ -62,6 +63,7 @@ class JoblensStore extends ChangeNotifier {
   int _reauthenticationRequestCount = 0;
   Future<void> _pendingBackgroundSync = Future.value();
   ProjectSortMode _projectSortMode = ProjectSortMode.name;
+  AppThemeMode _appThemeMode = AppThemeMode.system;
   LibraryImportMode _libraryImportMode = LibraryImportMode.copy;
 
   List<PhotoAsset> _assets = const [];
@@ -82,6 +84,7 @@ class JoblensStore extends ChangeNotifier {
   List<SyncJob> get syncJobs => _syncJobs;
   List<SyncLogEntry> get syncLogs => _syncLogs;
   ProjectSortMode get projectSortMode => _projectSortMode;
+  AppThemeMode get appThemeMode => _appThemeMode;
   LibraryImportMode get libraryImportMode => _libraryImportMode;
 
   Future<void> initialize() async {
@@ -591,6 +594,15 @@ class JoblensStore extends ChangeNotifier {
     _notifyListenersIfActive();
   }
 
+  Future<void> setAppThemeMode(AppThemeMode mode) async {
+    if (_appThemeMode == mode) {
+      return;
+    }
+    _appThemeMode = mode;
+    await _database.setAppThemeMode(mode);
+    _notifyListenersIfActive();
+  }
+
   Future<void> setLibraryImportMode(LibraryImportMode mode) async {
     if (_libraryImportMode == mode) {
       return;
@@ -714,6 +726,7 @@ class JoblensStore extends ChangeNotifier {
     _syncJobs = await _database.getSyncJobs();
     _syncLogs = await _database.getSyncLogs();
     _projectSortMode = await _database.getProjectSortMode();
+    _appThemeMode = await _database.getAppThemeMode();
     _libraryImportMode = await _database.getLibraryImportMode();
   }
 
