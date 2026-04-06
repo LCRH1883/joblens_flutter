@@ -41,7 +41,7 @@ class JoblensStore extends ChangeNotifier {
     required SyncService syncService,
     ImagePicker? imagePicker,
     String? Function()? currentAuthUserIdProvider,
-  Future<void> Function()? signOutAction,
+    Future<void> Function()? signOutAction,
   }) : _database = database,
        _mediaStorage = mediaStorage,
        _syncService = syncService,
@@ -319,8 +319,14 @@ class JoblensStore extends ChangeNotifier {
         updatedAt: DateTime.now(),
         syncFolderMap: const {},
       );
-      await _syncService.syncProject(localProject);
-      await refresh();
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
+      unawaited(
+        _queueBackgroundCloudWork(
+          action: () => _syncService.syncProject(localProject),
+          refresh: true,
+        ),
+      );
     });
   }
 
@@ -348,8 +354,14 @@ class JoblensStore extends ChangeNotifier {
       final project = (await _database.getProjects()).firstWhere(
         (item) => item.id == projectId,
       );
-      await _syncService.syncProject(project);
-      await refresh();
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
+      unawaited(
+        _queueBackgroundCloudWork(
+          action: () => _syncService.syncProject(project),
+          refresh: true,
+        ),
+      );
     });
   }
 
@@ -363,7 +375,8 @@ class JoblensStore extends ChangeNotifier {
     }
     await _runBusy(() async {
       await _database.updateProjectNotes(projectId, normalized);
-      await refresh();
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
     });
   }
 
@@ -373,7 +386,8 @@ class JoblensStore extends ChangeNotifier {
   ) async {
     await _runBusy(() async {
       await _database.updateProjectRemoteId(projectId, remoteProjectId);
-      await refresh();
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
     });
   }
 
@@ -396,22 +410,31 @@ class JoblensStore extends ChangeNotifier {
         projectId,
         fallbackProjectId: _defaultProjectId,
       );
-      if (project.remoteProjectId != null &&
-          project.remoteProjectId!.isNotEmpty) {
-        try {
-          await _syncService.archiveProject(project.remoteProjectId!);
-        } catch (error, stackTrace) {
-          if (kDebugMode) {
-            debugPrint('Archive project failed: $error\n$stackTrace');
-          }
-        }
-      }
       final updatedAssets = await _database.getAssets();
-      await _syncService.enqueueAssets(
-        updatedAssets.where((asset) => movedAssetIds.contains(asset.id)),
+      final movedAssets = updatedAssets
+          .where((asset) => movedAssetIds.contains(asset.id))
+          .toList(growable: false);
+      await _syncService.enqueueAssets(movedAssets);
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
+      unawaited(
+        _queueBackgroundCloudWork(
+          action: () async {
+            if (project.remoteProjectId != null &&
+                project.remoteProjectId!.isNotEmpty) {
+              try {
+                await _syncService.archiveProject(project.remoteProjectId!);
+              } catch (error, stackTrace) {
+                if (kDebugMode) {
+                  debugPrint('Archive project failed: $error\n$stackTrace');
+                }
+              }
+            }
+          },
+          processQueue: true,
+          refresh: true,
+        ),
       );
-      unawaited(_syncService.processQueue(await _database.getProjects()));
-      await refresh();
     });
   }
 
@@ -452,13 +475,19 @@ class JoblensStore extends ChangeNotifier {
   Future<void> softDeleteAsset(String assetId) async {
     await _runBusy(() async {
       final asset = await _database.getAssetById(assetId);
+      await _database.softDeleteAsset(assetId);
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
       if (asset != null &&
           asset.remoteAssetId != null &&
           asset.remoteAssetId!.isNotEmpty) {
-        await _syncService.deleteRemoteAsset(asset);
+        unawaited(
+          _queueBackgroundCloudWork(
+            action: () => _syncService.deleteRemoteAsset(asset),
+            refresh: true,
+          ),
+        );
       }
-      await _database.softDeleteAsset(assetId);
-      await refresh();
     });
   }
 
@@ -470,15 +499,29 @@ class JoblensStore extends ChangeNotifier {
 
     await _runBusy(() async {
       final assets = await _database.getAssetsByIds(uniqueIds);
-      for (final asset in assets) {
-        if (asset.remoteAssetId != null && asset.remoteAssetId!.isNotEmpty) {
-          await _syncService.deleteRemoteAsset(asset);
-        }
-      }
       for (final assetId in uniqueIds) {
         await _database.softDeleteAsset(assetId);
       }
-      await refresh();
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
+      final remotelySyncedAssets = assets
+          .where(
+            (asset) =>
+                asset.remoteAssetId != null && asset.remoteAssetId!.isNotEmpty,
+          )
+          .toList(growable: false);
+      if (remotelySyncedAssets.isNotEmpty) {
+        unawaited(
+          _queueBackgroundCloudWork(
+            action: () async {
+              for (final asset in remotelySyncedAssets) {
+                await _syncService.deleteRemoteAsset(asset);
+              }
+            },
+            refresh: true,
+          ),
+        );
+      }
     });
   }
 
@@ -502,7 +545,10 @@ class JoblensStore extends ChangeNotifier {
       await _syncService.refreshProviderConnections();
       final providerAccounts = await _database.getProviderAccounts();
       final selectedProvider = providerAccounts
-          .where((provider) => provider.tokenState != ProviderTokenState.disconnected)
+          .where(
+            (provider) =>
+                provider.tokenState != ProviderTokenState.disconnected,
+          )
           .map((provider) => provider.providerType.key)
           .cast<String?>()
           .firstWhere((provider) => provider != null, orElse: () => null);
@@ -512,7 +558,8 @@ class JoblensStore extends ChangeNotifier {
             asset.status == AssetStatus.active &&
             asset.localPath.trim().isNotEmpty &&
             ((asset.remoteAssetId == null || asset.remoteAssetId!.isEmpty) ||
-                (selectedProvider != null && asset.remoteProvider != selectedProvider)),
+                (selectedProvider != null &&
+                    asset.remoteProvider != selectedProvider)),
       );
 
       await _syncService.retryFailed();
@@ -630,7 +677,8 @@ class JoblensStore extends ChangeNotifier {
       if (!permission.hasAccess) {
         throw const ApiException(
           code: 'phone_storage_permission_denied',
-          message: 'Allow photo library access before copying photos to phone storage.',
+          message:
+              'Allow photo library access before copying photos to phone storage.',
         );
       }
 
@@ -731,17 +779,32 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> _runBackgroundSyncRefresh() {
+    return _queueBackgroundCloudWork(processQueue: true, refresh: true);
+  }
+
+  Future<void> _queueBackgroundCloudWork({
+    Future<void> Function()? action,
+    bool processQueue = false,
+    bool refresh = false,
+  }) {
     _pendingBackgroundSync = _pendingBackgroundSync.then((_) async {
       if (_isDisposed) {
         return;
       }
       try {
-        final projects = await _database.getProjects();
-        await _syncService.processQueue(projects);
+        if (action != null) {
+          await action();
+        }
+        if (processQueue) {
+          final projects = await _database.getProjects();
+          await _syncService.processQueue(projects);
+        }
         if (_isDisposed) {
           return;
         }
-        await refresh();
+        if (refresh) {
+          await this.refresh();
+        }
       } catch (error, stackTrace) {
         if (_isDisposed) {
           return;
@@ -852,10 +915,7 @@ class JoblensStore extends ChangeNotifier {
     return tempFile;
   }
 
-  List<Project> _sortProjects(
-    List<Project> projects,
-    ProjectSortMode mode,
-  ) {
+  List<Project> _sortProjects(List<Project> projects, ProjectSortMode mode) {
     final sorted = List<Project>.from(projects);
     sorted.sort((a, b) {
       final aIsInbox = a.name == 'Inbox';

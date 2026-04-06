@@ -86,3 +86,32 @@ The Flutter app uses `sentry_flutter` only. There are no AndroidManifest or iOS 
 /Users/lcrh/Tools/flutter/bin/flutter analyze
 /Users/lcrh/Tools/flutter/bin/flutter test
 ```
+
+## Versioning
+
+See [`VERSIONING.md`](/Volumes/ExData/Projects/Joblens/joblens_flutter/VERSIONING.md) for the shared Android/iOS release versioning rules.
+
+Set the shared mobile version with:
+
+```bash
+cd /Volumes/ExData/Projects/Joblens/joblens_flutter
+bash scripts/set_mobile_version.sh v0.1.0
+```
+
+## Release Notes
+
+Use the per-platform changelogs to track every user-facing release:
+
+- [`release/android/CHANGELOG.md`](/Volumes/ExData/Projects/Joblens/joblens_flutter/release/android/CHANGELOG.md)
+- [`release/ios/CHANGELOG.md`](/Volumes/ExData/Projects/Joblens/joblens_flutter/release/ios/CHANGELOG.md)
+
+To make this maintainable, Joblens also uses release fragments:
+
+- add a fragment when a feature, major change, or major bug fix lands
+- generate the next version entry with `bash scripts/prepare_release_notes.sh v0.1.1`
+
+Create a new fragment with:
+
+```bash
+bash scripts/new_release_fragment.sh both feature some-change-slug
+```
