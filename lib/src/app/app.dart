@@ -49,7 +49,6 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
 
   @override
   Widget build(BuildContext context) {
-    final runtimeConfig = ref.watch(appRuntimeConfigurationProvider);
     ref.listen(authStateStreamProvider, (_, next) {
       final authState = next.valueOrNull;
       debugPrint(
@@ -57,13 +56,17 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
         'user=${authState?.session?.user.id ?? 'none'}',
       );
       unawaited(
-        _syncSentryUser(
-          authState?.session?.user,
-          enabled: runtimeConfig.isSentryConfigured,
-        ),
+        ref.read(joblensStoreProvider).syncAuthSession(authState?.session),
       );
       unawaited(
-        ref.read(joblensStoreProvider).syncAuthSession(authState?.session),
+        Future<void>(() async {
+          await Sentry.configureScope((scope) async {
+            final user = authState?.session?.user;
+            await scope.setUser(
+              user == null ? null : SentryUser(id: user.id, email: user.email),
+            );
+          });
+        }),
       );
 
       if (authState?.event == AuthChangeEvent.passwordRecovery) {
@@ -94,9 +97,6 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
     return MaterialApp(
       navigatorKey: _navigatorKey,
       scaffoldMessengerKey: _scaffoldMessengerKey,
-      navigatorObservers: runtimeConfig.isSentryConfigured
-          ? [SentryNavigatorObserver()]
-          : const [],
       title: 'Joblens',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -109,6 +109,7 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
         colorScheme: darkScheme,
         appBarTheme: const AppBarTheme(centerTitle: false),
       ),
+      navigatorObservers: [SentryNavigatorObserver()],
       themeMode: switch (store.appThemeMode) {
         AppThemeMode.system => ThemeMode.system,
         AppThemeMode.light => ThemeMode.light,
@@ -116,20 +117,6 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       },
       home: AppShell(key: _appShellKey),
     );
-  }
-
-  Future<void> _syncSentryUser(User? user, {required bool enabled}) async {
-    if (!enabled) {
-      return;
-    }
-
-    await Sentry.configureScope((scope) {
-      if (user == null) {
-        scope.setUser(null);
-        return;
-      }
-      scope.setUser(SentryUser(id: user.id, email: user.email));
-    });
   }
 
   Future<void> _installAppLinkHandling() async {

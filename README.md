@@ -57,22 +57,19 @@ The app accepts either:
 
 If `API_BASE_URL` is omitted, the app defaults to `${SUPABASE_URL}/functions/v1/api/v1`.
 
-For crash reporting, the app also accepts:
+Optional crash reporting values:
 
 - `SENTRY_DSN`
-- `SENTRY_ENVIRONMENT` (optional)
+- `SENTRY_ENVIRONMENT`
 
-If `SENTRY_DSN` is omitted, Sentry stays disabled and the app runs normally.
-
-Example with Sentry enabled:
+For the current GlitchTip setup, the DSN host should use the public ingest domain, for example:
 
 ```text
-SUPABASE_URL=https://api.joblens.xyz
-SUPABASE_ANON_KEY=...
-API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
-SENTRY_DSN=https://examplePublicKey@o0.ingest.sentry.io/0
-SENTRY_ENVIRONMENT=development
+SENTRY_DSN=https://<public-key>@crash.joblens.xyz/<project-id>
+SENTRY_ENVIRONMENT=production
 ```
+
+The Flutter app uses `sentry_flutter` only. There are no AndroidManifest or iOS plist crash-reporting overrides required for basic setup.
 
 ## Auth Notes
 

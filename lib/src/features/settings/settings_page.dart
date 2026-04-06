@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
@@ -63,7 +64,7 @@ class SettingsPage extends ConsumerWidget {
               ),
             ),
           ),
-          if (runtimeConfig.isSentryConfigured)
+          if (kDebugMode && runtimeConfig.isSentryConfigured)
             Card(
               child: ListTile(
                 leading: const Icon(Icons.bug_report_outlined),
@@ -107,19 +108,16 @@ class SettingsPage extends ConsumerWidget {
   }
 
   static Future<void> _sendTestCrashReport(BuildContext context) async {
-    try {
-      throw StateError('Joblens test GlitchTip error');
-    } catch (error, stackTrace) {
-      await Sentry.captureException(error, stackTrace: stackTrace);
-    }
-
+    await Sentry.captureException(
+      StateError('Joblens test GlitchTip event'),
+      stackTrace: StackTrace.current,
+    );
     if (!context.mounted) {
       return;
     }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Sent a test crash report to GlitchTip.')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Test crash report sent.')));
   }
 }
 

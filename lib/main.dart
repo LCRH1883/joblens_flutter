@@ -1,5 +1,4 @@
 import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
@@ -21,6 +20,28 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final config = await AppRuntimeConfiguration.load();
+  if (config.isSentryConfigured) {
+    await SentryFlutter.init(
+      (options) {
+        options.dsn = config.sentryDsn;
+        options.environment = config.sentryEnvironment.trim().isEmpty
+            ? 'development'
+            : config.sentryEnvironment.trim();
+        options.tracesSampleRate = 0.01;
+        options.enableAutoSessionTracking = false;
+        options.sendDefaultPii = false;
+      },
+      appRunner: () async {
+        await _runJoblensApp(config);
+      },
+    );
+    return;
+  }
+
+  await _runJoblensApp(config);
+}
+
+Future<void> _runJoblensApp(AppRuntimeConfiguration config) async {
   if (config.isConfigured) {
     await Supabase.initialize(
       url: config.supabaseUrl,
@@ -78,20 +99,5 @@ Future<void> main() async {
     ],
     child: const JoblensApp(),
   );
-
-  if (!config.isSentryConfigured) {
-    runApp(app);
-    return;
-  }
-
-  await SentryFlutter.init((options) {
-    options.dsn = config.sentryDsn;
-    options.environment = config.resolvedSentryEnvironment.isNotEmpty
-        ? config.resolvedSentryEnvironment
-        : (kReleaseMode ? 'production' : 'development');
-    options.attachStacktrace = true;
-    options.sendDefaultPii = false;
-    options.enableAutoSessionTracking = false;
-    options.tracesSampleRate = kReleaseMode ? 0.01 : 0.0;
-  }, appRunner: () => runApp(app));
+  runApp(app);
 }

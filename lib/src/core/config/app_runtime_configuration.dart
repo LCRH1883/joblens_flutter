@@ -85,8 +85,6 @@ class AppRuntimeConfiguration {
       ? apiBaseUrlOverride.trim()
       : '${supabaseUrl.trim()}/functions/v1/api/v1';
 
-  String get resolvedSentryEnvironment => sentryEnvironment.trim();
-
   String get emailAuthRedirectUri {
     if (apiBaseUrl.trim().isNotEmpty) {
       return Uri.parse(apiBaseUrl).resolve('auth/callback').toString();
