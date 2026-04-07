@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'package:joblens_flutter/src/core/api/api_exception.dart';
 import 'package:joblens_flutter/src/core/api/backend_api_models.dart';
 import 'package:joblens_flutter/src/core/api/backend_auth.dart';
 import 'package:joblens_flutter/src/core/api/joblens_backend_api_client.dart';
@@ -22,53 +23,56 @@ void main() {
     databaseFactory = databaseFactoryFfi;
   });
 
-  test('duplicate bulk-check path moves remote asset into destination project', () async {
-    final harness = await _createHarness();
-    addTearDown(harness.dispose);
+  test(
+    'duplicate bulk-check path moves remote asset into destination project',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
 
-    final fakeClient = _FakeBackendApiClient(
-      bulkCheckResponse: BulkCheckAssetsResponse(
+      final fakeClient = _FakeBackendApiClient(
+        bulkCheckResponse: BulkCheckAssetsResponse(
+          projectId: 'remote-project-1',
+          duplicateCount: 1,
+          missingCount: 0,
+          results: [
+            BulkCheckResult(
+              deviceAssetId: 'asset-local',
+              sha256: 'a' * 64,
+              status: 'duplicate',
+              assetId: 'asset-remote',
+            ),
+          ],
+        ),
         projectId: 'remote-project-1',
-        duplicateCount: 1,
-        missingCount: 0,
-        results: [
-          BulkCheckResult(
-            deviceAssetId: 'asset-local',
-            sha256: 'a' * 64,
-            status: 'duplicate',
-            assetId: 'asset-remote',
-          ),
-        ],
-      ),
-      projectId: 'remote-project-1',
-    );
-    final syncService = SyncService(
-      harness.database,
-      backendApiClient: fakeClient,
-      mediaStorage: harness.mediaStorage,
-    );
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
 
-    final project = await harness.createProject('Library');
-    final asset = await harness.ingestAsset(projectId: project.id, seed: 1);
-    await harness.database.enqueueSyncJob(
-      assetId: asset.id,
-      projectId: asset.projectId,
-      provider: CloudProviderType.backend,
-    );
+      final project = await harness.createProject('Library');
+      final asset = await harness.ingestAsset(projectId: project.id, seed: 1);
+      await harness.database.enqueueSyncJob(
+        assetId: asset.id,
+        projectId: asset.projectId,
+        provider: CloudProviderType.backend,
+      );
 
-    await syncService.processQueue([project]);
+      await syncService.processQueue([project]);
 
-    final updated = await harness.database.getAssetById(asset.id);
-    final jobs = await harness.database.getSyncJobs();
-    expect(updated?.remoteAssetId, 'asset-remote');
-    expect(updated?.cloudState, AssetCloudState.localAndCloud);
-    expect(updated?.remoteProvider, CloudProviderType.googleDrive.key);
-    expect(updated?.remoteFileId, 'provider-file-moved');
-    expect(updated?.uploadPath, 'Joblens/Library/asset-local.jpg');
-    expect(fakeClient.uploadCalls, 0);
-    expect(fakeClient.moveCalls, 1);
-    expect(jobs.single.state, SyncJobState.done);
-  });
+      final updated = await harness.database.getAssetById(asset.id);
+      final jobs = await harness.database.getSyncJobs();
+      expect(updated?.remoteAssetId, 'asset-remote');
+      expect(updated?.cloudState, AssetCloudState.localAndCloud);
+      expect(updated?.remoteProvider, CloudProviderType.googleDrive.key);
+      expect(updated?.remoteFileId, 'provider-file-moved');
+      expect(updated?.uploadPath, 'Joblens/Library/asset-local.jpg');
+      expect(fakeClient.uploadCalls, 0);
+      expect(fakeClient.moveCalls, 1);
+      expect(jobs.single.state, SyncJobState.done);
+    },
+  );
 
   test('missing asset path prepares upload, uploads, and commits', () async {
     final harness = await _createHarness();
@@ -137,6 +141,253 @@ void main() {
     expect(jobs.single.state, SyncJobState.done);
   });
 
+  test(
+    'stale sync snapshot reruns and flushes the updated queued job',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      late int destinationProjectId;
+      final fakeClient = _FakeBackendApiClient(
+        bulkCheckResponse: BulkCheckAssetsResponse(
+          projectId: 'remote-project-1',
+          duplicateCount: 0,
+          missingCount: 1,
+          results: [
+            BulkCheckResult(
+              deviceAssetId: 'asset-local',
+              sha256: 'a' * 64,
+              status: 'missing',
+              assetId: null,
+            ),
+          ],
+        ),
+        prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
+          'status': 'upload_required',
+          'provider': 'google_drive',
+          'uploadSessionId': 'session-stale',
+          'remotePath': 'Joblens/Inbox/stale.jpg',
+          'remoteFileId': 'provider-file-stale',
+          'upload': {
+            'strategy': 'single_put',
+            'url': 'https://upload.example/file',
+            'method': 'PUT',
+            'headers': {'x-upload-token': 'abc'},
+          },
+        }),
+        commitResponse: CommitAssetResponse.fromMap({
+          'assetId': 'asset-remote-stale',
+          'duplicate': false,
+          'committed': true,
+          'provider': 'google_drive',
+          'remoteFileId': 'provider-file-stale',
+          'remotePath': 'Joblens/Inbox/stale.jpg',
+        }),
+        projectId: 'remote-project-1',
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+      );
+
+      final sourceProject = await harness.createProject('Inbox A');
+      final destinationProject = await harness.createProject('Inbox B');
+      destinationProjectId = destinationProject.id;
+      final asset = await harness.ingestAsset(
+        projectId: sourceProject.id,
+        seed: 42,
+      );
+      await harness.database.enqueueSyncJob(
+        assetId: asset.id,
+        projectId: asset.projectId,
+        provider: CloudProviderType.backend,
+      );
+
+      fakeClient.onBulkCheck = () async {
+        await harness.database.moveAssetToProject(
+          asset.id,
+          destinationProjectId,
+        );
+        await harness.database.enqueueSyncJob(
+          assetId: asset.id,
+          projectId: destinationProjectId,
+          provider: CloudProviderType.backend,
+        );
+      };
+
+      await syncService.processQueue([sourceProject, destinationProject]);
+
+      final jobs = await harness.database.getSyncJobs();
+      final updatedAsset = await harness.database.getAssetById(asset.id);
+      expect(fakeClient.uploadCalls, 1);
+      expect(updatedAsset?.projectId, destinationProjectId);
+      expect(updatedAsset?.remoteAssetId, 'asset-remote-stale');
+      expect(jobs.single.projectId, destinationProjectId);
+      expect(jobs.single.state, SyncJobState.done);
+    },
+  );
+
+  test(
+    'duplicate commit collision recovers through bulk-check fallback',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        bulkCheckResponseSequence: [
+          BulkCheckAssetsResponse(
+            projectId: 'remote-project-1',
+            duplicateCount: 0,
+            missingCount: 1,
+            results: [
+              BulkCheckResult(
+                deviceAssetId: 'asset-local',
+                sha256: 'a' * 64,
+                status: 'missing',
+                assetId: null,
+              ),
+            ],
+          ),
+          BulkCheckAssetsResponse(
+            projectId: 'remote-project-1',
+            duplicateCount: 1,
+            missingCount: 0,
+            results: [
+              BulkCheckResult(
+                deviceAssetId: 'asset-local',
+                sha256: 'a' * 64,
+                status: 'duplicate',
+                assetId: 'asset-remote-duplicate',
+              ),
+            ],
+          ),
+        ],
+        prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
+          'status': 'upload_required',
+          'provider': 'google_drive',
+          'uploadSessionId': 'session-dup',
+          'remotePath': 'Joblens/Library/dup.jpg',
+          'remoteFileId': 'provider-file-dup',
+          'upload': {
+            'strategy': 'single_put',
+            'url': 'https://upload.example/file',
+            'method': 'PUT',
+            'headers': {'x-upload-token': 'abc'},
+          },
+        }),
+        commitException: const ApiException(
+          code: 'asset_commit_failed',
+          message:
+              'duplicate key value violates unique constraint "assets_user_id_sha256_key"',
+          statusCode: 400,
+        ),
+        projectId: 'remote-project-1',
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+      );
+
+      final project = await harness.createProject('Library');
+      final asset = await harness.ingestAsset(projectId: project.id, seed: 22);
+      await harness.database.enqueueSyncJob(
+        assetId: asset.id,
+        projectId: asset.projectId,
+        provider: CloudProviderType.backend,
+      );
+
+      await syncService.processQueue([project]);
+
+      final updated = await harness.database.getAssetById(asset.id);
+      final jobs = await harness.database.getSyncJobs();
+      expect(fakeClient.uploadCalls, 1);
+      expect(updated?.remoteAssetId, 'asset-remote-duplicate');
+      expect(updated?.remoteProvider, CloudProviderType.googleDrive.key);
+      expect(updated?.remoteFileId, 'provider-file-dup');
+      expect(updated?.uploadPath, 'Joblens/Library/dup.jpg');
+      expect(jobs.single.state, SyncJobState.done);
+    },
+  );
+
+  test(
+    'outer upload failure recovers duplicate collision through bulk-check fallback',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        bulkCheckResponseSequence: [
+          BulkCheckAssetsResponse(
+            projectId: 'remote-project-1',
+            duplicateCount: 0,
+            missingCount: 1,
+            results: [
+              BulkCheckResult(
+                deviceAssetId: 'asset-local',
+                sha256: 'a' * 64,
+                status: 'missing',
+                assetId: null,
+              ),
+            ],
+          ),
+          BulkCheckAssetsResponse(
+            projectId: 'remote-project-1',
+            duplicateCount: 1,
+            missingCount: 0,
+            results: [
+              BulkCheckResult(
+                deviceAssetId: 'asset-local',
+                sha256: 'a' * 64,
+                status: 'duplicate',
+                assetId: 'asset-remote-duplicate-outer',
+              ),
+            ],
+          ),
+        ],
+        prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
+          'status': 'upload_required',
+          'provider': 'google_drive',
+          'uploadSessionId': 'session-dup-outer',
+          'remotePath': 'Joblens/Library/dup-outer.jpg',
+          'remoteFileId': 'provider-file-dup-outer',
+          'upload': {
+            'strategy': 'single_put',
+            'url': 'https://upload.example/file',
+            'method': 'PUT',
+            'headers': {'x-upload-token': 'abc'},
+          },
+        }),
+        commitError: Exception(
+          'duplicate key value violates unique constraint "assets_user_id_sha256_key"',
+        ),
+        projectId: 'remote-project-1',
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+      );
+
+      final project = await harness.createProject('Library');
+      final asset = await harness.ingestAsset(projectId: project.id, seed: 23);
+      await harness.database.enqueueSyncJob(
+        assetId: asset.id,
+        projectId: asset.projectId,
+        provider: CloudProviderType.backend,
+      );
+
+      await syncService.processQueue([project]);
+
+      final updated = await harness.database.getAssetById(asset.id);
+      final jobs = await harness.database.getSyncJobs();
+      expect(fakeClient.uploadCalls, 1);
+      expect(updated?.remoteAssetId, 'asset-remote');
+      expect(updated?.remoteProvider, CloudProviderType.googleDrive.key);
+      expect(updated?.remoteFileId, 'provider-file-moved');
+      expect(updated?.uploadPath, 'Joblens/Library/asset-local.jpg');
+      expect(jobs.single.state, SyncJobState.done);
+    },
+  );
+
   test('existing remote asset moves directly without re-uploading', () async {
     final harness = await _createHarness();
     addTearDown(harness.dispose);
@@ -192,73 +443,83 @@ void main() {
     expect(jobs.single.state, SyncJobState.done);
   });
 
-  test('fresh device discovers remote projects and merges cloud assets', () async {
-    final harness = await _createHarness();
-    addTearDown(harness.dispose);
+  test(
+    'fresh device discovers remote projects and merges cloud assets',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
 
-    final fakeClient = _FakeBackendApiClient(
-      bulkCheckResponse: const BulkCheckAssetsResponse(
-        projectId: 'unused',
-        duplicateCount: 0,
-        missingCount: 0,
-        results: [],
-      ),
-      projectId: 'unused',
-      listProjectsResponse: const ListProjectsResponse(
-        projects: [
-          RemoteProjectRecord(projectId: 'remote-inbox', name: 'Inbox'),
-          RemoteProjectRecord(projectId: 'remote-library', name: 'Library'),
-        ],
-      ),
-      listAssetsResponses: {
-        'remote-inbox': const ListAssetsResponse(assets: [], nextCursor: null),
-        'remote-library': ListAssetsResponse(
-          assets: [
-            BackendAssetRecord(
-              assetId: 'asset-remote-1',
-              sha256: 'b' * 64,
-              projectId: 'remote-library',
-              filename: 'cloud.jpg',
-              createdAt: DateTime(2026, 1, 2),
-              provider: CloudProviderType.googleDrive,
-              remoteFileId: 'provider-file-1',
-              remotePath: 'Joblens/Library/cloud.jpg',
-            ),
-          ],
-          nextCursor: null,
+      final fakeClient = _FakeBackendApiClient(
+        bulkCheckResponse: const BulkCheckAssetsResponse(
+          projectId: 'unused',
+          duplicateCount: 0,
+          missingCount: 0,
+          results: [],
         ),
-      },
-      downloadBytes: List<int>.generate(256, (index) => index % 255),
-    );
-    final syncService = SyncService(
-      harness.database,
-      backendApiClient: fakeClient,
-      mediaStorage: harness.mediaStorage,
-    );
+        projectId: 'unused',
+        listProjectsResponse: const ListProjectsResponse(
+          projects: [
+            RemoteProjectRecord(projectId: 'remote-inbox', name: 'Inbox'),
+            RemoteProjectRecord(projectId: 'remote-library', name: 'Library'),
+          ],
+        ),
+        listAssetsResponses: {
+          'remote-inbox': const ListAssetsResponse(
+            assets: [],
+            nextCursor: null,
+          ),
+          'remote-library': ListAssetsResponse(
+            assets: [
+              BackendAssetRecord(
+                assetId: 'asset-remote-1',
+                sha256: 'b' * 64,
+                projectId: 'remote-library',
+                filename: 'cloud.jpg',
+                createdAt: DateTime(2026, 1, 2),
+                provider: CloudProviderType.googleDrive,
+                remoteFileId: 'provider-file-1',
+                remotePath: 'Joblens/Library/cloud.jpg',
+              ),
+            ],
+            nextCursor: null,
+          ),
+        },
+        downloadBytes: List<int>.generate(256, (index) => index % 255),
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
 
-    final initialProjects = await harness.database.getProjects();
-    expect(initialProjects.single.name, 'Inbox');
-    expect(initialProjects.single.remoteProjectId, isNull);
+      final initialProjects = await harness.database.getProjects();
+      expect(initialProjects.single.name, 'Inbox');
+      expect(initialProjects.single.remoteProjectId, isNull);
 
-    final syncedProjects = await syncService.syncRemoteProjects(initialProjects);
-    await syncService.mergeRemoteAssets(syncedProjects);
+      final syncedProjects = await syncService.syncRemoteProjects(
+        initialProjects,
+      );
+      await syncService.mergeRemoteAssets(syncedProjects);
 
-    final projects = await harness.database.getProjects();
-    final inbox = projects.firstWhere((project) => project.name == 'Inbox');
-    final library = projects.firstWhere((project) => project.name == 'Library');
-    final assets = await harness.database.getAssets(projectId: library.id);
+      final projects = await harness.database.getProjects();
+      final inbox = projects.firstWhere((project) => project.name == 'Inbox');
+      final library = projects.firstWhere(
+        (project) => project.name == 'Library',
+      );
+      final assets = await harness.database.getAssets(projectId: library.id);
 
-    expect(inbox.remoteProjectId, 'remote-inbox');
-    expect(library.remoteProjectId, 'remote-library');
-    expect(assets, hasLength(1));
-    expect(assets.single.remoteAssetId, 'asset-remote-1');
-    expect(assets.single.remoteProvider, CloudProviderType.googleDrive.key);
-    expect(assets.single.cloudState, AssetCloudState.localAndCloud);
-    expect(assets.single.localPath, isNotEmpty);
-    expect(assets.single.thumbPath, isNotEmpty);
-    expect(File(assets.single.localPath).existsSync(), isTrue);
-    expect(File(assets.single.thumbPath).existsSync(), isTrue);
-  });
+      expect(inbox.remoteProjectId, 'remote-inbox');
+      expect(library.remoteProjectId, 'remote-library');
+      expect(assets, hasLength(1));
+      expect(assets.single.remoteAssetId, 'asset-remote-1');
+      expect(assets.single.remoteProvider, CloudProviderType.googleDrive.key);
+      expect(assets.single.cloudState, AssetCloudState.localAndCloud);
+      expect(assets.single.localPath, isNotEmpty);
+      expect(assets.single.thumbPath, isNotEmpty);
+      expect(File(assets.single.localPath).existsSync(), isTrue);
+      expect(File(assets.single.thumbPath).existsSync(), isTrue);
+    },
+  );
 }
 
 class _Harness {
@@ -316,9 +577,17 @@ Future<_Harness> _createHarness() async {
 
 class _FakeBackendApiClient extends JoblensBackendApiClient {
   _FakeBackendApiClient({
-    required this.bulkCheckResponse,
+    this.bulkCheckResponse = const BulkCheckAssetsResponse(
+      projectId: 'unused',
+      duplicateCount: 0,
+      missingCount: 0,
+      results: [],
+    ),
+    this.bulkCheckResponseSequence,
     this.prepareUploadResponse,
     this.commitResponse,
+    this.commitException,
+    this.commitError,
     required this.projectId,
     this.listProjectsResponse,
     this.listAssetsResponses = const {},
@@ -329,15 +598,20 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
        );
 
   final BulkCheckAssetsResponse bulkCheckResponse;
+  final List<BulkCheckAssetsResponse>? bulkCheckResponseSequence;
   final PrepareAssetUploadResponse? prepareUploadResponse;
   final CommitAssetResponse? commitResponse;
+  final ApiException? commitException;
+  final Object? commitError;
   final String projectId;
   final ListProjectsResponse? listProjectsResponse;
   final Map<String, ListAssetsResponse> listAssetsResponses;
   final List<int> downloadBytes;
+  Future<void> Function()? onBulkCheck;
 
   int uploadCalls = 0;
   int moveCalls = 0;
+  int bulkCheckCalls = 0;
   List<int> lastUploadedBytes = const [];
 
   @override
@@ -368,11 +642,21 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
     required String projectId,
     required List<BulkCheckAssetInput> assets,
   }) async {
-    final result = bulkCheckResponse.results.single;
+    if (onBulkCheck != null) {
+      await onBulkCheck!();
+      onBulkCheck = null;
+    }
+    final source =
+        bulkCheckResponseSequence != null &&
+            bulkCheckCalls < bulkCheckResponseSequence!.length
+        ? bulkCheckResponseSequence![bulkCheckCalls]
+        : bulkCheckResponse;
+    bulkCheckCalls += 1;
+    final result = source.results.single;
     return BulkCheckAssetsResponse(
       projectId: projectId,
-      duplicateCount: bulkCheckResponse.duplicateCount,
-      missingCount: bulkCheckResponse.missingCount,
+      duplicateCount: source.duplicateCount,
+      missingCount: source.missingCount,
       results: [
         BulkCheckResult(
           deviceAssetId: assets.single.deviceAssetId,
@@ -404,6 +688,12 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
 
   @override
   Future<CommitAssetResponse> commitAsset(CommitAssetRequest request) async {
+    if (commitError != null) {
+      throw commitError!;
+    }
+    if (commitException != null) {
+      throw commitException!;
+    }
     return commitResponse!;
   }
 

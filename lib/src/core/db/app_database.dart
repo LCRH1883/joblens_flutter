@@ -187,9 +187,7 @@ class AppDatabase {
           ''');
         }
         if (oldVersion < 7) {
-          await db.execute(
-            "ALTER TABLE projects ADD COLUMN start_date TEXT",
-          );
+          await db.execute("ALTER TABLE projects ADD COLUMN start_date TEXT");
         }
         if (oldVersion < 8) {
           await db.execute(
@@ -237,10 +235,7 @@ class AppDatabase {
 
       await _db.update(
         'photo_assets',
-        {
-          'local_path': normalizedLocalPath,
-          'thumb_path': normalizedThumbPath,
-        },
+        {'local_path': normalizedLocalPath, 'thumb_path': normalizedThumbPath},
         where: 'id = ?',
         whereArgs: [assetId],
       );
@@ -689,6 +684,22 @@ class AppDatabase {
     return rows.map(SyncJob.fromMap).toList();
   }
 
+  Future<SyncJob?> getSyncJobForAsset({
+    required String assetId,
+    required CloudProviderType provider,
+  }) async {
+    final rows = await _db.query(
+      'sync_jobs',
+      where: 'asset_id = ? AND provider_type = ?',
+      whereArgs: [assetId, provider.key],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return SyncJob.fromMap(rows.first);
+  }
+
   Future<void> addSyncLog({
     required SyncLogLevel level,
     required String event,
@@ -742,13 +753,21 @@ class AppDatabase {
     return rows.map(SyncJob.fromMap).toList();
   }
 
-  Future<void> updateSyncJob(SyncJob job) async {
-    await _db.update(
+  Future<bool> updateSyncJob(SyncJob job) async {
+    final updated = await _db.update(
       'sync_jobs',
-      job.copyWith(updatedAt: DateTime.now()).toMap(),
-      where: 'id = ?',
-      whereArgs: [job.id],
+      {
+        'attempt_count': job.attemptCount,
+        'state': job.state.name,
+        'last_error': job.lastError,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      // Avoid letting stale in-flight sync snapshots overwrite a newer
+      // queued job that changed project/state while the queue was running.
+      where: 'id = ? AND updated_at = ?',
+      whereArgs: [job.id, job.updatedAt.toIso8601String()],
     );
+    return updated > 0;
   }
 
   Future<void> setAllFailedToQueued() async {

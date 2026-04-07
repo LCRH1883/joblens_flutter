@@ -18,6 +18,8 @@ import '../storage/media_storage_service.dart';
 import 'cloud_adapter.dart';
 
 class SyncService {
+  static const String _syncEngineVersion = '2026-04-06-dupfix3';
+
   SyncService(
     this._db, {
     JoblensBackendApiClient? backendApiClient,
@@ -32,6 +34,8 @@ class SyncService {
   final SignedMediaUrlCache _signedMediaUrlCache;
   final MediaStorageService? _mediaStorage;
   bool _isRunning = false;
+  bool _runAgainRequested = false;
+  static const int _maxParallelAssetOperations = 3;
 
   Future<void> enqueueAsset(PhotoAsset asset) async {
     await _db.enqueueSyncJob(
@@ -292,6 +296,7 @@ class SyncService {
 
   Future<void> processQueue(List<Project> projects) async {
     if (_isRunning) {
+      _runAgainRequested = true;
       return;
     }
 
@@ -302,131 +307,87 @@ class SyncService {
 
     _isRunning = true;
     try {
-      await _db.recoverInterruptedSyncJobs();
-      final pending = await _db.getPendingSyncJobs();
-      if (pending.isEmpty) {
-        return;
-      }
-      await _logInfo(
-        'process_queue_start',
-        message: 'Processing ${pending.length} pending sync job(s).',
-      );
-
-      final jobsByAssetId = <String, List<SyncJob>>{};
-      for (final job in pending) {
-        if (job.state == SyncJobState.paused) {
+      do {
+        _runAgainRequested = false;
+        await _db.recoverInterruptedSyncJobs();
+        final pending = await _db.getPendingSyncJobs();
+        if (pending.isEmpty) {
           continue;
         }
-        jobsByAssetId.putIfAbsent(job.assetId, () => []).add(job);
-      }
-      if (jobsByAssetId.isEmpty) {
-        return;
-      }
+        await _logInfo(
+          'process_queue_start',
+          message:
+              'Processing ${pending.length} pending sync job(s). engine=$_syncEngineVersion',
+        );
 
-      final assets = await _db.getAssetsByIds(jobsByAssetId.keys);
-      final assetsById = {for (final asset in assets) asset.id: asset};
-      final projectsById = {
-        for (final project in projects) project.id: project,
-      };
-      final providerAccounts = await _db.getProviderAccounts();
-      final activeProviderKey = providerAccounts
-          .where((provider) => provider.tokenState != ProviderTokenState.disconnected)
-          .map((provider) => provider.providerType.key)
-          .cast<String?>()
-          .firstWhere((provider) => provider != null, orElse: () => null);
-
-      final groupedByRemoteProject = <String, List<_PendingAssetContext>>{};
-      for (final entry in jobsByAssetId.entries) {
-        final jobs = entry.value;
-        final asset = assetsById[entry.key];
-        if (asset == null) {
-          await _logError(
-            'asset_missing',
-            assetId: entry.key,
-            message: 'Asset no longer exists locally.',
-          );
-          await _markJobsFailed(
-            jobs,
-            errorCode: 'asset_missing',
-            errorMessage: 'Asset no longer exists locally.',
-          );
+        final jobsByAssetId = <String, List<SyncJob>>{};
+        for (final job in pending) {
+          if (job.state == SyncJobState.paused) {
+            continue;
+          }
+          jobsByAssetId.putIfAbsent(job.assetId, () => []).add(job);
+        }
+        if (jobsByAssetId.isEmpty) {
           continue;
         }
 
-        final project = projectsById[asset.projectId];
-        if (project == null) {
-          await _logError(
-            'project_missing',
-            assetId: asset.id,
-            message: 'Project ${asset.projectId} no longer exists locally.',
-            projectId: asset.projectId,
-          );
-          await _db.updateAssetSyncError(asset.id, 'project_missing');
-          await _markJobsFailed(
-            jobs,
-            errorCode: 'project_missing',
-            errorMessage: 'Project no longer exists locally.',
-          );
-          continue;
-        }
+        final assets = await _db.getAssetsByIds(jobsByAssetId.keys);
+        final assetsById = {for (final asset in assets) asset.id: asset};
+        final projectsById = {
+          for (final project in projects) project.id: project,
+        };
+        final providerAccounts = await _db.getProviderAccounts();
+        final activeProviderKey = providerAccounts
+            .where(
+              (provider) =>
+                  provider.tokenState != ProviderTokenState.disconnected,
+            )
+            .map((provider) => provider.providerType.key)
+            .cast<String?>()
+            .firstWhere((provider) => provider != null, orElse: () => null);
 
-        String remoteProjectId;
-        try {
-          remoteProjectId = (await syncProject(project))?.trim() ?? '';
-        } catch (error) {
-          final mapped = _mapSyncError(error);
-          await _logError(
-            'project_sync_failed',
-            assetId: asset.id,
-            projectId: asset.projectId,
-            message: mapped.message,
-          );
-          await _db.updateAssetSyncError(asset.id, mapped.code);
-          await _markJobsFailed(
-            jobs,
-            errorCode: mapped.code,
-            errorMessage: mapped.message,
-          );
-          continue;
-        }
-
-        if (remoteProjectId.isEmpty) {
-          await _logError(
-            'project_sync_failed',
-            assetId: asset.id,
-            projectId: asset.projectId,
-            message: 'Unable to create or resolve backend project.',
-          );
-          await _db.updateAssetSyncError(asset.id, 'project_sync_failed');
-          await _markJobsFailed(
-            jobs,
-            errorCode: 'project_sync_failed',
-            errorMessage: 'Unable to create or resolve backend project.',
-          );
-          continue;
-        }
-
-        final existingRemoteAssetId = asset.remoteAssetId?.trim() ?? '';
-        final assetRemoteProvider = asset.remoteProvider?.trim();
-        final needsProviderMigration =
-            existingRemoteAssetId.isNotEmpty &&
-            activeProviderKey != null &&
-            assetRemoteProvider != null &&
-            assetRemoteProvider.isNotEmpty &&
-            assetRemoteProvider != activeProviderKey;
-
-        if (existingRemoteAssetId.isNotEmpty && !needsProviderMigration) {
-          try {
-            await _moveExistingRemoteAsset(
-              asset,
-              jobs,
-              remoteAssetId: existingRemoteAssetId,
-              remoteProjectId: remoteProjectId,
+        final groupedByRemoteProject = <String, List<_PendingAssetContext>>{};
+        for (final entry in jobsByAssetId.entries) {
+          var jobs = entry.value;
+          var asset = assetsById[entry.key];
+          if (asset == null) {
+            await _logError(
+              'asset_missing',
+              assetId: entry.key,
+              message: 'Asset no longer exists locally.',
             );
+            await _markJobsFailed(
+              jobs,
+              errorCode: 'asset_missing',
+              errorMessage: 'Asset no longer exists locally.',
+            );
+            continue;
+          }
+
+          final project = projectsById[asset.projectId];
+          if (project == null) {
+            await _logError(
+              'project_missing',
+              assetId: asset.id,
+              message: 'Project ${asset.projectId} no longer exists locally.',
+              projectId: asset.projectId,
+            );
+            await _db.updateAssetSyncError(asset.id, 'project_missing');
+            await _markJobsFailed(
+              jobs,
+              errorCode: 'project_missing',
+              errorMessage: 'Project no longer exists locally.',
+            );
+            continue;
+          }
+
+          String remoteProjectId;
+          try {
+            remoteProjectId = (await syncProject(project))?.trim() ?? '';
           } catch (error) {
             final mapped = _mapSyncError(error);
             await _logError(
-              'remote_move_failed',
+              'project_sync_failed',
               assetId: asset.id,
               projectId: asset.projectId,
               message: mapped.message,
@@ -437,47 +398,62 @@ class SyncService {
               errorCode: mapped.code,
               errorMessage: mapped.message,
             );
+            continue;
           }
-          continue;
-        }
 
-        await _markJobsUploading(jobs);
-        groupedByRemoteProject
-            .putIfAbsent(remoteProjectId, () => [])
-            .add(_PendingAssetContext(asset: asset, jobs: jobs));
-      }
-
-      for (final groupEntry in groupedByRemoteProject.entries) {
-        final remoteProjectId = groupEntry.key;
-        final contexts = groupEntry.value;
-        final batchChunks = _chunk(contexts, 500);
-
-        for (final chunk in batchChunks) {
-          BulkCheckAssetsResponse response;
-          try {
-            response = await client.bulkCheckAssets(
-              projectId: remoteProjectId,
-              assets: chunk
-                  .map(
-                    (item) => BulkCheckAssetInput(
-                      deviceAssetId: item.asset.id,
-                      sha256: item.asset.hash,
-                    ),
-                  )
-                  .toList(growable: false),
+          if (remoteProjectId.isEmpty) {
+            await _logError(
+              'project_sync_failed',
+              assetId: asset.id,
+              projectId: asset.projectId,
+              message: 'Unable to create or resolve backend project.',
             );
-          } catch (error) {
-            final mapped = _mapSyncError(error);
-            for (final item in chunk) {
+            await _db.updateAssetSyncError(asset.id, 'project_sync_failed');
+            await _markJobsFailed(
+              jobs,
+              errorCode: 'project_sync_failed',
+              errorMessage: 'Unable to create or resolve backend project.',
+            );
+            continue;
+          }
+
+          final refreshedContext = await _refreshPendingContext(
+            _PendingAssetContext(asset: asset, jobs: jobs),
+          );
+          if (refreshedContext == null) {
+            continue;
+          }
+          asset = refreshedContext.asset;
+          jobs = refreshedContext.jobs;
+
+          final existingRemoteAssetId = asset.remoteAssetId?.trim() ?? '';
+          final assetRemoteProvider = asset.remoteProvider?.trim();
+          final needsProviderMigration =
+              existingRemoteAssetId.isNotEmpty &&
+              activeProviderKey != null &&
+              assetRemoteProvider != null &&
+              assetRemoteProvider.isNotEmpty &&
+              assetRemoteProvider != activeProviderKey;
+
+          if (existingRemoteAssetId.isNotEmpty && !needsProviderMigration) {
+            try {
+              await _moveExistingRemoteAsset(
+                asset,
+                jobs,
+                remoteAssetId: existingRemoteAssetId,
+                remoteProjectId: remoteProjectId,
+              );
+            } catch (error) {
+              final mapped = _mapSyncError(error);
               await _logError(
-                'bulk_check_failed',
-                assetId: item.asset.id,
-                projectId: item.asset.projectId,
+                'remote_move_failed',
+                assetId: asset.id,
+                projectId: asset.projectId,
                 message: mapped.message,
               );
-              await _db.updateAssetSyncError(item.asset.id, mapped.code);
+              await _db.updateAssetSyncError(asset.id, mapped.code);
               await _markJobsFailed(
-                item.jobs,
+                jobs,
                 errorCode: mapped.code,
                 errorMessage: mapped.message,
               );
@@ -485,43 +461,36 @@ class SyncService {
             continue;
           }
 
-          final resultsByDevice = {
-            for (final result in response.results) result.deviceAssetId: result,
-          };
+          await _markJobsUploading(jobs);
+          groupedByRemoteProject
+              .putIfAbsent(remoteProjectId, () => [])
+              .add(_PendingAssetContext(asset: asset, jobs: jobs));
+        }
 
-          for (final item in chunk) {
-            final result = resultsByDevice[item.asset.id];
-            if (result == null) {
-              await _logError(
-                'bulk_check_missing_result',
-                assetId: item.asset.id,
-                projectId: item.asset.projectId,
-                message: 'Backend did not return a bulk-check result for this asset.',
-              );
-              await _db.updateAssetSyncError(
-                item.asset.id,
-                'bulk_check_missing_result',
-              );
-              await _markJobsFailed(
-                item.jobs,
-                errorCode: 'bulk_check_missing_result',
-                errorMessage:
-                    'Backend did not return bulk-check result for this asset.',
-              );
-              continue;
-            }
+        for (final groupEntry in groupedByRemoteProject.entries) {
+          final remoteProjectId = groupEntry.key;
+          final contexts = groupEntry.value;
+          final batchChunks = _chunk(contexts, 500);
 
-            if (result.isDuplicate) {
-              try {
-                await _handleDuplicate(
-                  item,
-                  result.assetId,
-                  remoteProjectId: remoteProjectId,
-                );
-              } catch (error) {
-                final mapped = _mapSyncError(error);
+          for (final chunk in batchChunks) {
+            BulkCheckAssetsResponse response;
+            try {
+              response = await client.bulkCheckAssets(
+                projectId: remoteProjectId,
+                assets: chunk
+                    .map(
+                      (item) => BulkCheckAssetInput(
+                        deviceAssetId: item.asset.id,
+                        sha256: item.asset.hash,
+                      ),
+                    )
+                    .toList(growable: false),
+              );
+            } catch (error) {
+              final mapped = _mapSyncError(error);
+              for (final item in chunk) {
                 await _logError(
-                  'duplicate_move_failed',
+                  'bulk_check_failed',
                   assetId: item.asset.id,
                   projectId: item.asset.projectId,
                   message: mapped.message,
@@ -536,13 +505,77 @@ class SyncService {
               continue;
             }
 
-            await _handleMissingAssetUpload(
-              item,
-              remoteProjectId: remoteProjectId,
-            );
+            final resultsByDevice = {
+              for (final result in response.results)
+                result.deviceAssetId: result,
+            };
+
+            await _forEachWithConcurrency<
+              _PendingAssetContext
+            >(chunk, _maxParallelAssetOperations, (item) async {
+              final latestContext = await _refreshPendingContext(item);
+              if (latestContext == null) {
+                return;
+              }
+
+              final result = resultsByDevice[latestContext.asset.id];
+              if (result == null) {
+                await _logError(
+                  'bulk_check_missing_result',
+                  assetId: latestContext.asset.id,
+                  projectId: latestContext.asset.projectId,
+                  message:
+                      'Backend did not return a bulk-check result for this asset.',
+                );
+                await _db.updateAssetSyncError(
+                  latestContext.asset.id,
+                  'bulk_check_missing_result',
+                );
+                await _markJobsFailed(
+                  latestContext.jobs,
+                  errorCode: 'bulk_check_missing_result',
+                  errorMessage:
+                      'Backend did not return bulk-check result for this asset.',
+                );
+                return;
+              }
+
+              if (result.isDuplicate) {
+                try {
+                  await _handleDuplicate(
+                    latestContext,
+                    result.assetId,
+                    remoteProjectId: remoteProjectId,
+                  );
+                } catch (error) {
+                  final mapped = _mapSyncError(error);
+                  await _logError(
+                    'duplicate_move_failed',
+                    assetId: latestContext.asset.id,
+                    projectId: latestContext.asset.projectId,
+                    message: mapped.message,
+                  );
+                  await _db.updateAssetSyncError(
+                    latestContext.asset.id,
+                    mapped.code,
+                  );
+                  await _markJobsFailed(
+                    latestContext.jobs,
+                    errorCode: mapped.code,
+                    errorMessage: mapped.message,
+                  );
+                }
+                return;
+              }
+
+              await _handleMissingAssetUpload(
+                latestContext,
+                remoteProjectId: remoteProjectId,
+              );
+            });
           }
         }
-      }
+      } while (_runAgainRequested);
     } finally {
       _isRunning = false;
     }
@@ -922,6 +955,14 @@ class SyncService {
       await _db.updateAssetSyncError(context.asset.id, null);
       await _markJobsDone(context.jobs);
     } catch (error) {
+      final duplicateRecovered = await _recoverDuplicateUploadFailure(
+        context,
+        remoteProjectId: remoteProjectId,
+        error: error,
+      );
+      if (duplicateRecovered) {
+        return;
+      }
       final mapped = _mapSyncError(error);
       await _logError(
         'upload_failed',
@@ -936,6 +977,51 @@ class SyncService {
         errorMessage: mapped.message,
       );
     }
+  }
+
+  Future<bool> _recoverDuplicateUploadFailure(
+    _PendingAssetContext context, {
+    required String remoteProjectId,
+    required Object error,
+  }) async {
+    if (!_isDuplicateCommitError(error)) {
+      return false;
+    }
+
+    final client = _backendApiClient;
+    if (client == null) {
+      return false;
+    }
+
+    final remoteAssetId = await _resolveDuplicateAssetId(
+      client: client,
+      asset: context.asset,
+      remoteProjectId: remoteProjectId,
+    );
+    if (remoteAssetId == null) {
+      await _logError(
+        'commit_duplicate_unresolved',
+        assetId: context.asset.id,
+        projectId: context.asset.projectId,
+        message:
+            'Duplicate upload was detected but bulk-check did not resolve an existing remote asset.',
+      );
+      return false;
+    }
+
+    await _handleDuplicate(
+      context,
+      remoteAssetId,
+      remoteProjectId: remoteProjectId,
+    );
+    await _logInfo(
+      'commit_duplicate_recovered',
+      assetId: context.asset.id,
+      projectId: context.asset.projectId,
+      message:
+          'Recovered duplicate upload by resolving the existing remote asset.',
+    );
+    return true;
   }
 
   Future<_UploadOutcome> _uploadAndCommitWithRetry(
@@ -1078,25 +1164,173 @@ class SyncService {
           uploadSessionHint = null;
           continue;
         }
+        final duplicateOutcome = await _recoverDuplicateCommitCollision(
+          client: client,
+          asset: context.asset,
+          remoteProjectId: remoteProjectId,
+          prepared: prepared,
+          remotePath: remotePath,
+          error: error,
+        );
+        if (duplicateOutcome != null) {
+          await _logInfo(
+            'commit_duplicate_recovered',
+            assetId: context.asset.id,
+            projectId: context.asset.projectId,
+            message:
+                'Recovered duplicate upload by resolving the existing remote asset.',
+          );
+          return duplicateOutcome;
+        }
         rethrow;
       }
     }
   }
 
+  Future<_UploadOutcome?> _recoverDuplicateCommitCollision({
+    required JoblensBackendApiClient client,
+    required PhotoAsset asset,
+    required String remoteProjectId,
+    required PrepareAssetUploadResponse prepared,
+    required String remotePath,
+    required ApiException error,
+  }) async {
+    if (!_isDuplicateCommitCollision(error)) {
+      return null;
+    }
+
+    final remoteAssetId = await _resolveDuplicateAssetId(
+      client: client,
+      asset: asset,
+      remoteProjectId: remoteProjectId,
+    );
+    if (remoteAssetId == null) {
+      return null;
+    }
+
+    return _UploadOutcome(
+      remoteAssetId: remoteAssetId,
+      remoteProvider: prepared.provider,
+      remoteFileId: prepared.remoteFileId,
+      uploadSessionId: prepared.uploadSessionId,
+      remotePath: prepared.remotePath ?? remotePath,
+    );
+  }
+
+  bool _isDuplicateCommitCollision(ApiException error) {
+    final normalizedCode = error.code.trim().toLowerCase();
+    final normalizedMessage = error.message.toLowerCase();
+    return normalizedCode == 'asset_commit_failed' &&
+        (normalizedMessage.contains('assets_user_id_sha256_key') ||
+            normalizedMessage.contains(
+              'duplicate key value violates unique constraint',
+            ));
+  }
+
+  bool _isDuplicateCommitError(Object error) {
+    if (error is ApiException) {
+      return _isDuplicateCommitCollision(error);
+    }
+    final message = error.toString().toLowerCase();
+    return message.contains('assets_user_id_sha256_key') ||
+        message.contains('duplicate key value violates unique constraint');
+  }
+
+  Future<String?> _resolveDuplicateAssetId({
+    required JoblensBackendApiClient client,
+    required PhotoAsset asset,
+    required String remoteProjectId,
+  }) async {
+    final bulkCheck = await client.bulkCheckAssets(
+      projectId: remoteProjectId,
+      assets: [
+        BulkCheckAssetInput(deviceAssetId: asset.id, sha256: asset.hash),
+      ],
+    );
+    final result = bulkCheck.results.cast<BulkCheckResult?>().firstOrNull;
+    final remoteAssetId = result?.assetId?.trim();
+    if (result == null ||
+        !result.isDuplicate ||
+        remoteAssetId == null ||
+        remoteAssetId.isEmpty) {
+      return null;
+    }
+    return remoteAssetId;
+  }
+
+  Future<_PendingAssetContext?> _refreshPendingContext(
+    _PendingAssetContext context,
+  ) async {
+    final latestAsset = await _db.getAssetById(context.asset.id);
+    if (latestAsset == null || latestAsset.status == AssetStatus.deleted) {
+      return null;
+    }
+
+    final latestJobs = <SyncJob>[];
+    for (final job in context.jobs) {
+      final latestJob = await _db.getSyncJobForAsset(
+        assetId: job.assetId,
+        provider: job.providerType,
+      );
+      if (latestJob != null) {
+        latestJobs.add(latestJob);
+      }
+    }
+    if (latestJobs.isEmpty) {
+      return null;
+    }
+
+    final hasDrifted =
+        latestAsset.projectId != context.asset.projectId ||
+        latestJobs.any(
+          (job) =>
+              job.projectId != latestAsset.projectId ||
+              (job.state != SyncJobState.queued &&
+                  job.state != SyncJobState.uploading),
+        );
+    if (hasDrifted) {
+      _runAgainRequested = true;
+      await _logInfo(
+        'sync_job_superseded',
+        assetId: context.asset.id,
+        projectId: latestAsset.projectId,
+        message:
+            'Skipped an outdated sync snapshot because the asset changed locally.',
+      );
+      return null;
+    }
+
+    return _PendingAssetContext(asset: latestAsset, jobs: latestJobs);
+  }
+
   Future<void> _markJobsUploading(List<SyncJob> jobs) async {
     for (final job in jobs) {
+      final latestJob = await _db.getSyncJobForAsset(
+        assetId: job.assetId,
+        provider: job.providerType,
+      );
+      if (latestJob == null) {
+        continue;
+      }
       await _db.updateSyncJob(
-        job.copyWith(state: SyncJobState.uploading, lastError: null),
+        latestJob.copyWith(state: SyncJobState.uploading, lastError: null),
       );
     }
   }
 
   Future<void> _markJobsDone(List<SyncJob> jobs) async {
     for (final job in jobs) {
+      final latestJob = await _db.getSyncJobForAsset(
+        assetId: job.assetId,
+        provider: job.providerType,
+      );
+      if (latestJob == null) {
+        continue;
+      }
       await _db.updateSyncJob(
-        job.copyWith(
+        latestJob.copyWith(
           state: SyncJobState.done,
-          attemptCount: job.attemptCount + 1,
+          attemptCount: latestJob.attemptCount + 1,
           lastError: null,
         ),
       );
@@ -1109,10 +1343,17 @@ class SyncService {
     required String errorMessage,
   }) async {
     for (final job in jobs) {
+      final latestJob = await _db.getSyncJobForAsset(
+        assetId: job.assetId,
+        provider: job.providerType,
+      );
+      if (latestJob == null) {
+        continue;
+      }
       await _db.updateSyncJob(
-        job.copyWith(
+        latestJob.copyWith(
           state: SyncJobState.failed,
-          attemptCount: job.attemptCount + 1,
+          attemptCount: latestJob.attemptCount + 1,
           lastError: '[$errorCode] $errorMessage',
         ),
       );
@@ -1208,4 +1449,35 @@ List<List<T>> _chunk<T>(List<T> items, int chunkSize) {
     chunks.add(items.sublist(index, end));
   }
   return chunks;
+}
+
+Future<void> _forEachWithConcurrency<T>(
+  List<T> items,
+  int maxConcurrency,
+  Future<void> Function(T item) action,
+) async {
+  if (items.isEmpty) {
+    return;
+  }
+
+  final concurrency = maxConcurrency < 1 ? 1 : maxConcurrency;
+  var nextIndex = 0;
+
+  Future<void> worker() async {
+    while (true) {
+      if (nextIndex >= items.length) {
+        return;
+      }
+      final item = items[nextIndex];
+      nextIndex += 1;
+      await action(item);
+    }
+  }
+
+  await Future.wait(
+    List.generate(
+      concurrency > items.length ? items.length : concurrency,
+      (_) => worker(),
+    ),
+  );
 }

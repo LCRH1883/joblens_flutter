@@ -37,10 +37,7 @@ void main() {
 
     final initialJob = (await database.getSyncJobs()).single;
     await database.updateSyncJob(
-      initialJob.copyWith(
-        state: SyncJobState.done,
-        lastError: 'old error',
-      ),
+      initialJob.copyWith(state: SyncJobState.done, lastError: 'old error'),
     );
 
     await database.enqueueSyncJob(
@@ -57,4 +54,49 @@ void main() {
     expect(jobs.single.attemptCount, 0);
     expect(jobs.single.lastError, isNull);
   });
+
+  test(
+    'updateSyncJob does not overwrite a newer re-queued project id',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_db_sync_job_stale_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      addTearDown(database.close);
+
+      final projectId = await database.ensureDefaultProject();
+      await database.enqueueSyncJob(
+        assetId: 'asset-1',
+        projectId: projectId,
+        provider: CloudProviderType.backend,
+      );
+
+      final initialJob = (await database.getSyncJobs()).single;
+      await database.enqueueSyncJob(
+        assetId: 'asset-1',
+        projectId: projectId + 99,
+        provider: CloudProviderType.backend,
+      );
+
+      await database.updateSyncJob(
+        initialJob.copyWith(
+          state: SyncJobState.done,
+          attemptCount: initialJob.attemptCount + 1,
+        ),
+      );
+
+      final jobs = await database.getSyncJobs();
+      expect(jobs, hasLength(1));
+      expect(jobs.single.projectId, projectId + 99);
+      expect(jobs.single.state, SyncJobState.queued);
+      expect(jobs.single.attemptCount, 0);
+    },
+  );
 }

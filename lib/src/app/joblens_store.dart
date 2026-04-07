@@ -212,38 +212,40 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> importFromPhoneGallery({int? projectId}) async {
-    await _runBusy(() async {
-      final selectedFiles = await _picker.pickMultiImage(imageQuality: 100);
-      if (selectedFiles.isEmpty) {
-        return;
-      }
+    final selectedFiles = await _picker.pickMultiImage(imageQuality: 100);
+    if (selectedFiles.isEmpty) {
+      return;
+    }
 
-      final targetProjectId = projectId ?? _defaultProjectId;
-      for (final selected in selectedFiles) {
-        final source = File(selected.path);
-        if (!source.existsSync()) {
-          continue;
+    final targetProjectId = projectId ?? _defaultProjectId;
+    unawaited(
+      _runImportTask(() async {
+        for (final selected in selectedFiles) {
+          final source = File(selected.path);
+          if (!source.existsSync()) {
+            continue;
+          }
+
+          final asset = await _mediaStorage.ingestFile(
+            source: source,
+            sourceType: AssetSourceType.imported,
+            projectId: targetProjectId,
+          );
+
+          if (await _database.assetExistsByHash(asset.hash)) {
+            continue;
+          }
+
+          await _database.upsertAsset(asset);
+          await _database.setAssetExistsInPhoneStorage(asset.id, true);
+          await _syncService.enqueueAsset(asset);
+          await _hydrateLocalState();
+          _notifyListenersIfActive();
         }
 
-        final asset = await _mediaStorage.ingestFile(
-          source: source,
-          sourceType: AssetSourceType.imported,
-          projectId: targetProjectId,
-        );
-
-        if (await _database.assetExistsByHash(asset.hash)) {
-          continue;
-        }
-
-        await _database.upsertAsset(asset);
-        await _database.setAssetExistsInPhoneStorage(asset.id, true);
-        await _syncService.enqueueAsset(asset);
-      }
-
-      await _hydrateLocalState();
-      _notifyListenersIfActive();
-      unawaited(_runBackgroundSyncRefresh());
-    });
+        unawaited(_runBackgroundSyncRefresh());
+      }),
+    );
   }
 
   Future<void> importFromPhoneLibraryAssets(
@@ -251,15 +253,15 @@ class JoblensStore extends ChangeNotifier {
     int? projectId,
     required LibraryImportMode mode,
   }) async {
-    await _runBusy(() async {
-      if (assets.isEmpty) {
-        return;
-      }
+    if (assets.isEmpty) {
+      return;
+    }
 
-      final importedAssetIds = <String>[];
-      final targetProjectId = projectId ?? _defaultProjectId;
-      final tempDir = await getTemporaryDirectory();
+    final importedAssetIds = <String>[];
+    final targetProjectId = projectId ?? _defaultProjectId;
+    final tempDir = await getTemporaryDirectory();
 
+    await _runImportTask(() async {
       for (final entity in assets) {
         final source = await _resolveLibraryAssetFile(entity, tempDir);
         if (source == null || !source.existsSync()) {
@@ -284,14 +286,14 @@ class JoblensStore extends ChangeNotifier {
         );
         await _syncService.enqueueAsset(asset);
         importedAssetIds.add(entity.id);
+        await _hydrateLocalState();
+        _notifyListenersIfActive();
       }
 
       if (mode == LibraryImportMode.move && importedAssetIds.isNotEmpty) {
         await PhotoManager.editor.deleteWithIds(importedAssetIds);
       }
 
-      await _hydrateLocalState();
-      _notifyListenersIfActive();
       unawaited(_runBackgroundSyncRefresh());
     });
   }
@@ -746,6 +748,31 @@ class JoblensStore extends ChangeNotifier {
       }
       if (kDebugMode) {
         debugPrint('JoblensStore error: $error\n$stackTrace');
+      }
+    } finally {
+      _isBusy = false;
+      _notifyListenersIfActive();
+    }
+  }
+
+  Future<void> _runImportTask(Future<void> Function() action) async {
+    if (_isBusy) {
+      return;
+    }
+
+    _isBusy = true;
+    _lastError = null;
+    _notifyListenersIfActive();
+
+    try {
+      await action();
+    } catch (error, stackTrace) {
+      await _handleError(error);
+      if (!_requiresReauthentication(error)) {
+        _lastError = error.toString();
+      }
+      if (kDebugMode) {
+        debugPrint('JoblensStore import error: $error\n$stackTrace');
       }
     } finally {
       _isBusy = false;

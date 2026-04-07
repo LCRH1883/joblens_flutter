@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -67,9 +68,7 @@ class _PhotoLibraryImportPageState
     final albums = await PhotoManager.getAssetPathList(
       type: RequestType.image,
       onlyAll: true,
-      filterOption: FilterOptionGroup(
-        imageOption: const FilterOption(),
-      ),
+      filterOption: FilterOptionGroup(imageOption: const FilterOption()),
     );
 
     if (!mounted) {
@@ -111,7 +110,10 @@ class _PhotoLibraryImportPageState
       }
     });
 
-    final nextAssets = await album.getAssetListPaged(page: _page, size: _pageSize);
+    final nextAssets = await album.getAssetListPaged(
+      page: _page,
+      size: _pageSize,
+    );
 
     if (!mounted) {
       return;
@@ -148,141 +150,145 @@ class _PhotoLibraryImportPageState
       _isImporting = true;
     });
 
-    await store.importFromPhoneLibraryAssets(
-      selectedAssets,
-      mode: store.libraryImportMode,
-    );
-
     if (!mounted) {
       return;
     }
 
-    setState(() {
-      _isImporting = false;
-    });
-
-    if (store.lastError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
-      return;
-    }
-
+    final messenger = ScaffoldMessenger.of(context);
     Navigator.of(context).pop();
+
+    unawaited(
+      store
+          .importFromPhoneLibraryAssets(
+            selectedAssets,
+            mode: store.libraryImportMode,
+          )
+          .then((_) {
+            final error = store.lastError;
+            if (error == null || !messenger.mounted) {
+              return;
+            }
+            messenger.showSnackBar(SnackBar(content: Text(error)));
+          }),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final importMode = ref.watch(joblensStoreListenableProvider).libraryImportMode;
+    final importMode = ref
+        .watch(joblensStoreListenableProvider)
+        .libraryImportMode;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Import Photos'),
         actions: [
           TextButton(
-            onPressed: _selectedIds.isEmpty || _isImporting ? null : _importSelected,
+            onPressed: _selectedIds.isEmpty || _isImporting
+                ? null
+                : _importSelected,
             child: Text(_isImporting ? 'Importing...' : 'Import'),
           ),
         ],
       ),
       body: switch (_permissionState) {
         PermissionState.authorized || PermissionState.limited => Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        importMode == LibraryImportMode.move
-                            ? 'Imported photos will be deleted from phone storage after they are added to Joblens.'
-                            : 'Imported photos will stay in phone storage.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: _assets.isEmpty && _isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : GridView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.all(12),
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          crossAxisSpacing: 4,
-                          mainAxisSpacing: 4,
-                        ),
-                        itemCount: _assets.length,
-                        itemBuilder: (context, index) {
-                          final asset = _assets[index];
-                          final selected = _selectedIds.contains(asset.id);
-                          return GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                if (selected) {
-                                  _selectedIds.remove(asset.id);
-                                } else {
-                                  _selectedIds.add(asset.id);
-                                }
-                              });
-                            },
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                _AssetThumb(asset: asset),
-                                if (selected)
-                                  Container(
-                                    color: Colors.black.withValues(alpha: 0.28),
-                                  ),
-                                Positioned(
-                                  top: 8,
-                                  right: 8,
-                                  child: CircleAvatar(
-                                    radius: 12,
-                                    backgroundColor: selected
-                                        ? Theme.of(context).colorScheme.primary
-                                        : Colors.black.withValues(alpha: 0.45),
-                                    child: Icon(
-                                      selected
-                                          ? Icons.check
-                                          : Icons.circle_outlined,
-                                      size: 16,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-              ),
-            ],
-          ),
-        PermissionState.denied ||
-        PermissionState.notDetermined ||
-        PermissionState.restricted => Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: Row(
                 children: [
-                  const Text(
-                    'Allow photo library access to import photos into Joblens.',
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  FilledButton(
-                    onPressed: _initialize,
-                    child: const Text('Allow access'),
+                  Expanded(
+                    child: Text(
+                      importMode == LibraryImportMode.move
+                          ? 'Imported photos will be deleted from phone storage after they are added to Joblens.'
+                          : 'Imported photos will stay in phone storage.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
                   ),
                 ],
               ),
             ),
+            Expanded(
+              child: _assets.isEmpty && _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : GridView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(12),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            crossAxisSpacing: 4,
+                            mainAxisSpacing: 4,
+                          ),
+                      itemCount: _assets.length,
+                      itemBuilder: (context, index) {
+                        final asset = _assets[index];
+                        final selected = _selectedIds.contains(asset.id);
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              if (selected) {
+                                _selectedIds.remove(asset.id);
+                              } else {
+                                _selectedIds.add(asset.id);
+                              }
+                            });
+                          },
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              _AssetThumb(asset: asset),
+                              if (selected)
+                                Container(
+                                  color: Colors.black.withValues(alpha: 0.28),
+                                ),
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: CircleAvatar(
+                                  radius: 12,
+                                  backgroundColor: selected
+                                      ? Theme.of(context).colorScheme.primary
+                                      : Colors.black.withValues(alpha: 0.45),
+                                  child: Icon(
+                                    selected
+                                        ? Icons.check
+                                        : Icons.circle_outlined,
+                                    size: 16,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+        PermissionState.denied ||
+        PermissionState.notDetermined ||
+        PermissionState.restricted => Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Allow photo library access to import photos into Joblens.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: _initialize,
+                  child: const Text('Allow access'),
+                ),
+              ],
+            ),
           ),
+        ),
       },
     );
   }
@@ -296,9 +302,7 @@ class _AssetThumb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<Uint8List?>(
-      future: asset.thumbnailDataWithSize(
-        const ThumbnailSize.square(400),
-      ),
+      future: asset.thumbnailDataWithSize(const ThumbnailSize.square(400)),
       builder: (context, snapshot) {
         final bytes = snapshot.data;
         if (bytes == null || bytes.isEmpty) {
@@ -308,11 +312,7 @@ class _AssetThumb extends StatelessWidget {
             child: const Icon(Icons.image_outlined),
           );
         }
-        return Image.memory(
-          bytes,
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
-        );
+        return Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true);
       },
     );
   }
