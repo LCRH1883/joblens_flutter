@@ -233,6 +233,69 @@ void main() {
     expect(uploads, isEmpty);
   });
 
+  test('bootstrap failure does not block pending uploads', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(
+      bulkCheckResponse: BulkCheckAssetsResponse(
+        projectId: 'remote-project-1',
+        duplicateCount: 0,
+        missingCount: 1,
+        results: [
+          BulkCheckResult(
+            deviceAssetId: 'asset-local',
+            sha256: 'a' * 64,
+            status: 'missing',
+            assetId: null,
+          ),
+        ],
+      ),
+      prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
+        'status': 'upload_required',
+        'provider': 'google_drive',
+        'uploadSessionId': 'session-bootstrap-fail',
+        'remotePath': 'Joblens/Library/bootstrap-fail.jpg',
+        'remoteFileId': 'provider-file-bootstrap-fail',
+        'upload': {
+          'strategy': 'single_put',
+          'url': 'https://upload.example/file',
+          'method': 'PUT',
+          'headers': {'x-upload-token': 'abc'},
+        },
+      }),
+      commitResponse: CommitAssetResponse.fromMap({
+        'assetId': 'asset-remote-bootstrap-fail',
+        'duplicate': false,
+        'committed': true,
+        'provider': 'google_drive',
+        'remoteFileId': 'provider-file-bootstrap-fail',
+        'remotePath': 'Joblens/Library/bootstrap-fail.jpg',
+      }),
+      listProjectsError: const ApiException(
+        code: 'http_500',
+        message: 'bootstrap failed',
+        statusCode: 500,
+      ),
+      projectId: 'remote-project-1',
+    );
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+      mediaStorage: harness.mediaStorage,
+    );
+
+    final project = await harness.createProject('Library');
+    final asset = await harness.ingestAsset(projectId: project.id, seed: 91);
+
+    await syncService.kick(forceBootstrap: true);
+
+    final updated = await harness.database.getAssetById(asset.id);
+    expect(fakeClient.listProjectsCalls, greaterThanOrEqualTo(1));
+    expect(fakeClient.uploadCalls, 1);
+    expect(updated?.remoteAssetId, 'asset-remote-bootstrap-fail');
+  });
+
   test(
     'stale sync snapshot reruns and flushes the updated queued job',
     () async {
@@ -918,6 +981,7 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
     this.commitResponse,
     this.commitException,
     this.commitError,
+    this.listProjectsError,
     required this.projectId,
     this.listProjectsResponse,
     this.listAssetsResponses = const {},
@@ -934,6 +998,7 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   final CommitAssetResponse? commitResponse;
   final ApiException? commitException;
   final Object? commitError;
+  final ApiException? listProjectsError;
   final String projectId;
   final ListProjectsResponse? listProjectsResponse;
   final Map<String, ListAssetsResponse> listAssetsResponses;
@@ -997,6 +1062,9 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   @override
   Future<ListProjectsResponse> listProjects() async {
     listProjectsCalls += 1;
+    if (listProjectsError != null) {
+      throw listProjectsError!;
+    }
     return listProjectsResponse ?? const ListProjectsResponse(projects: []);
   }
 

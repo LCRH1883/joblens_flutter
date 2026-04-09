@@ -723,6 +723,7 @@ class JoblensStore extends ChangeNotifier {
         if (_isDisposed) {
           return;
         }
+        _lastError = null;
         await _hydrateLocalState(includeDiagnostics: false);
       } catch (error, stackTrace) {
         if (_isDisposed) {

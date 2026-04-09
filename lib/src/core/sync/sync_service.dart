@@ -54,19 +54,55 @@ class SyncService {
     try {
       do {
         _runAgainRequested = false;
-        await _ensureDeviceRegistration();
+        await _runVoidLaneSafely(
+          'device_registration_failed',
+          () => _ensureDeviceRegistration(),
+        );
         if (forceBootstrap || !await _db.hasCompletedBootstrap()) {
-          await _bootstrapFromBackend();
+          await _runVoidLaneSafely(
+            'bootstrap_failed',
+            () => _bootstrapFromBackend(),
+          );
         }
         final pushedMetadata = await _pushMetadata();
         final advancedUploads = await _advanceBlobUploads();
-        final pulledEvents = await _pullRemoteEvents();
+        final pulledEvents = await _runLaneSafely<bool>(
+          'remote_event_pull_failed',
+          () => _pullRemoteEvents(),
+          fallback: false,
+        );
         if (pushedMetadata || advancedUploads || pulledEvents) {
           _runAgainRequested = true;
         }
       } while (_runAgainRequested);
     } finally {
       _isRunning = false;
+    }
+  }
+
+  Future<T> _runLaneSafely<T>(
+    String event,
+    Future<T> Function() action, {
+    required T fallback,
+  }) async {
+    try {
+      return await action();
+    } catch (error) {
+      final mapped = _mapSyncError(error);
+      await _logError(event, message: mapped.message);
+      return fallback;
+    }
+  }
+
+  Future<void> _runVoidLaneSafely(
+    String event,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } catch (error) {
+      final mapped = _mapSyncError(error);
+      await _logError(event, message: mapped.message);
     }
   }
 
