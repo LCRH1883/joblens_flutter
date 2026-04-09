@@ -138,48 +138,8 @@ class JoblensStore extends ChangeNotifier {
       _notifyListenersIfActive();
       return;
     }
-
-    String? remoteMergeError;
-    try {
-      await _syncService.refreshProviderConnections();
-    } catch (error, stackTrace) {
-      await _handleError(error);
-      remoteMergeError = _requiresReauthentication(error)
-          ? _lastError
-          : error.toString();
-      if (kDebugMode) {
-        debugPrint('Provider refresh failed: $error\n$stackTrace');
-      }
-    }
-    await _hydrateLocalState();
-    try {
-      _projects = await _syncService.syncRemoteProjects(_projects);
-      await _hydrateLocalState();
-    } catch (error, stackTrace) {
-      await _handleError(error);
-      remoteMergeError = _requiresReauthentication(error)
-          ? _lastError
-          : error.toString();
-      if (kDebugMode) {
-        debugPrint('Remote project sync failed: $error\n$stackTrace');
-      }
-    }
-    try {
-      await _syncService.mergeRemoteAssets(_projects);
-      await _hydrateLocalState();
-    } catch (error, stackTrace) {
-      await _handleError(error);
-      remoteMergeError = _requiresReauthentication(error)
-          ? _lastError
-          : error.toString();
-      if (kDebugMode) {
-        debugPrint('Remote merge failed: $error\n$stackTrace');
-      }
-    }
-    if (remoteMergeError != null) {
-      _lastError = remoteMergeError;
-    }
     _notifyListenersIfActive();
+    unawaited(_kickSync(forceBootstrap: !await _database.hasCompletedBootstrap()));
   }
 
   Future<void> ingestCapturedFile(
@@ -200,13 +160,12 @@ class JoblensStore extends ChangeNotifier {
       }
 
       await _database.upsertAsset(asset);
-      await _syncService.enqueueAsset(asset);
       await _hydrateLocalState();
       _notifyListenersIfActive();
       if (processSyncNow) {
-        await _runBackgroundSyncRefresh();
+        await _syncService.kick();
       } else {
-        unawaited(_runBackgroundSyncRefresh());
+        unawaited(_kickSync());
       }
     });
   }
@@ -238,12 +197,11 @@ class JoblensStore extends ChangeNotifier {
 
           await _database.upsertAsset(asset);
           await _database.setAssetExistsInPhoneStorage(asset.id, true);
-          await _syncService.enqueueAsset(asset);
           await _hydrateLocalState();
           _notifyListenersIfActive();
         }
 
-        unawaited(_runBackgroundSyncRefresh());
+        unawaited(_kickSync());
       }),
     );
   }
@@ -284,7 +242,6 @@ class JoblensStore extends ChangeNotifier {
           asset.id,
           mode == LibraryImportMode.copy,
         );
-        await _syncService.enqueueAsset(asset);
         importedAssetIds.add(entity.id);
         await _hydrateLocalState();
         _notifyListenersIfActive();
@@ -294,7 +251,7 @@ class JoblensStore extends ChangeNotifier {
         await PhotoManager.editor.deleteWithIds(importedAssetIds);
       }
 
-      unawaited(_runBackgroundSyncRefresh());
+      unawaited(_kickSync());
     });
   }
 
@@ -306,29 +263,13 @@ class JoblensStore extends ChangeNotifier {
 
     await _runBusy(() async {
       final normalizedStartDate = _normalizeProjectStartDate(startDate);
-      final projectId = await _database.createProject(
+      await _database.createProject(
         trimmed,
         startDate: normalizedStartDate,
       );
-      final localProject = Project(
-        id: projectId,
-        name: trimmed,
-        notes: '',
-        startDate: normalizedStartDate,
-        remoteProjectId: null,
-        coverAssetId: null,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-        syncFolderMap: const {},
-      );
       await _hydrateLocalState();
       _notifyListenersIfActive();
-      unawaited(
-        _queueBackgroundCloudWork(
-          action: () => _syncService.syncProject(localProject),
-          refresh: true,
-        ),
-      );
+      unawaited(_kickSync());
     });
   }
 
@@ -353,17 +294,9 @@ class JoblensStore extends ChangeNotifier {
         name: normalizedName,
         startDate: normalizedStartDate,
       );
-      final project = (await _database.getProjects()).firstWhere(
-        (item) => item.id == projectId,
-      );
       await _hydrateLocalState();
       _notifyListenersIfActive();
-      unawaited(
-        _queueBackgroundCloudWork(
-          action: () => _syncService.syncProject(project),
-          refresh: true,
-        ),
-      );
+      unawaited(_kickSync());
     });
   }
 
@@ -416,40 +349,20 @@ class JoblensStore extends ChangeNotifier {
       final movedAssets = updatedAssets
           .where((asset) => movedAssetIds.contains(asset.id))
           .toList(growable: false);
-      await _syncService.enqueueAssets(movedAssets);
       await _hydrateLocalState();
       _notifyListenersIfActive();
-      unawaited(
-        _queueBackgroundCloudWork(
-          action: () async {
-            if (project.remoteProjectId != null &&
-                project.remoteProjectId!.isNotEmpty) {
-              try {
-                await _syncService.archiveProject(project.remoteProjectId!);
-              } catch (error, stackTrace) {
-                if (kDebugMode) {
-                  debugPrint('Archive project failed: $error\n$stackTrace');
-                }
-              }
-            }
-          },
-          processQueue: true,
-          refresh: true,
-        ),
-      );
+      if (movedAssets.isNotEmpty || project.remoteProjectId != null) {
+        unawaited(_kickSync());
+      }
     });
   }
 
   Future<void> moveAssetToProject(String assetId, int projectId) async {
     await _runBusy(() async {
       await _database.moveAssetToProject(assetId, projectId);
-      final movedAsset = await _database.getAssetById(assetId);
-      if (movedAsset != null) {
-        await _syncService.enqueueAsset(movedAsset);
-      }
       await _hydrateLocalState();
       _notifyListenersIfActive();
-      unawaited(_runBackgroundSyncRefresh());
+      unawaited(_kickSync());
     });
   }
 
@@ -466,11 +379,9 @@ class JoblensStore extends ChangeNotifier {
       for (final assetId in uniqueIds) {
         await _database.moveAssetToProject(assetId, projectId);
       }
-      final movedAssets = await _database.getAssetsByIds(uniqueIds);
-      await _syncService.enqueueAssets(movedAssets);
       await _hydrateLocalState();
       _notifyListenersIfActive();
-      unawaited(_runBackgroundSyncRefresh());
+      unawaited(_kickSync());
     });
   }
 
@@ -480,15 +391,8 @@ class JoblensStore extends ChangeNotifier {
       await _database.softDeleteAsset(assetId);
       await _hydrateLocalState();
       _notifyListenersIfActive();
-      if (asset != null &&
-          asset.remoteAssetId != null &&
-          asset.remoteAssetId!.isNotEmpty) {
-        unawaited(
-          _queueBackgroundCloudWork(
-            action: () => _syncService.deleteRemoteAsset(asset),
-            refresh: true,
-          ),
-        );
+      if (asset != null) {
+        unawaited(_kickSync());
       }
     });
   }
@@ -506,23 +410,8 @@ class JoblensStore extends ChangeNotifier {
       }
       await _hydrateLocalState();
       _notifyListenersIfActive();
-      final remotelySyncedAssets = assets
-          .where(
-            (asset) =>
-                asset.remoteAssetId != null && asset.remoteAssetId!.isNotEmpty,
-          )
-          .toList(growable: false);
-      if (remotelySyncedAssets.isNotEmpty) {
-        unawaited(
-          _queueBackgroundCloudWork(
-            action: () async {
-              for (final asset in remotelySyncedAssets) {
-                await _syncService.deleteRemoteAsset(asset);
-              }
-            },
-            refresh: true,
-          ),
-        );
+      if (assets.isNotEmpty) {
+        unawaited(_kickSync());
       }
     });
   }
@@ -530,7 +419,9 @@ class JoblensStore extends ChangeNotifier {
   Future<void> disconnectProvider(CloudProviderType provider) async {
     await _runBusy(() async {
       await _syncService.disconnectProvider(provider);
-      await refresh();
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
+      unawaited(_kickSync(forceBootstrap: true));
     });
   }
 
@@ -545,30 +436,12 @@ class JoblensStore extends ChangeNotifier {
   Future<void> backfillCloudSyncAfterProviderConnection() async {
     await _runBusy(() async {
       await _syncService.refreshProviderConnections();
-      final providerAccounts = await _database.getProviderAccounts();
-      final selectedProvider = providerAccounts
-          .where(
-            (provider) =>
-                provider.tokenState != ProviderTokenState.disconnected,
-          )
-          .map((provider) => provider.providerType.key)
-          .cast<String?>()
-          .firstWhere((provider) => provider != null, orElse: () => null);
-
-      final assetsNeedingRemoteSync = (await _database.getAssets()).where(
-        (asset) =>
-            asset.status == AssetStatus.active &&
-            asset.localPath.trim().isNotEmpty &&
-            ((asset.remoteAssetId == null || asset.remoteAssetId!.isEmpty) ||
-                (selectedProvider != null &&
-                    asset.remoteProvider != selectedProvider)),
-      );
-
       await _syncService.retryFailed();
-      await _syncService.enqueueAssets(assetsNeedingRemoteSync);
-      _projects = await _database.getProjects();
-      await _syncService.processQueue(_projects);
-      await refresh();
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
+      await _syncService.kick(forceBootstrap: true);
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
     });
   }
 
@@ -583,23 +456,28 @@ class JoblensStore extends ChangeNotifier {
         username: username,
         appPassword: appPassword,
       );
-      await refresh();
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
+      await _syncService.kick(forceBootstrap: true);
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
     });
   }
 
   Future<void> runSyncNow() async {
     await _runBusy(() async {
-      _projects = await _database.getProjects();
-      await _syncService.processQueue(_projects);
-      await refresh();
+      await _syncService.kick(forceBootstrap: true);
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
     });
   }
 
   Future<void> retryFailedSyncJobs() async {
     await _runBusy(() async {
       await _syncService.retryFailed();
-      await _syncService.processQueue(_projects);
-      await refresh();
+      await _syncService.kick();
+      await _hydrateLocalState();
+      _notifyListenersIfActive();
     });
   }
 
@@ -805,33 +683,17 @@ class JoblensStore extends ChangeNotifier {
     _libraryImportMode = await _database.getLibraryImportMode();
   }
 
-  Future<void> _runBackgroundSyncRefresh() {
-    return _queueBackgroundCloudWork(processQueue: true, refresh: true);
-  }
-
-  Future<void> _queueBackgroundCloudWork({
-    Future<void> Function()? action,
-    bool processQueue = false,
-    bool refresh = false,
-  }) {
+  Future<void> _kickSync({bool forceBootstrap = false}) {
     _pendingBackgroundSync = _pendingBackgroundSync.then((_) async {
       if (_isDisposed) {
         return;
       }
       try {
-        if (action != null) {
-          await action();
-        }
-        if (processQueue) {
-          final projects = await _database.getProjects();
-          await _syncService.processQueue(projects);
-        }
+        await _syncService.kick(forceBootstrap: forceBootstrap);
         if (_isDisposed) {
           return;
         }
-        if (refresh) {
-          await this.refresh();
-        }
+        await _hydrateLocalState();
       } catch (error, stackTrace) {
         if (_isDisposed) {
           return;
@@ -841,10 +703,10 @@ class JoblensStore extends ChangeNotifier {
           _lastError = error.toString();
         }
         if (kDebugMode) {
-          debugPrint('Background sync refresh failed: $error\n$stackTrace');
+          debugPrint('Background sync failed: $error\n$stackTrace');
         }
-        _notifyListenersIfActive();
       }
+      _notifyListenersIfActive();
     });
     return _pendingBackgroundSync;
   }

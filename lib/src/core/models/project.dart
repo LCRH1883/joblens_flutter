@@ -29,6 +29,10 @@ class Project {
     required this.createdAt,
     required this.updatedAt,
     required this.syncFolderMap,
+    this.deletedAt,
+    this.remoteRev,
+    this.localSeq = 0,
+    this.dirtyFields = const [],
   });
 
   final int id;
@@ -40,6 +44,10 @@ class Project {
   final DateTime createdAt;
   final DateTime updatedAt;
   final Map<String, String> syncFolderMap;
+  final DateTime? deletedAt;
+  final int? remoteRev;
+  final int localSeq;
+  final List<String> dirtyFields;
 
   Map<String, Object?> toMap() {
     return {
@@ -52,6 +60,10 @@ class Project {
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
       'sync_folder_map': jsonEncode(syncFolderMap),
+      'deleted_at': deletedAt?.toIso8601String(),
+      'remote_rev': remoteRev,
+      'local_seq': localSeq,
+      'dirty_fields': jsonEncode(dirtyFields),
     };
   }
 
@@ -72,6 +84,15 @@ class Project {
       syncFolderMap: decoded.map(
         (key, value) => MapEntry(key, value.toString()),
       ),
+      deletedAt: (map['deleted_at'] as String?) == null
+          ? null
+          : DateTime.parse(map['deleted_at']! as String),
+      remoteRev: map['remote_rev'] as int?,
+      localSeq: (map['local_seq'] as int?) ?? 0,
+      dirtyFields: ((jsonDecode((map['dirty_fields'] as String?) ?? '[]')
+              as List<dynamic>))
+          .map((item) => item.toString())
+          .toList(growable: false),
     );
   }
 }

@@ -1,8 +1,12 @@
+import 'dart:convert';
+
 import 'package:intl/intl.dart';
 
 enum AssetSourceType { captured, imported }
 
 enum AssetStatus { active, deleted }
+
+enum AssetIngestState { ready, failed }
 
 class AssetCloudState {
   static const localAndCloud = 'local_and_cloud';
@@ -23,6 +27,12 @@ class PhotoAsset {
     required this.sourceType,
     required this.cloudState,
     required this.existsInPhoneStorage,
+    this.deletedAt,
+    this.remoteRev,
+    this.localSeq = 0,
+    this.dirtyFields = const [],
+    this.uploadGeneration = 1,
+    this.ingestState = AssetIngestState.ready,
     this.remoteAssetId,
     this.remoteProvider,
     this.remoteFileId,
@@ -42,6 +52,12 @@ class PhotoAsset {
   final AssetSourceType sourceType;
   final String cloudState;
   final bool existsInPhoneStorage;
+  final DateTime? deletedAt;
+  final int? remoteRev;
+  final int localSeq;
+  final List<String> dirtyFields;
+  final int uploadGeneration;
+  final AssetIngestState ingestState;
   final String? remoteAssetId;
   final String? remoteProvider;
   final String? remoteFileId;
@@ -56,8 +72,15 @@ class PhotoAsset {
     int? projectId,
     AssetStatus? status,
     String? thumbPath,
+    String? hash,
     String? cloudState,
     bool? existsInPhoneStorage,
+    DateTime? deletedAt,
+    int? remoteRev,
+    int? localSeq,
+    List<String>? dirtyFields,
+    int? uploadGeneration,
+    AssetIngestState? ingestState,
     String? remoteAssetId,
     String? remoteProvider,
     String? remoteFileId,
@@ -72,11 +95,17 @@ class PhotoAsset {
       createdAt: createdAt,
       importedAt: importedAt,
       projectId: projectId ?? this.projectId,
-      hash: hash,
+      hash: hash ?? this.hash,
       status: status ?? this.status,
       sourceType: sourceType,
       cloudState: cloudState ?? this.cloudState,
       existsInPhoneStorage: existsInPhoneStorage ?? this.existsInPhoneStorage,
+      deletedAt: deletedAt ?? this.deletedAt,
+      remoteRev: remoteRev ?? this.remoteRev,
+      localSeq: localSeq ?? this.localSeq,
+      dirtyFields: dirtyFields ?? this.dirtyFields,
+      uploadGeneration: uploadGeneration ?? this.uploadGeneration,
+      ingestState: ingestState ?? this.ingestState,
       remoteAssetId: remoteAssetId ?? this.remoteAssetId,
       remoteProvider: remoteProvider ?? this.remoteProvider,
       remoteFileId: remoteFileId ?? this.remoteFileId,
@@ -104,6 +133,12 @@ class PhotoAsset {
       'upload_path': uploadPath,
       'cloud_state': cloudState,
       'exists_in_phone_storage': existsInPhoneStorage ? 1 : 0,
+      'deleted_at': deletedAt?.toIso8601String(),
+      'remote_rev': remoteRev,
+      'local_seq': localSeq,
+      'dirty_fields': jsonEncode(dirtyFields),
+      'upload_generation': uploadGeneration,
+      'ingest_state': ingestState.name,
       'last_sync_error_code': lastSyncErrorCode,
     };
   }
@@ -123,6 +158,19 @@ class PhotoAsset {
           (map['cloud_state'] as String?) ?? AssetCloudState.localAndCloud,
       existsInPhoneStorage:
           ((map['exists_in_phone_storage'] as int?) ?? 0) == 1,
+      deletedAt: (map['deleted_at'] as String?) == null
+          ? null
+          : DateTime.parse(map['deleted_at']! as String),
+      remoteRev: map['remote_rev'] as int?,
+      localSeq: (map['local_seq'] as int?) ?? 0,
+      dirtyFields: ((jsonDecode((map['dirty_fields'] as String?) ?? '[]')
+              as List<dynamic>))
+          .map((item) => item.toString())
+          .toList(growable: false),
+      uploadGeneration: (map['upload_generation'] as int?) ?? 1,
+      ingestState: AssetIngestState.values.byName(
+        (map['ingest_state'] as String?) ?? AssetIngestState.ready.name,
+      ),
       remoteAssetId: map['remote_asset_id'] as String?,
       remoteProvider: map['remote_provider'] as String?,
       remoteFileId: map['remote_file_id'] as String?,

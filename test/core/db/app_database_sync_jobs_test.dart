@@ -29,6 +29,13 @@ void main() {
     addTearDown(database.close);
 
     final projectId = await database.ensureDefaultProject();
+    await database.upsertCloudOnlyAsset(
+      localAssetId: 'asset-1',
+      projectId: projectId,
+      remoteAssetId: 'remote-1',
+      sha256: 'a' * 64,
+      createdAt: DateTime(2026, 4, 8),
+    );
     await database.enqueueSyncJob(
       assetId: 'asset-1',
       projectId: projectId,
@@ -68,14 +75,21 @@ void main() {
       });
 
       final dbPath = p.join(tempDir.path, 'joblens.db');
-      final database = await AppDatabase.open(databasePath: dbPath);
-      addTearDown(database.close);
+    final database = await AppDatabase.open(databasePath: dbPath);
+    addTearDown(database.close);
 
-      final projectId = await database.ensureDefaultProject();
-      await database.enqueueSyncJob(
-        assetId: 'asset-1',
-        projectId: projectId,
-        provider: CloudProviderType.backend,
+    final projectId = await database.ensureDefaultProject();
+    await database.upsertCloudOnlyAsset(
+      localAssetId: 'asset-1',
+      projectId: projectId,
+      remoteAssetId: 'remote-1',
+      sha256: 'b' * 64,
+      createdAt: DateTime(2026, 4, 8),
+    );
+    await database.enqueueSyncJob(
+      assetId: 'asset-1',
+      projectId: projectId,
+      provider: CloudProviderType.backend,
       );
 
       final initialJob = (await database.getSyncJobs()).single;
@@ -99,4 +113,41 @@ void main() {
       expect(jobs.single.attemptCount, 0);
     },
   );
+
+  test('softDeleteAsset marks asset deleted and clears stale sync jobs', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'joblens_db_soft_delete_',
+    );
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    final dbPath = p.join(tempDir.path, 'joblens.db');
+    final database = await AppDatabase.open(databasePath: dbPath);
+    addTearDown(database.close);
+
+    final projectId = await database.ensureDefaultProject();
+    await database.upsertCloudOnlyAsset(
+      localAssetId: 'asset-1',
+      projectId: projectId,
+      remoteAssetId: 'remote-1',
+      sha256: 'a' * 64,
+      createdAt: DateTime(2026, 4, 7),
+    );
+    await database.enqueueSyncJob(
+      assetId: 'asset-1',
+      projectId: projectId,
+      provider: CloudProviderType.backend,
+    );
+
+    await database.softDeleteAsset('asset-1');
+
+    final deletedAsset = await database.getAssetById('asset-1');
+    final jobs = await database.getSyncJobs();
+    expect(deletedAsset?.status.name, 'deleted');
+    expect(deletedAsset?.cloudState, 'deleted');
+    expect(jobs, isEmpty);
+  });
 }

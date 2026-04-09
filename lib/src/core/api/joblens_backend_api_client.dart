@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../models/cloud_provider.dart';
+import '../models/backend_sync_event.dart';
 import 'api_exception.dart';
 import 'backend_api_models.dart';
 import 'backend_auth.dart';
@@ -85,6 +86,60 @@ class JoblensBackendApiClient {
     );
   }
 
+  Future<String> registerDevice({
+    required String clientDeviceId,
+    required String platform,
+    String? appVersion,
+    String? deviceName,
+  }) async {
+    final map = await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/devices/register',
+      body: {
+        'clientDeviceId': clientDeviceId,
+        'platform': platform,
+        if (appVersion != null && appVersion.isNotEmpty) 'appVersion': appVersion,
+        if (deviceName != null && deviceName.isNotEmpty) 'deviceName': deviceName,
+      },
+    );
+    final rawDevice = map['device'];
+    final device = rawDevice is Map<String, dynamic>
+        ? rawDevice
+        : rawDevice is Map
+        ? rawDevice.map((key, value) => MapEntry('$key', value))
+        : map;
+    return device['id']! as String;
+  }
+
+  Future<SyncEventsResponse> getSyncEvents({
+    required int after,
+    int limit = 200,
+  }) async {
+    final map = await _authorizedJsonRequest(
+      method: 'GET',
+      path: '/sync/events',
+      query: {
+        'after': '$after',
+        'limit': '$limit',
+      },
+    );
+    return SyncEventsResponse.fromMap(map);
+  }
+
+  Future<void> ackSyncEvents({
+    required String deviceId,
+    required int upToEventId,
+  }) async {
+    await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/sync/ack',
+      body: {
+        'deviceId': deviceId,
+        'upToEventId': upToEventId,
+      },
+    );
+  }
+
   Future<ListProjectsResponse> listProjects() async {
     final map = await _authorizedJsonRequest(
       method: 'GET',
@@ -139,19 +194,32 @@ class JoblensBackendApiClient {
   Future<MoveAssetResponse> moveAssetToProject({
     required String assetId,
     required String projectId,
+    int? expectedRevision,
   }) async {
     final map = await _authorizedJsonRequest(
       method: 'POST',
       path: '/assets/$assetId/move',
-      body: {'projectId': projectId},
+      body: {
+        'projectId': projectId,
+        ...?expectedRevision == null
+            ? null
+            : {
+                'expectedRevision': expectedRevision,
+              },
+      },
     );
     return MoveAssetResponse.fromMap(map);
   }
 
-  Future<void> deleteAsset(String assetId) async {
+  Future<void> deleteAsset(String assetId, {int? expectedRevision}) async {
     await _authorizedJsonRequest(
       method: 'POST',
       path: '/assets/$assetId/delete',
+      body: expectedRevision == null
+          ? null
+          : {
+              'expectedRevision': expectedRevision,
+            },
     );
   }
 

@@ -84,11 +84,13 @@ class RemoteProjectUpsertRequest {
     required this.localProjectId,
     required this.name,
     this.remoteProjectId,
+    this.expectedRevision,
   });
 
   final int localProjectId;
   final String name;
   final String? remoteProjectId;
+  final int? expectedRevision;
 
   Map<String, Object?> toMap() {
     return {
@@ -96,20 +98,34 @@ class RemoteProjectUpsertRequest {
       'name': name,
       if (remoteProjectId != null && remoteProjectId!.isNotEmpty)
         'projectId': remoteProjectId,
+      if (expectedRevision != null) 'expectedRevision': expectedRevision,
     };
   }
 }
 
 class RemoteProjectRecord {
-  const RemoteProjectRecord({required this.projectId, required this.name});
+  const RemoteProjectRecord({
+    required this.projectId,
+    required this.name,
+    this.revision,
+    this.deleted = false,
+  });
 
   final String projectId;
   final String name;
+  final int? revision;
+  final bool deleted;
 
   factory RemoteProjectRecord.fromMap(Map<String, dynamic> map) {
     return RemoteProjectRecord(
       projectId: _asString(map['projectId'] ?? map['id']),
       name: _asString(map['name']),
+      revision:
+          _asNullableInt(map['revision']) ??
+          _asNullableInt(map['remote_rev']),
+      deleted:
+          _asBool(map['deleted']) ||
+          _asNullableString(map['status']) == 'deleted',
     );
   }
 }
@@ -344,6 +360,7 @@ class CommitAssetRequest {
     this.uploadSessionId,
     this.provider,
     this.remoteFileId,
+    this.expectedRevision,
   });
 
   final String projectId;
@@ -359,6 +376,7 @@ class CommitAssetRequest {
   final String? uploadSessionId;
   final CloudProviderType? provider;
   final String? remoteFileId;
+  final int? expectedRevision;
 
   Map<String, Object?> toMap() {
     return {
@@ -378,6 +396,7 @@ class CommitAssetRequest {
       if (provider != null) 'provider': provider!.key,
       if (remoteFileId != null && remoteFileId!.isNotEmpty)
         'remoteFileId': remoteFileId,
+      if (expectedRevision != null) 'expectedRevision': expectedRevision,
     };
   }
 }
@@ -392,6 +411,7 @@ class CommitAssetResponse {
     required this.remoteFileId,
     required this.remotePath,
     required this.rawAsset,
+    required this.revision,
   });
 
   final String? assetId;
@@ -402,6 +422,7 @@ class CommitAssetResponse {
   final String? remoteFileId;
   final String? remotePath;
   final Map<String, dynamic>? rawAsset;
+  final int? revision;
 
   factory CommitAssetResponse.fromMap(Map<String, dynamic> map) {
     final rawAsset = map['asset'] is Map<String, dynamic>
@@ -437,6 +458,9 @@ class CommitAssetResponse {
             rawAsset?['path'],
       ),
       rawAsset: rawAsset,
+      revision:
+          _asNullableInt(map['revision']) ??
+          _asNullableInt(rawAsset?['revision']),
     );
   }
 }
@@ -448,6 +472,7 @@ class MoveAssetResponse {
     required this.provider,
     required this.remoteFileId,
     required this.remotePath,
+    required this.revision,
   });
 
   final String assetId;
@@ -455,6 +480,7 @@ class MoveAssetResponse {
   final CloudProviderType? provider;
   final String? remoteFileId;
   final String? remotePath;
+  final int? revision;
 
   factory MoveAssetResponse.fromMap(Map<String, dynamic> map) {
     final providerValue = _asNullableString(
@@ -472,6 +498,7 @@ class MoveAssetResponse {
       remotePath: _asNullableString(
         map['remotePath'] ?? map['providerPath'] ?? map['path'],
       ),
+      revision: _asNullableInt(map['revision']),
     );
   }
 }
@@ -533,6 +560,7 @@ class BackendAssetRecord {
     this.provider,
     this.remoteFileId,
     this.remotePath,
+    this.revision,
     this.deleted = false,
   });
 
@@ -549,6 +577,7 @@ class BackendAssetRecord {
   final CloudProviderType? provider;
   final String? remoteFileId;
   final String? remotePath;
+  final int? revision;
   final bool deleted;
 
   factory BackendAssetRecord.fromMap(Map<String, dynamic> map) {
@@ -590,6 +619,9 @@ class BackendAssetRecord {
       remotePath: _asNullableString(
         map['remotePath'] ?? map['providerPath'] ?? map['path'],
       ),
+      revision:
+          _asNullableInt(map['revision']) ??
+          _asNullableInt(map['remote_rev']),
       deleted:
           _asBool(map['deleted']) ||
           _asNullableString(map['status']) == 'deleted',
