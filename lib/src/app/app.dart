@@ -162,7 +162,11 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
         debugPrint(
           'Joblens provider callback success: ${callback.provider.key}',
         );
-        await store.backfillCloudSyncAfterProviderConnection();
+        if (callback.sessionId != null && callback.sessionId!.isNotEmpty) {
+          await store.completeProviderConnection(callback.sessionId!);
+        } else {
+          await store.backfillCloudSyncAfterProviderConnection();
+        }
       } else {
         debugPrint(
           'Joblens provider callback error: ${callback.provider.key} '

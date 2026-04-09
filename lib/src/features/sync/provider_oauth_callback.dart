@@ -4,6 +4,7 @@ class ProviderOAuthCallback {
   const ProviderOAuthCallback({
     required this.provider,
     required this.status,
+    this.sessionId,
     this.code,
     this.message,
     this.accountIdentifier,
@@ -11,6 +12,7 @@ class ProviderOAuthCallback {
 
   final CloudProviderType provider;
   final String status;
+  final String? sessionId;
   final String? code;
   final String? message;
   final String? accountIdentifier;
@@ -18,28 +20,37 @@ class ProviderOAuthCallback {
   bool get isSuccess => status == 'success';
 
   static ProviderOAuthCallback? tryParse(Uri uri) {
-    if (uri.scheme != 'joblens' || uri.host != 'auth-callback') {
+    final isCustomScheme = uri.scheme == 'joblens' && uri.host == 'auth-callback';
+    final isWebCallback =
+        uri.scheme == 'https' &&
+        uri.host == 'auth.joblens.app' &&
+        uri.path == '/mobile/provider-callback';
+    if (!isCustomScheme && !isWebCallback) {
       return null;
     }
 
     final parameters = _extractParameters(uri);
     final providerKey = parameters['provider']?.trim();
     final status = parameters['status']?.trim().toLowerCase();
-    if (providerKey == null ||
-        providerKey.isEmpty ||
-        status == null ||
-        status.isEmpty) {
+    if (status == null || status.isEmpty) {
       return null;
     }
 
-    final provider = _providerFromKey(providerKey);
-    if (provider == null) {
+    final provider = providerKey == null || providerKey.isEmpty
+        ? null
+        : _providerFromKey(providerKey);
+    if (provider == null && _normalizedValue(parameters['sid']) == null) {
       return null;
+    }
+    final resolvedProvider = provider ?? CloudProviderType.dropbox;
+    if (provider == null) {
+      // Provider-specific session details are fetched from the backend using sid.
     }
 
     return ProviderOAuthCallback(
-      provider: provider,
+      provider: resolvedProvider,
       status: status,
+      sessionId: _normalizedValue(parameters['sid'] ?? parameters['sessionId']),
       code: _normalizedValue(parameters['code']),
       message: _normalizedValue(parameters['message']),
       accountIdentifier: _normalizedValue(parameters['accountIdentifier']),

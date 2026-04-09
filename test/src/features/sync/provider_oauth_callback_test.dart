@@ -46,4 +46,16 @@ void main() {
     expect(callback!.provider, CloudProviderType.dropbox);
     expect(callback.status, 'success');
   });
+
+  test('parses HTTPS provider callback session result link', () {
+    final callback = ProviderOAuthCallback.tryParse(
+      Uri.parse(
+        'https://auth.joblens.app/mobile/provider-callback?sid=session-123&status=success&result=success',
+      ),
+    );
+
+    expect(callback, isNotNull);
+    expect(callback!.sessionId, 'session-123');
+    expect(callback.status, 'success');
+  });
 }

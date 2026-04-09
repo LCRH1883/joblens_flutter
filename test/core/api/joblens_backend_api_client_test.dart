@@ -50,7 +50,9 @@ void main() {
         return http.Response(
           jsonEncode({
             'provider': 'dropbox',
-            'authorizationUrl': 'https://www.dropbox.com/oauth2/authorize?state=abc',
+            'sessionId': 'session-123',
+            'launchUrl': 'https://www.dropbox.com/oauth2/authorize?state=abc',
+            'expiresAt': '2026-04-08T20:00:00.000Z',
           }),
           200,
           headers: {'content-type': 'application/json'},
@@ -60,6 +62,7 @@ void main() {
 
     final response = await client.beginProviderConnection(
       CloudProviderType.dropbox,
+      intent: 'connect',
     );
 
     expect(
@@ -67,6 +70,8 @@ void main() {
       {
         'redirectUri':
             'https://api.joblens.xyz/functions/v1/api/v1/providers/dropbox/oauth/callback',
+        'intent': 'connect',
+        'mobileReturnUrl': 'https://auth.joblens.app/mobile/provider-callback',
         'redirectTo': 'joblens://auth-callback',
       },
     );

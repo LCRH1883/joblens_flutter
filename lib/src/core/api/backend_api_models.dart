@@ -4,21 +4,31 @@ class ProviderConnectionSummary {
   const ProviderConnectionSummary({
     required this.provider,
     required this.status,
+    this.connectionId,
     this.connectedAt,
+    this.lastSyncAt,
     this.lastError,
     this.displayName,
     this.accountIdentifier,
+    this.rootDisplayName,
+    this.rootFolderPath,
+    this.isActive = false,
   });
 
   final CloudProviderType provider;
   final String status;
+  final String? connectionId;
   final DateTime? connectedAt;
+  final DateTime? lastSyncAt;
   final String? lastError;
   final String? displayName;
   final String? accountIdentifier;
+  final String? rootDisplayName;
+  final String? rootFolderPath;
+  final bool isActive;
 
-  bool get isConnected => status == 'connected';
-  bool get isExpired => status == 'expired';
+  bool get isConnected => status == 'ready' || status == 'connected';
+  bool get isExpired => status == 'expired' || status == 'reconnect_required';
 
   factory ProviderConnectionSummary.fromMap(Map<String, dynamic> map) {
     return ProviderConnectionSummary(
@@ -26,8 +36,14 @@ class ProviderConnectionSummary {
         _asString(map['provider'] ?? map['providerType']),
       ),
       status: _asString(map['status'], fallback: 'disconnected'),
+      connectionId: _asNullableString(
+        map['connectionId'] ?? map['connection_id'],
+      ),
       connectedAt: _asNullableDateTime(
         map['connectedAt'] ?? map['connected_at'],
+      ),
+      lastSyncAt: _asNullableDateTime(
+        map['lastSyncAt'] ?? map['last_sync_at'],
       ),
       lastError: _asNullableString(map['lastError'] ?? map['last_error']),
       displayName: _asNullableString(
@@ -36,6 +52,13 @@ class ProviderConnectionSummary {
       accountIdentifier: _asNullableString(
         map['accountIdentifier'] ?? map['account_identifier'],
       ),
+      rootDisplayName: _asNullableString(
+        map['rootDisplayName'] ?? map['root_display_name'],
+      ),
+      rootFolderPath: _asNullableString(
+        map['rootFolderPath'] ?? map['root_folder_path'],
+      ),
+      isActive: _asBool(map['isActive'] ?? map['is_active']),
     );
   }
 }
@@ -56,15 +79,87 @@ class ProviderConnectionsResponse {
 }
 
 class BeginProviderConnectionResponse {
-  const BeginProviderConnectionResponse({required this.authorizationUrl});
+  const BeginProviderConnectionResponse({
+    required this.authorizationUrl,
+    this.sessionId,
+    this.expiresAt,
+  });
 
   final String authorizationUrl;
+  final String? sessionId;
+  final DateTime? expiresAt;
 
   factory BeginProviderConnectionResponse.fromMap(Map<String, dynamic> map) {
     return BeginProviderConnectionResponse(
       authorizationUrl: _asString(
-        map['authorizationUrl'] ?? map['authUrl'] ?? map['url'],
+        map['launchUrl'] ?? map['authorizationUrl'] ?? map['authUrl'] ?? map['url'],
       ),
+      sessionId: _asNullableString(map['sessionId'] ?? map['state']),
+      expiresAt: _asNullableDateTime(map['expiresAt'] ?? map['expires_at']),
+    );
+  }
+}
+
+class ProviderAuthSessionResult {
+  const ProviderAuthSessionResult({
+    required this.sessionId,
+    required this.status,
+    required this.provider,
+    this.intent,
+    this.connectionId,
+    this.connectionStatus,
+    this.providerAccountEmail,
+    this.displayName,
+    this.rootDisplayName,
+    this.rootFolderPath,
+    this.lastError,
+    this.projectsPending = 0,
+    this.assetsPending = 0,
+  });
+
+  final String sessionId;
+  final String status;
+  final CloudProviderType provider;
+  final String? intent;
+  final String? connectionId;
+  final String? connectionStatus;
+  final String? providerAccountEmail;
+  final String? displayName;
+  final String? rootDisplayName;
+  final String? rootFolderPath;
+  final String? lastError;
+  final int projectsPending;
+  final int assetsPending;
+
+  bool get isCompleted => status == 'completed';
+
+  factory ProviderAuthSessionResult.fromMap(Map<String, dynamic> map) {
+    final bootstrapCounts = _asMap(map['bootstrapCounts'] ?? map['bootstrap_counts']);
+    return ProviderAuthSessionResult(
+      sessionId: _asString(map['sessionId'] ?? map['sid'] ?? map['state']),
+      status: _asString(map['status'], fallback: 'failed'),
+      provider: CloudProviderTypeX.fromKey(
+        _asString(map['provider']),
+      ),
+      intent: _asNullableString(map['intent']),
+      connectionId: _asNullableString(map['connectionId'] ?? map['connection_id']),
+      connectionStatus: _asNullableString(map['connectionStatus'] ?? map['connection_status']),
+      providerAccountEmail: _asNullableString(
+        map['providerAccountEmail'] ?? map['provider_account_email'] ?? map['accountIdentifier'] ?? map['account_identifier'],
+      ),
+      displayName: _asNullableString(map['displayName'] ?? map['display_name']),
+      rootDisplayName: _asNullableString(map['rootDisplayName'] ?? map['root_display_name']),
+      rootFolderPath: _asNullableString(map['rootFolderPath'] ?? map['root_folder_path']),
+      lastError: _asNullableString(map['lastError'] ?? map['last_error']),
+      projectsPending: _asNullableInt(
+            bootstrapCounts['projectsPending'] ?? bootstrapCounts['projects_pending'],
+          ) ??
+          0,
+      assetsPending:
+          _asNullableInt(
+            bootstrapCounts['assetsPending'] ?? bootstrapCounts['assets_pending'],
+          ) ??
+          0,
     );
   }
 }
@@ -668,6 +763,13 @@ List<dynamic> _asList(Object? value) {
 
 List<Map<String, dynamic>> _asMapList(List<dynamic> items) {
   return items.whereType<Map>().map(_toStringKeyedMap).toList(growable: false);
+}
+
+Map<String, dynamic> _asMap(Object? value) {
+  if (value is Map) {
+    return _toStringKeyedMap(value);
+  }
+  return const <String, dynamic>{};
 }
 
 Map<String, dynamic> _toStringKeyedMap(Map<dynamic, dynamic> item) {

@@ -49,7 +49,7 @@ class _SyncPageState extends ConsumerState<SyncPage>
     final authUser = ref.watch(authUserProvider);
     final canSyncWithCloud = isAuthConfigured && authUser != null;
     final activeProviderAccounts = store.providers
-        .where((provider) => provider.tokenState != ProviderTokenState.disconnected)
+        .where((provider) => provider.hasActiveConnection)
         .toList(growable: false);
     final lockedProvider = activeProviderAccounts.isEmpty
         ? null
@@ -216,6 +216,47 @@ class _SyncPageState extends ConsumerState<SyncPage>
 
     final store = ref.read(joblensStoreProvider);
     if (_connectingProvider == providerAccount.providerType) {
+      return;
+    }
+
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (context) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Connect ${providerAccount.providerType.label}',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'We’ll open ${providerAccount.providerType.label} securely in your browser. Joblens will prepare its folder and sync in the background while you keep using the app.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                const Spacer(),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Continue'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) {
       return;
     }
 
@@ -647,10 +688,14 @@ class _ProviderConnectionCard extends StatelessWidget {
       fontWeight: FontWeight.w700,
       letterSpacing: -0.2,
     );
-    final statusText = switch (providerAccount.tokenState) {
-      ProviderTokenState.connected => 'Connected',
-      ProviderTokenState.expired => 'Needs attention',
-      ProviderTokenState.disconnected => 'Not connected',
+    final statusText = switch (providerAccount.connectionStatus) {
+      ProviderConnectionStatus.ready => 'Connected',
+      ProviderConnectionStatus.connectedBootstrapping => 'Preparing library',
+      ProviderConnectionStatus.connecting => 'Connecting',
+      ProviderConnectionStatus.switchInProgress => 'Switching provider',
+      ProviderConnectionStatus.reconnectRequired => 'Needs attention',
+      ProviderConnectionStatus.failed => 'Connection failed',
+      ProviderConnectionStatus.disconnected => 'Not connected',
     };
 
     return Card(
@@ -685,6 +730,16 @@ class _ProviderConnectionCard extends StatelessWidget {
                       child: Text(
                         accountLabel,
                         style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  if (providerAccount.rootFolderPath case final rootPath?)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        rootPath,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
                       ),
                     ),
                 ],

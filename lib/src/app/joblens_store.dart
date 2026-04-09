@@ -487,9 +487,38 @@ class JoblensStore extends ChangeNotifier {
   Future<String?> beginProviderConnection(CloudProviderType provider) async {
     String? authUrl;
     await _runBusy(() async {
-      authUrl = await _syncService.beginProviderConnection(provider);
+      final activeProvider = _activeProviderAccount;
+      final intent = activeProvider == null
+          ? 'connect'
+          : activeProvider.providerType == provider
+          ? 'reconnect'
+          : 'switch';
+      authUrl = await _syncService.beginProviderConnection(
+        provider,
+        intent: intent,
+        oldConnectionId: activeProvider?.connectionId,
+      );
     });
     return authUrl;
+  }
+
+  Future<void> completeProviderConnection(String sessionId) async {
+    await _runBusy(() async {
+      await _syncService.completeProviderConnection(sessionId);
+      await _syncService.refreshProviderConnections();
+      await _hydrateLocalState(includeDiagnostics: false);
+      _notifyListenersIfActive();
+      unawaited(
+        _scheduleBackgroundSyncAction(() async {
+          await _syncService.reconcileProjects(
+            _projects.where(
+              (project) => project.remoteProjectId?.trim().isNotEmpty ?? false,
+            ),
+          );
+          await _syncService.kick(forceBootstrap: true);
+        }),
+      );
+    });
   }
 
   Future<void> backfillCloudSyncAfterProviderConnection() async {
@@ -498,7 +527,16 @@ class JoblensStore extends ChangeNotifier {
       await _syncService.retryFailed();
       await _hydrateLocalState(includeDiagnostics: false);
       _notifyListenersIfActive();
-      unawaited(_kickSync(forceBootstrap: true));
+      unawaited(
+        _scheduleBackgroundSyncAction(() async {
+          await _syncService.reconcileProjects(
+            _projects.where(
+              (project) => project.remoteProjectId?.trim().isNotEmpty ?? false,
+            ),
+          );
+          await _syncService.kick(forceBootstrap: true);
+        }),
+      );
     });
   }
 
@@ -515,7 +553,16 @@ class JoblensStore extends ChangeNotifier {
       );
       await _hydrateLocalState(includeDiagnostics: false);
       _notifyListenersIfActive();
-      unawaited(_kickSync(forceBootstrap: true));
+      unawaited(
+        _scheduleBackgroundSyncAction(() async {
+          await _syncService.reconcileProjects(
+            _projects.where(
+              (project) => project.remoteProjectId?.trim().isNotEmpty ?? false,
+            ),
+          );
+          await _syncService.kick(forceBootstrap: true);
+        }),
+      );
     });
   }
 
@@ -736,10 +783,10 @@ class JoblensStore extends ChangeNotifier {
 
   Future<void> _hydrateLocalState({bool includeDiagnostics = true}) async {
     _assets = await _database.getAssets();
-    await _refreshAssetSyncStatuses();
     _projects = await _database.getProjects();
     _projectCounts = await _database.getProjectCounts();
     _providers = await _database.getProviderAccounts();
+    await _refreshAssetSyncStatuses();
     _projectSortMode = await _database.getProjectSortMode();
     _appThemeMode = await _database.getAppThemeMode();
     _libraryImportMode = await _database.getLibraryImportMode();
@@ -1048,16 +1095,32 @@ class JoblensStore extends ChangeNotifier {
     final syncJobStates = await _database.getAssetSyncJobStates(
       _assets.map((asset) => asset.id),
     );
+    final activeConnectionId = _activeProviderAccount?.connectionId?.trim();
+    final mirrorStates =
+        activeConnectionId != null && activeConnectionId.isNotEmpty
+        ? await _database.getAssetProviderMirrorStatuses(
+            assetIds: _assets.map((asset) => asset.id),
+            providerConnectionId: activeConnectionId,
+          )
+        : const <String, String>{};
     _assetSyncStatuses = {
       for (final asset in _assets)
-        asset.id: _deriveAssetSyncStatus(asset, syncJobState: syncJobStates[asset.id]),
+        asset.id: _deriveAssetSyncStatus(
+          asset,
+          syncJobState: syncJobStates[asset.id],
+          activeMirrorStatus: mirrorStates[asset.id],
+        ),
     };
   }
 
   AssetSyncStatus _deriveAssetSyncStatus(
     PhotoAsset asset, {
     SyncJobState? syncJobState,
+    String? activeMirrorStatus,
   }) {
+    final activeProvider = _activeProviderAccount;
+    final remoteProvider = asset.remoteProvider?.trim();
+    final remoteAssetId = asset.remoteAssetId?.trim();
     if (asset.ingestState == AssetIngestState.failed ||
         (asset.lastSyncErrorCode?.trim().isNotEmpty ?? false)) {
       return AssetSyncStatus.failed;
@@ -1073,11 +1136,49 @@ class JoblensStore extends ChangeNotifier {
         syncJobState == SyncJobState.uploading) {
       return AssetSyncStatus.syncing;
     }
-    if ((asset.remoteAssetId?.trim().isNotEmpty ?? false) &&
+    switch (activeMirrorStatus) {
+      case 'failed':
+        return AssetSyncStatus.failed;
+      case 'pending':
+        return AssetSyncStatus.syncing;
+      case 'mirrored':
+        if (asset.localPath.trim().isNotEmpty) {
+          return AssetSyncStatus.synced;
+        }
+        return AssetSyncStatus.cloudOnly;
+      case 'deleted':
+        return asset.localPath.trim().isNotEmpty
+            ? AssetSyncStatus.local
+            : AssetSyncStatus.cloudOnly;
+    }
+    if (activeProvider != null && (remoteAssetId?.isNotEmpty ?? false)) {
+      return AssetSyncStatus.syncing;
+    }
+    if ((remoteAssetId?.isNotEmpty ?? false) &&
+        asset.localPath.trim().isNotEmpty &&
+        activeProvider != null &&
+        remoteProvider != null &&
+        remoteProvider.isNotEmpty &&
+        remoteProvider != activeProvider.providerType.key) {
+      return AssetSyncStatus.syncing;
+    }
+    if ((remoteAssetId?.isNotEmpty ?? false) &&
         asset.localPath.trim().isNotEmpty) {
+      if (activeProvider == null) {
+        return AssetSyncStatus.synced;
+      }
       return AssetSyncStatus.synced;
     }
     return AssetSyncStatus.local;
+  }
+
+  ProviderAccount? get _activeProviderAccount {
+    for (final provider in _providers) {
+      if (provider.hasActiveConnection) {
+        return provider;
+      }
+    }
+    return null;
   }
 
   List<Project> _sortProjects(List<Project> projects, ProjectSortMode mode) {

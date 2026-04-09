@@ -33,20 +33,42 @@ class JoblensBackendApiClient {
   }
 
   Future<BeginProviderConnectionResponse> beginProviderConnection(
-    CloudProviderType provider,
-  ) async {
+    CloudProviderType provider, {
+    required String intent,
+    String? oldConnectionId,
+    String? appInstallId,
+    String? devicePlatform,
+  }) async {
     final callbackUri = Uri.parse(
       '$_baseUrl/providers/${provider.key}/oauth/callback',
     ).toString();
     final map = await _authorizedJsonRequest(
       method: 'POST',
-      path: '/providers/${provider.key}/connect',
+      path: '/providers/${provider.key}/oauth/start',
       body: {
         'redirectUri': callbackUri,
+        'intent': intent,
+        if (oldConnectionId != null && oldConnectionId.isNotEmpty)
+          'oldConnectionId': oldConnectionId,
+        if (appInstallId != null && appInstallId.isNotEmpty)
+          'appInstallId': appInstallId,
+        if (devicePlatform != null && devicePlatform.isNotEmpty)
+          'devicePlatform': devicePlatform,
+        'mobileReturnUrl': 'https://auth.joblens.app/mobile/provider-callback',
         'redirectTo': 'joblens://auth-callback',
       },
     );
     return BeginProviderConnectionResponse.fromMap(map);
+  }
+
+  Future<ProviderAuthSessionResult> getProviderAuthSessionResult(
+    String sessionId,
+  ) async {
+    final map = await _authorizedJsonRequest(
+      method: 'GET',
+      path: '/provider-auth-sessions/$sessionId/result',
+    );
+    return ProviderAuthSessionResult.fromMap(map);
   }
 
   Future<void> connectNextcloud(NextcloudConnectionRequest request) async {

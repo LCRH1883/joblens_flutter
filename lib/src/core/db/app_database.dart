@@ -21,7 +21,7 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 10;
+  static const _schemaVersion = 11;
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -39,6 +39,59 @@ class AppDatabase {
         } else if (oldVersion < 10) {
           await db.execute(
             'ALTER TABLE provider_accounts ADD COLUMN account_identifier TEXT',
+          );
+        }
+        if (oldVersion < 11) {
+          await db.execute(
+            'ALTER TABLE provider_accounts ADD COLUMN connection_id TEXT',
+          );
+          await db.execute(
+            "ALTER TABLE provider_accounts ADD COLUMN connection_status TEXT NOT NULL DEFAULT 'disconnected'",
+          );
+          await db.execute(
+            'ALTER TABLE provider_accounts ADD COLUMN root_display_name TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE provider_accounts ADD COLUMN root_folder_path TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE provider_accounts ADD COLUMN last_error TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE provider_accounts ADD COLUMN is_active INTEGER NOT NULL DEFAULT 0',
+          );
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS project_provider_mirrors (
+              local_project_id INTEGER NOT NULL,
+              provider_connection_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              provider_folder_id TEXT,
+              provider_rev TEXT,
+              last_error TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (local_project_id, provider_connection_id)
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS asset_provider_mirrors (
+              asset_id TEXT NOT NULL,
+              provider_connection_id TEXT NOT NULL,
+              status TEXT NOT NULL,
+              provider_file_id TEXT,
+              remote_path TEXT,
+              provider_rev TEXT,
+              last_error TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (asset_id, provider_connection_id)
+            )
+          ''');
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_project_provider_mirrors_connection ON project_provider_mirrors(provider_connection_id, status, updated_at)',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_asset_provider_mirrors_connection ON asset_provider_mirrors(provider_connection_id, status, updated_at)',
           );
         }
       },
@@ -60,6 +113,8 @@ class AppDatabase {
     await db.execute('DROP TABLE IF EXISTS entity_sync');
     await db.execute('DROP TABLE IF EXISTS blob_upload');
     await db.execute('DROP TABLE IF EXISTS sync_state');
+    await db.execute('DROP TABLE IF EXISTS asset_provider_mirrors');
+    await db.execute('DROP TABLE IF EXISTS project_provider_mirrors');
     await db.execute('DROP TABLE IF EXISTS sync_jobs');
     await db.execute('DROP TABLE IF EXISTS sync_log_entries');
     await db.execute('DROP TABLE IF EXISTS provider_accounts');
@@ -121,9 +176,45 @@ class AppDatabase {
         id TEXT PRIMARY KEY,
         provider_type TEXT NOT NULL UNIQUE,
         display_name TEXT NOT NULL,
+        connection_id TEXT,
         account_identifier TEXT,
+        connection_status TEXT NOT NULL,
         token_state TEXT NOT NULL,
         connected_at TEXT
+        ,
+        root_display_name TEXT,
+        root_folder_path TEXT,
+        last_error TEXT,
+        is_active INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE project_provider_mirrors (
+        local_project_id INTEGER NOT NULL,
+        provider_connection_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        provider_folder_id TEXT,
+        provider_rev TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (local_project_id, provider_connection_id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE asset_provider_mirrors (
+        asset_id TEXT NOT NULL,
+        provider_connection_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        provider_file_id TEXT,
+        remote_path TEXT,
+        provider_rev TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (asset_id, provider_connection_id)
       )
     ''');
 
@@ -204,6 +295,12 @@ class AppDatabase {
     );
     await db.execute(
       'CREATE INDEX idx_blob_upload_state ON blob_upload(state, updated_at)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_project_provider_mirrors_connection ON project_provider_mirrors(provider_connection_id, status, updated_at)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_asset_provider_mirrors_connection ON asset_provider_mirrors(provider_connection_id, status, updated_at)',
     );
   }
 
@@ -926,19 +1023,34 @@ class AppDatabase {
         'id': _uuid.v4(),
         'provider_type': provider.key,
         'display_name': provider.label,
+        'connection_id': null,
         'account_identifier': null,
+        'connection_status': ProviderConnectionStatus.disconnected.storageValue,
         'token_state': ProviderTokenState.disconnected.name,
         'connected_at': null,
+        'root_display_name': null,
+        'root_folder_path': null,
+        'last_error': null,
+        'is_active': 0,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
       await _db.update(
         'provider_accounts',
         {
           'display_name': provider.label,
+          'connection_id': null,
           'account_identifier': null,
+          'connection_status': ProviderConnectionStatus.disconnected.storageValue,
           'connected_at': null,
+          'root_display_name': null,
+          'root_folder_path': null,
+          'last_error': null,
+          'is_active': 0,
         },
-        where: 'provider_type = ? AND token_state = ?',
-        whereArgs: [provider.key, ProviderTokenState.disconnected.name],
+        where: 'provider_type = ? AND connection_status = ?',
+        whereArgs: [
+          provider.key,
+          ProviderConnectionStatus.disconnected.storageValue,
+        ],
       );
     }
   }
@@ -955,13 +1067,20 @@ class AppDatabase {
     CloudProviderType provider,
     ProviderTokenState state,
   ) async {
+    final connectionStatus = switch (state) {
+      ProviderTokenState.connected => ProviderConnectionStatus.ready,
+      ProviderTokenState.expired => ProviderConnectionStatus.reconnectRequired,
+      ProviderTokenState.disconnected => ProviderConnectionStatus.disconnected,
+    };
     await _db.update(
       'provider_accounts',
       {
+        'connection_status': connectionStatus.storageValue,
         'token_state': state.name,
         'connected_at': state == ProviderTokenState.connected
             ? DateTime.now().toIso8601String()
             : null,
+        'is_active': state == ProviderTokenState.disconnected ? 0 : 1,
       },
       where: 'provider_type = ?',
       whereArgs: [provider.key],
@@ -1872,6 +1991,11 @@ class AppDatabase {
     await _db.transaction((txn) async {
       await txn.delete('blob_upload', where: 'asset_id = ?', whereArgs: [assetId]);
       await txn.delete(
+        'asset_provider_mirrors',
+        where: 'asset_id = ?',
+        whereArgs: [assetId],
+      );
+      await txn.delete(
         'entity_sync',
         where: 'entity_type = ? AND entity_id = ?',
         whereArgs: [SyncEntityType.asset.name, assetId],
@@ -1890,27 +2014,124 @@ class AppDatabase {
   }
 
   Future<void> updateProviderAccountStatus(
-    CloudProviderType provider,
-    ProviderTokenState state, {
+    CloudProviderType provider, {
+    required ProviderConnectionStatus connectionStatus,
+    String? connectionId,
     DateTime? connectedAt,
     String? displayName,
     String? accountIdentifier,
+    String? rootDisplayName,
+    String? rootFolderPath,
+    String? lastError,
+    bool isActive = false,
   }) async {
+    final tokenState = switch (connectionStatus) {
+      ProviderConnectionStatus.ready => ProviderTokenState.connected,
+      ProviderConnectionStatus.reconnectRequired => ProviderTokenState.expired,
+      _ => ProviderTokenState.disconnected,
+    };
     await _db.update(
       'provider_accounts',
       {
         'display_name': (displayName?.trim().isNotEmpty ?? false)
             ? displayName!.trim()
             : provider.label,
+        'connection_id': (connectionId?.trim().isNotEmpty ?? false)
+            ? connectionId!.trim()
+            : null,
         'account_identifier': (accountIdentifier?.trim().isNotEmpty ?? false)
             ? accountIdentifier!.trim()
             : null,
-        'token_state': state.name,
+        'connection_status': connectionStatus.storageValue,
+        'token_state': tokenState.name,
         'connected_at': connectedAt?.toIso8601String(),
+        'root_display_name': (rootDisplayName?.trim().isNotEmpty ?? false)
+            ? rootDisplayName!.trim()
+            : null,
+        'root_folder_path': (rootFolderPath?.trim().isNotEmpty ?? false)
+            ? rootFolderPath!.trim()
+            : null,
+        'last_error': (lastError?.trim().isNotEmpty ?? false)
+            ? lastError!.trim()
+            : null,
+        'is_active': isActive ? 1 : 0,
       },
       where: 'provider_type = ?',
       whereArgs: [provider.key],
     );
+  }
+
+  Future<void> upsertProjectProviderMirror({
+    required int localProjectId,
+    required String providerConnectionId,
+    required String status,
+    String? providerFolderId,
+    String? providerRev,
+    String? lastError,
+  }) async {
+    final now = DateTime.now().toIso8601String();
+    await _db.insert(
+      'project_provider_mirrors',
+      {
+        'local_project_id': localProjectId,
+        'provider_connection_id': providerConnectionId,
+        'status': status,
+        'provider_folder_id': providerFolderId,
+        'provider_rev': providerRev,
+        'last_error': lastError,
+        'created_at': now,
+        'updated_at': now,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> upsertAssetProviderMirror({
+    required String assetId,
+    required String providerConnectionId,
+    required String status,
+    String? providerFileId,
+    String? remotePath,
+    String? providerRev,
+    String? lastError,
+  }) async {
+    final now = DateTime.now().toIso8601String();
+    await _db.insert(
+      'asset_provider_mirrors',
+      {
+        'asset_id': assetId,
+        'provider_connection_id': providerConnectionId,
+        'status': status,
+        'provider_file_id': providerFileId,
+        'remote_path': remotePath,
+        'provider_rev': providerRev,
+        'last_error': lastError,
+        'created_at': now,
+        'updated_at': now,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<Map<String, String>> getAssetProviderMirrorStatuses({
+    required Iterable<String> assetIds,
+    required String providerConnectionId,
+  }) async {
+    final ids = assetIds.map((value) => value.trim()).where((value) => value.isNotEmpty).toSet().toList(growable: false);
+    if (ids.isEmpty) {
+      return const <String, String>{};
+    }
+    final rows = await _db.query(
+      'asset_provider_mirrors',
+      columns: ['asset_id', 'status'],
+      where:
+          'provider_connection_id = ? AND asset_id IN (${List.filled(ids.length, '?').join(',')})',
+      whereArgs: [providerConnectionId, ...ids],
+    );
+    return {
+      for (final row in rows)
+        row['asset_id']! as String: row['status']! as String,
+    };
   }
 
   Future<bool> assetExistsByHash(String hash) async {

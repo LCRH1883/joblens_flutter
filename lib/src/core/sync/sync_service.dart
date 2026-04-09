@@ -431,6 +431,13 @@ class SyncService {
 
   Future<bool> _applyRemoteEvent(BackendSyncEvent event) async {
     switch (event.eventType) {
+      case 'provider_connection_upsert':
+      case 'provider_connection_deleted':
+        return _applyProviderConnectionEvent(event);
+      case 'project_provider_mirror_upsert':
+        return _applyProjectProviderMirrorEvent(event);
+      case 'asset_provider_mirror_upsert':
+        return _applyAssetProviderMirrorEvent(event);
       case 'project_created':
       case 'project_updated':
       case 'project_deleted':
@@ -444,6 +451,100 @@ class SyncService {
       default:
         return false;
     }
+  }
+
+  Future<bool> _applyProviderConnectionEvent(BackendSyncEvent event) async {
+    final connectionPayload = toObjectMap(event.payload['connection']);
+    if (connectionPayload.isEmpty) {
+      return false;
+    }
+    final providerKey = _payloadString(connectionPayload, ['provider'])?.trim();
+    if (providerKey == null || providerKey.isEmpty) {
+      return false;
+    }
+    final provider = CloudProviderTypeX.fromKey(providerKey);
+    await _db.updateProviderAccountStatus(
+      provider,
+      connectionStatus: ProviderConnectionStatus.fromStorage(
+        switch (_payloadString(connectionPayload, ['status'])?.trim()) {
+          'connected' => ProviderConnectionStatus.ready.storageValue,
+          'expired' => ProviderConnectionStatus.reconnectRequired.storageValue,
+          final value? => value,
+          null => ProviderConnectionStatus.disconnected.storageValue,
+        },
+      ),
+      connectionId: _payloadString(connectionPayload, ['connectionId', 'connection_id']),
+      connectedAt: _payloadDateTime(connectionPayload, ['connectedAt', 'connected_at']),
+      displayName: _payloadString(connectionPayload, ['displayName', 'display_name']),
+      accountIdentifier: _payloadString(connectionPayload, ['accountIdentifier', 'account_identifier']),
+      rootDisplayName: _payloadString(connectionPayload, ['rootDisplayName', 'root_display_name']),
+      rootFolderPath: _payloadString(connectionPayload, ['rootFolderPath', 'root_folder_path']),
+      lastError: _payloadString(connectionPayload, ['lastError', 'last_error']),
+      isActive: _payloadBool(connectionPayload, ['isActive', 'is_active']) &&
+          !_payloadBool(connectionPayload, ['deleted']),
+    );
+    return true;
+  }
+
+  Future<bool> _applyProjectProviderMirrorEvent(BackendSyncEvent event) async {
+    final mirrorPayload = toObjectMap(event.payload['projectMirror']);
+    if (mirrorPayload.isEmpty) {
+      return false;
+    }
+    final remoteProjectId =
+        _payloadString(mirrorPayload, ['projectId', 'project_id'])?.trim();
+    final providerConnectionId =
+        _payloadString(mirrorPayload, ['providerConnectionId', 'provider_connection_id'])?.trim();
+    if (remoteProjectId == null ||
+        remoteProjectId.isEmpty ||
+        providerConnectionId == null ||
+        providerConnectionId.isEmpty) {
+      return false;
+    }
+    final localProjectId = await _db.getLocalProjectIdByRemoteId(remoteProjectId);
+    if (localProjectId == null) {
+      return false;
+    }
+    await _db.upsertProjectProviderMirror(
+      localProjectId: localProjectId,
+      providerConnectionId: providerConnectionId,
+      status: _payloadString(mirrorPayload, ['status']) ?? 'pending',
+      providerFolderId: _payloadString(mirrorPayload, ['providerFolderId', 'provider_folder_id']),
+      providerRev: _payloadString(mirrorPayload, ['providerRev', 'provider_rev']),
+      lastError: _payloadString(mirrorPayload, ['lastError', 'last_error']),
+    );
+    return true;
+  }
+
+  Future<bool> _applyAssetProviderMirrorEvent(BackendSyncEvent event) async {
+    final mirrorPayload = toObjectMap(event.payload['assetMirror']);
+    if (mirrorPayload.isEmpty) {
+      return false;
+    }
+    final remoteAssetId =
+        _payloadString(mirrorPayload, ['assetId', 'asset_id'])?.trim();
+    final providerConnectionId =
+        _payloadString(mirrorPayload, ['providerConnectionId', 'provider_connection_id'])?.trim();
+    if (remoteAssetId == null ||
+        remoteAssetId.isEmpty ||
+        providerConnectionId == null ||
+        providerConnectionId.isEmpty) {
+      return false;
+    }
+    final asset = await _db.getAssetByRemoteId(remoteAssetId);
+    if (asset == null) {
+      return false;
+    }
+    await _db.upsertAssetProviderMirror(
+      assetId: asset.id,
+      providerConnectionId: providerConnectionId,
+      status: _payloadString(mirrorPayload, ['status']) ?? 'pending',
+      providerFileId: _payloadString(mirrorPayload, ['providerFileId', 'provider_file_id']),
+      remotePath: _payloadString(mirrorPayload, ['remotePath', 'remote_path']),
+      providerRev: _payloadString(mirrorPayload, ['providerRev', 'provider_rev']),
+      lastError: _payloadString(mirrorPayload, ['lastError', 'last_error']),
+    );
+    return true;
   }
 
   Future<bool> _applyRemoteProjectEvent(BackendSyncEvent event) async {
@@ -542,6 +643,22 @@ class SyncService {
     return null;
   }
 
+  DateTime? _payloadDateTime(Map<String, Object?> payload, List<String> keys) {
+    for (final key in keys) {
+      final value = payload[key];
+      if (value is DateTime) {
+        return value;
+      }
+      if (value is String) {
+        final parsed = DateTime.tryParse(value);
+        if (parsed != null) {
+          return parsed;
+        }
+      }
+    }
+    return null;
+  }
+
   bool _payloadBool(Map<String, Object?> payload, List<String> keys) {
     for (final key in keys) {
       final value = payload[key];
@@ -623,7 +740,7 @@ class SyncService {
     if (provider != CloudProviderType.backend) {
       await _db.updateProviderAccountStatus(
         provider,
-        ProviderTokenState.disconnected,
+        connectionStatus: ProviderConnectionStatus.disconnected,
       );
       return;
     }
@@ -685,22 +802,32 @@ class SyncService {
 
     final response = await client.listProviderConnections();
     for (final connection in response.connections) {
-      final state = switch (connection.status) {
-        'connected' => ProviderTokenState.connected,
-        'expired' => ProviderTokenState.expired,
-        _ => ProviderTokenState.disconnected,
-      };
       await _db.updateProviderAccountStatus(
         connection.provider,
-        state,
+        connectionStatus: ProviderConnectionStatus.fromStorage(
+          switch (connection.status) {
+            'connected' => ProviderConnectionStatus.ready.storageValue,
+            'expired' => ProviderConnectionStatus.reconnectRequired.storageValue,
+            _ => connection.status,
+          },
+        ),
+        connectionId: connection.connectionId,
         connectedAt: connection.connectedAt,
         displayName: connection.displayName,
         accountIdentifier: connection.accountIdentifier,
+        rootDisplayName: connection.rootDisplayName,
+        rootFolderPath: connection.rootFolderPath,
+        lastError: connection.lastError,
+        isActive: connection.isActive,
       );
     }
   }
 
-  Future<String> beginProviderConnection(CloudProviderType provider) async {
+  Future<String> beginProviderConnection(
+    CloudProviderType provider, {
+    required String intent,
+    String? oldConnectionId,
+  }) async {
     final client = _backendApiClient;
     if (client == null) {
       throw const CloudSyncException('Backend API client is not configured.');
@@ -711,8 +838,43 @@ class SyncService {
         '${provider.label} does not use browser-based OAuth.',
       );
     }
-    final response = await client.beginProviderConnection(provider);
+    final response = await client.beginProviderConnection(
+      provider,
+      intent: intent,
+      oldConnectionId: oldConnectionId,
+      appInstallId: await _db.getBackendDeviceId(),
+      devicePlatform: Platform.operatingSystem,
+    );
     return response.authorizationUrl;
+  }
+
+  Future<ProviderAuthSessionResult> completeProviderConnection(
+    String sessionId,
+  ) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw const CloudSyncException('Backend API client is not configured.');
+    }
+    final result = await client.getProviderAuthSessionResult(sessionId);
+    await _db.updateProviderAccountStatus(
+      result.provider,
+      connectionStatus: ProviderConnectionStatus.fromStorage(
+        result.connectionStatus ??
+            switch (result.status) {
+              'completed' => ProviderConnectionStatus.connectedBootstrapping.storageValue,
+              _ => ProviderConnectionStatus.failed.storageValue,
+            },
+      ),
+      connectionId: result.connectionId,
+      connectedAt: DateTime.now(),
+      displayName: result.displayName,
+      accountIdentifier: result.providerAccountEmail,
+      rootDisplayName: result.rootDisplayName,
+      rootFolderPath: result.rootFolderPath,
+      lastError: result.lastError,
+      isActive: result.status == 'completed',
+    );
+    return result;
   }
 
   Future<void> connectNextcloud({
@@ -745,9 +907,14 @@ class SyncService {
     await client.disconnectProvider(provider);
     await _db.updateProviderAccountStatus(
       provider,
-      ProviderTokenState.disconnected,
+      connectionStatus: ProviderConnectionStatus.disconnected,
       displayName: provider.label,
       accountIdentifier: null,
+      connectionId: null,
+      rootDisplayName: null,
+      rootFolderPath: null,
+      lastError: null,
+      isActive: false,
     );
   }
 
