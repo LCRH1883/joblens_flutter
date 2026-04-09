@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/joblens_store.dart';
 import '../../core/models/photo_asset.dart';
+import '../../core/ui/asset_sync_badge.dart';
 import '../../core/ui/user_facing_error.dart';
 import '../library_import/photo_library_import_page.dart';
 import 'photo_viewer_page.dart';
@@ -562,6 +563,13 @@ class _AssetTile extends StatelessWidget {
                   : Icons.file_download_done_outlined,
               size: 14,
               color: Colors.white.withValues(alpha: 0.9),
+            ),
+          ),
+          Positioned(
+            left: 4,
+            bottom: 4,
+            child: AssetSyncBadge(
+              status: store.assetSyncStatusFor(asset.id),
             ),
           ),
         ],

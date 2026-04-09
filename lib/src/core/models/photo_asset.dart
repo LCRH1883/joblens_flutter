@@ -8,6 +8,8 @@ enum AssetStatus { active, deleted }
 
 enum AssetIngestState { pending, ready, failed }
 
+enum AssetSyncStatus { local, syncing, synced, failed, cloudOnly }
+
 class AssetCloudState {
   static const localAndCloud = 'local_and_cloud';
   static const cloudOnly = 'cloud_only';

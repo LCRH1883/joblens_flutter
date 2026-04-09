@@ -6,12 +6,16 @@ class ProviderConnectionSummary {
     required this.status,
     this.connectedAt,
     this.lastError,
+    this.displayName,
+    this.accountIdentifier,
   });
 
   final CloudProviderType provider;
   final String status;
   final DateTime? connectedAt;
   final String? lastError;
+  final String? displayName;
+  final String? accountIdentifier;
 
   bool get isConnected => status == 'connected';
   bool get isExpired => status == 'expired';
@@ -26,6 +30,12 @@ class ProviderConnectionSummary {
         map['connectedAt'] ?? map['connected_at'],
       ),
       lastError: _asNullableString(map['lastError'] ?? map['last_error']),
+      displayName: _asNullableString(
+        map['displayName'] ?? map['display_name'],
+      ),
+      accountIdentifier: _asNullableString(
+        map['accountIdentifier'] ?? map['account_identifier'],
+      ),
     );
   }
 }

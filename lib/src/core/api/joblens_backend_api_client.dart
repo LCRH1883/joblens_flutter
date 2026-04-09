@@ -155,6 +155,13 @@ class JoblensBackendApiClient {
     );
   }
 
+  Future<void> reconcileProject(String remoteProjectId) async {
+    await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/projects/$remoteProjectId/reconcile',
+    );
+  }
+
   Future<BulkCheckAssetsResponse> bulkCheckAssets({
     required String projectId,
     required List<BulkCheckAssetInput> assets,

@@ -14,6 +14,7 @@ import 'package:joblens_flutter/src/core/models/backend_sync_event.dart';
 import 'package:joblens_flutter/src/core/models/cloud_provider.dart';
 import 'package:joblens_flutter/src/core/models/photo_asset.dart';
 import 'package:joblens_flutter/src/core/models/project.dart';
+import 'package:joblens_flutter/src/core/models/provider_account.dart';
 import 'package:joblens_flutter/src/core/storage/media_storage_service.dart';
 import 'package:joblens_flutter/src/core/sync/sync_service.dart';
 
@@ -294,6 +295,81 @@ void main() {
     expect(fakeClient.listProjectsCalls, greaterThanOrEqualTo(1));
     expect(fakeClient.uploadCalls, 1);
     expect(updated?.remoteAssetId, 'asset-remote-bootstrap-fail');
+  });
+
+  test('refreshProviderConnections persists identity and expired state', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(
+      projectId: 'remote-project-1',
+      providerConnectionsResponse: ProviderConnectionsResponse(
+        connections: [
+          ProviderConnectionSummary(
+            provider: CloudProviderType.dropbox,
+            status: 'expired',
+            connectedAt: DateTime.parse('2026-04-08T20:00:00.000Z'),
+            lastError: 'token expired',
+            displayName: 'Jane Dropbox',
+            accountIdentifier: 'jane@example.com',
+          ),
+        ],
+      ),
+    );
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+    );
+
+    await syncService.refreshProviderConnections();
+
+    final provider = (await harness.database.getProviderAccounts()).singleWhere(
+      (account) => account.providerType == CloudProviderType.dropbox,
+    );
+    expect(provider.tokenState, ProviderTokenState.expired);
+    expect(provider.displayName, 'Jane Dropbox');
+    expect(provider.accountIdentifier, 'jane@example.com');
+    expect(provider.connectedAccountLabel, 'Jane Dropbox • jane@example.com');
+    expect(
+      provider.connectedAt?.toUtc().toIso8601String(),
+      '2026-04-08T20:00:00.000Z',
+    );
+  });
+
+  test('reconcileProjects only requests synced projects', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(projectId: 'remote-project-1');
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+    );
+
+    final localOnly = await harness.createProject('Local only');
+    final syncedA = await harness.createProject('Synced A');
+    final syncedB = await harness.createProject('Synced B');
+    await harness.database.markProjectSynced(
+      syncedA.id,
+      remoteProjectId: 'remote-project-a',
+      remoteRev: 1,
+    );
+    await harness.database.markProjectSynced(
+      syncedB.id,
+      remoteProjectId: 'remote-project-b',
+      remoteRev: 2,
+    );
+    final projects = await harness.database.getProjects();
+
+    final scheduled = await syncService.reconcileProjects(projects);
+
+    expect(localOnly.remoteProjectId, isNull);
+    expect(scheduled, 2);
+    expect(fakeClient.reconcileCalls, 2);
+    expect(
+      fakeClient.reconciledProjectIds,
+      ['remote-project-a', 'remote-project-b'],
+    );
   });
 
   test(
@@ -986,6 +1062,9 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
     this.listProjectsResponse,
     this.listAssetsResponses = const {},
     this.syncEventsResponses = const [],
+    this.providerConnectionsResponse = const ProviderConnectionsResponse(
+      connections: [],
+    ),
     this.downloadBytes = const [1, 2, 3, 4],
   }) : super(
          baseUrl: 'https://example.supabase.co/functions/v1/api/v1',
@@ -1003,6 +1082,7 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   final ListProjectsResponse? listProjectsResponse;
   final Map<String, ListAssetsResponse> listAssetsResponses;
   final List<SyncEventsResponse> syncEventsResponses;
+  final ProviderConnectionsResponse providerConnectionsResponse;
   final List<int> downloadBytes;
   Future<void> Function()? onBulkCheck;
 
@@ -1013,8 +1093,10 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   int listProjectsCalls = 0;
   int listAssetsCalls = 0;
   int syncEventsCalls = 0;
+  int reconcileCalls = 0;
   List<int> lastUploadedBytes = const [];
   final List<String> deletedAssetIds = <String>[];
+  final List<String> reconciledProjectIds = <String>[];
 
   @override
   Future<RemoteProjectRecord> upsertProject(
@@ -1070,7 +1152,13 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
 
   @override
   Future<ProviderConnectionsResponse> listProviderConnections() async {
-    return const ProviderConnectionsResponse(connections: []);
+    return providerConnectionsResponse;
+  }
+
+  @override
+  Future<void> reconcileProject(String remoteProjectId) async {
+    reconcileCalls += 1;
+    reconciledProjectIds.add(remoteProjectId);
   }
 
   @override

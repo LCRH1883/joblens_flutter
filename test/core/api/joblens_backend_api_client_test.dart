@@ -76,6 +76,70 @@ void main() {
     );
   });
 
+  test('parses provider connection identity fields', () async {
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'connections': [
+              {
+                'provider': 'dropbox',
+                'status': 'connected',
+                'displayName': 'John Appleseed',
+                'accountIdentifier': 'john@example.com',
+                'connectedAt': '2026-04-08T20:00:00.000Z',
+              },
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final response = await client.listProviderConnections();
+    expect(response.connections, hasLength(1));
+    expect(response.connections.single.provider, CloudProviderType.dropbox);
+    expect(response.connections.single.displayName, 'John Appleseed');
+    expect(
+      response.connections.single.accountIdentifier,
+      'john@example.com',
+    );
+  });
+
+  test('project reconcile posts to the existing backend endpoint', () async {
+    late Uri requestUri;
+    late String requestMethod;
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        requestUri = request.url;
+        requestMethod = request.method;
+        return http.Response(
+          jsonEncode({
+            'projectId': 'remote-project-1',
+            'enqueued': true,
+            'targetCount': 1,
+            'warnings': const [],
+          }),
+          202,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    await client.reconcileProject('remote-project-1');
+
+    expect(requestMethod, 'POST');
+    expect(
+      requestUri.toString(),
+      'https://api.joblens.xyz/functions/v1/api/v1/projects/remote-project-1/reconcile',
+    );
+  });
+
   test('maps uploaded_object_not_found backend error', () async {
     final client = JoblensBackendApiClient(
       baseUrl: 'https://example.supabase.co/functions/v1/api/v1',

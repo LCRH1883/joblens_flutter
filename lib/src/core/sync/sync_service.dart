@@ -54,6 +54,7 @@ class SyncService {
     try {
       do {
         _runAgainRequested = false;
+        await _db.cleanupSyncState();
         await _runVoidLaneSafely(
           'device_registration_failed',
           () => _ensureDeviceRegistration(),
@@ -655,6 +656,7 @@ class SyncService {
   }
 
   Future<void> retryFailed() async {
+    await _db.cleanupSyncState();
     final syncRecords = await _db.getAllEntitySyncRecords();
     for (final record in syncRecords.where((item) => item.hasError)) {
       await _db.upsertEntitySync(
@@ -692,6 +694,8 @@ class SyncService {
         connection.provider,
         state,
         connectedAt: connection.connectedAt,
+        displayName: connection.displayName,
+        accountIdentifier: connection.accountIdentifier,
       );
     }
   }
@@ -742,7 +746,39 @@ class SyncService {
     await _db.updateProviderAccountStatus(
       provider,
       ProviderTokenState.disconnected,
+      displayName: provider.label,
+      accountIdentifier: null,
     );
+  }
+
+  Future<void> reconcileProject(Project project) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw const CloudSyncException('Backend API client is not configured.');
+    }
+    final remoteProjectId = project.remoteProjectId?.trim();
+    if (remoteProjectId == null || remoteProjectId.isEmpty) {
+      throw const CloudSyncException('Project is not synced to the cloud yet.');
+    }
+    await client.reconcileProject(remoteProjectId);
+    await _logInfo(
+      'project_reconcile_requested',
+      projectId: project.id,
+      message: 'Requested a cloud reconcile for this project.',
+    );
+  }
+
+  Future<int> reconcileProjects(Iterable<Project> projects) async {
+    final syncableProjects = projects
+        .where((project) => (project.remoteProjectId?.trim().isNotEmpty ?? false))
+        .toList(growable: false);
+    if (syncableProjects.isEmpty) {
+      return 0;
+    }
+    for (final project in syncableProjects) {
+      await reconcileProject(project);
+    }
+    return syncableProjects.length;
   }
 
   Future<void> deleteAccount() async {

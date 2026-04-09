@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/joblens_store.dart';
 import '../../core/models/photo_asset.dart';
 import '../../core/models/project.dart';
+import '../../core/ui/asset_sync_badge.dart';
 import '../../core/ui/edge_swipe_back.dart';
 import '../../core/ui/user_facing_error.dart';
 import '../gallery/photo_viewer_page.dart';
@@ -115,6 +116,14 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                         ? Icons.menu_book_outlined
                         : Icons.menu_book,
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Rescan cloud',
+                  onPressed:
+                      (project.remoteProjectId?.trim().isEmpty ?? true)
+                      ? null
+                      : () => _reconcileProject(context, store, project),
+                  icon: const Icon(Icons.travel_explore_outlined),
                 ),
               ],
       ),
@@ -430,6 +439,26 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     );
   }
 
+  Future<void> _reconcileProject(
+    BuildContext context,
+    JoblensStore store,
+    Project project,
+  ) async {
+    final scheduled = await store.reconcileProject(project);
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          scheduled
+              ? 'Requested a cloud rescan for ${project.name}.'
+              : '${project.name} is not synced to the cloud yet.',
+        ),
+      ),
+    );
+  }
+
   void _clearSelection() {
     setState(_exitSelectionModeState);
   }
@@ -585,6 +614,13 @@ class _ProjectAssetTile extends StatelessWidget {
                   : Icons.file_download_done_outlined,
               size: 14,
               color: Colors.white.withValues(alpha: 0.9),
+            ),
+          ),
+          Positioned(
+            left: 4,
+            bottom: 4,
+            child: AssetSyncBadge(
+              status: store.assetSyncStatusFor(asset.id),
             ),
           ),
         ],

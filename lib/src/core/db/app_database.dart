@@ -21,7 +21,7 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 9;
+  static const _schemaVersion = 10;
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -36,6 +36,10 @@ class AppDatabase {
         if (oldVersion < 9) {
           await _resetSchema(db);
           await _createSchema(db);
+        } else if (oldVersion < 10) {
+          await db.execute(
+            'ALTER TABLE provider_accounts ADD COLUMN account_identifier TEXT',
+          );
         }
       },
     );
@@ -117,6 +121,7 @@ class AppDatabase {
         id TEXT PRIMARY KEY,
         provider_type TEXT NOT NULL UNIQUE,
         display_name TEXT NOT NULL,
+        account_identifier TEXT,
         token_state TEXT NOT NULL,
         connected_at TEXT
       )
@@ -921,12 +926,17 @@ class AppDatabase {
         'id': _uuid.v4(),
         'provider_type': provider.key,
         'display_name': provider.label,
+        'account_identifier': null,
         'token_state': ProviderTokenState.disconnected.name,
         'connected_at': null,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
       await _db.update(
         'provider_accounts',
-        {'display_name': provider.label, 'connected_at': null},
+        {
+          'display_name': provider.label,
+          'account_identifier': null,
+          'connected_at': null,
+        },
         where: 'provider_type = ? AND token_state = ?',
         whereArgs: [provider.key, ProviderTokenState.disconnected.name],
       );
@@ -984,25 +994,27 @@ class AppDatabase {
     if (asset == null) {
       return;
     }
-    if (asset.projectId != projectId) {
-      await _db.update(
+    final localSeq = _nextLocalSeq();
+    await _db.transaction((txn) async {
+      await txn.update(
         'photo_assets',
         {
           'project_id': projectId,
-          'local_seq': _nextLocalSeq(),
+          'local_seq': localSeq,
           'dirty_fields': '["project_id"]',
         },
         where: 'id = ?',
         whereArgs: [assetId],
       );
-    }
-    await upsertEntitySync(
-      entityType: SyncEntityType.asset,
-      entityId: assetId,
-      dirtyFields: const ['project_id'],
-      baseRemoteRev: asset.remoteRev,
-      localSeq: asset.localSeq == 0 ? _nextLocalSeq() : asset.localSeq,
-    );
+      await _upsertEntitySyncExecutor(
+        txn,
+        entityType: SyncEntityType.asset,
+        entityId: assetId,
+        dirtyFields: const ['project_id'],
+        baseRemoteRev: asset.remoteRev,
+        localSeq: localSeq,
+      );
+    });
   }
 
   Future<List<SyncJob>> getSyncJobs() async {
@@ -1403,6 +1415,199 @@ class AppDatabase {
     );
   }
 
+  Future<void> cleanupSyncState() async {
+    await _db.transaction((txn) async {
+      final now = DateTime.now();
+      final nowIso = now.toIso8601String();
+
+      await txn.execute(
+        '''
+        DELETE FROM blob_upload
+        WHERE NOT EXISTS (
+          SELECT 1 FROM photo_assets asset WHERE asset.id = blob_upload.asset_id
+        )
+      ''',
+      );
+      await txn.execute(
+        '''
+        DELETE FROM entity_sync
+        WHERE entity_type = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM photo_assets asset WHERE asset.id = entity_sync.entity_id
+          )
+      ''',
+        [SyncEntityType.asset.name],
+      );
+      await txn.execute(
+        '''
+        DELETE FROM entity_sync
+        WHERE entity_type = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM projects project WHERE project.id = CAST(entity_sync.entity_id AS INTEGER)
+          )
+      ''',
+        [SyncEntityType.project.name],
+      );
+
+      await txn.update(
+        'blob_upload',
+        {
+          'state': BlobUploadState.queued.name,
+          'leased_until': null,
+          'last_error':
+              '[interrupted_upload] Previous upload was interrupted and will be retried.',
+          'updated_at': nowIso,
+        },
+        where: 'state = ? AND leased_until IS NOT NULL AND leased_until <= ?',
+        whereArgs: [BlobUploadState.uploading.name, nowIso],
+      );
+
+      final blobRows = await txn.rawQuery(
+        '''
+        SELECT
+          blob_upload.asset_id AS asset_id,
+          blob_upload.upload_generation AS upload_generation
+        FROM blob_upload
+        JOIN photo_assets asset ON asset.id = blob_upload.asset_id
+        WHERE asset.status = ?
+           OR asset.deleted_at IS NOT NULL
+           OR TRIM(COALESCE(asset.remote_asset_id, '')) != ''
+           OR asset.upload_generation != blob_upload.upload_generation
+           OR asset.ingest_state != ?
+           OR TRIM(COALESCE(asset.local_path, '')) = ''
+      ''',
+        [AssetStatus.deleted.name, AssetIngestState.ready.name],
+      );
+      for (final row in blobRows) {
+        await txn.delete(
+          'blob_upload',
+          where: 'asset_id = ? AND upload_generation = ?',
+          whereArgs: [row['asset_id'], row['upload_generation']],
+        );
+      }
+
+      final assetEntityRows = await txn.rawQuery(
+        '''
+        SELECT
+          entity_sync.entity_id AS entity_id,
+          entity_sync.local_seq AS record_local_seq,
+          entity_sync.base_remote_rev AS record_base_remote_rev,
+          photo_assets.local_seq AS asset_local_seq,
+          photo_assets.remote_rev AS asset_remote_rev,
+          photo_assets.remote_asset_id AS remote_asset_id,
+          photo_assets.deleted_at AS deleted_at,
+          photo_assets.dirty_fields AS dirty_fields
+        FROM entity_sync
+        JOIN photo_assets ON photo_assets.id = entity_sync.entity_id
+        WHERE entity_sync.entity_type = ?
+      ''',
+        [SyncEntityType.asset.name],
+      );
+      for (final row in assetEntityRows) {
+        final entityId = row['entity_id']! as String;
+        final remoteAssetId = (row['remote_asset_id'] as String?)?.trim() ?? '';
+        final deletedAt = row['deleted_at'] as String?;
+        final dirtyFields = ((jsonDecode((row['dirty_fields'] as String?) ?? '[]')
+                as List<dynamic>))
+            .map((item) => item.toString())
+            .toList(growable: false);
+        final assetLocalSeq = (row['asset_local_seq'] as int?) ?? 0;
+        final recordLocalSeq = (row['record_local_seq'] as int?) ?? 0;
+
+        final shouldDropStaleRecord =
+            deletedAt == null && remoteAssetId.isEmpty;
+        if (dirtyFields.isEmpty || shouldDropStaleRecord) {
+          await txn.delete(
+            'entity_sync',
+            where: 'entity_type = ? AND entity_id = ?',
+            whereArgs: [SyncEntityType.asset.name, entityId],
+          );
+          continue;
+        }
+
+        if (assetLocalSeq > recordLocalSeq) {
+          await txn.update(
+            'entity_sync',
+            {
+              'local_seq': assetLocalSeq,
+              'base_remote_rev': row['asset_remote_rev'] as int?,
+              'dirty_fields': jsonEncode(dirtyFields),
+              'last_error': null,
+              'leased_until': null,
+              'next_attempt_at': nowIso,
+              'updated_at': nowIso,
+            },
+            where: 'entity_type = ? AND entity_id = ?',
+            whereArgs: [SyncEntityType.asset.name, entityId],
+          );
+        }
+      }
+
+      final projectEntityRows = await txn.rawQuery(
+        '''
+        SELECT
+          entity_sync.entity_id AS entity_id,
+          entity_sync.local_seq AS record_local_seq,
+          projects.local_seq AS project_local_seq,
+          projects.remote_rev AS project_remote_rev,
+          projects.dirty_fields AS dirty_fields
+        FROM entity_sync
+        JOIN projects ON projects.id = CAST(entity_sync.entity_id AS INTEGER)
+        WHERE entity_sync.entity_type = ?
+      ''',
+        [SyncEntityType.project.name],
+      );
+      for (final row in projectEntityRows) {
+        final entityId = row['entity_id']! as String;
+        final dirtyFields = ((jsonDecode((row['dirty_fields'] as String?) ?? '[]')
+                as List<dynamic>))
+            .map((item) => item.toString())
+            .toList(growable: false);
+        final projectLocalSeq = (row['project_local_seq'] as int?) ?? 0;
+        final recordLocalSeq = (row['record_local_seq'] as int?) ?? 0;
+
+        if (dirtyFields.isEmpty) {
+          await txn.delete(
+            'entity_sync',
+            where: 'entity_type = ? AND entity_id = ?',
+            whereArgs: [SyncEntityType.project.name, entityId],
+          );
+          continue;
+        }
+
+        if (projectLocalSeq > recordLocalSeq) {
+          await txn.update(
+            'entity_sync',
+            {
+              'local_seq': projectLocalSeq,
+              'base_remote_rev': row['project_remote_rev'] as int?,
+              'dirty_fields': jsonEncode(dirtyFields),
+              'last_error': null,
+              'leased_until': null,
+              'next_attempt_at': nowIso,
+              'updated_at': nowIso,
+            },
+            where: 'entity_type = ? AND entity_id = ?',
+            whereArgs: [SyncEntityType.project.name, entityId],
+          );
+        }
+      }
+
+      await txn.rawUpdate(
+        '''
+        UPDATE photo_assets
+        SET last_sync_error_code = NULL
+        WHERE last_sync_error_code IS NOT NULL
+          AND id NOT IN (SELECT asset_id FROM blob_upload)
+          AND id NOT IN (
+            SELECT entity_id FROM entity_sync WHERE entity_type = ?
+          )
+      ''',
+        [SyncEntityType.asset.name],
+      );
+    });
+  }
+
   Future<void> recoverInterruptedSyncJobs() async {
     await _db.update(
       'blob_upload',
@@ -1415,6 +1620,64 @@ class AppDatabase {
       where: 'state = ?',
       whereArgs: [BlobUploadState.uploading.name],
     );
+  }
+
+  Future<Map<String, SyncJobState>> getAssetSyncJobStates(
+    Iterable<String> assetIds,
+  ) async {
+    final uniqueIds = assetIds.toSet();
+    if (uniqueIds.isEmpty) {
+      return const {};
+    }
+
+    final placeholders = List.filled(uniqueIds.length, '?').join(', ');
+    final blobRows = await _db.query(
+      'blob_upload',
+      columns: ['asset_id', 'state'],
+      where: 'asset_id IN ($placeholders)',
+      whereArgs: uniqueIds.toList(growable: false),
+      orderBy: 'updated_at DESC',
+    );
+    final entityRows = await _db.query(
+      'entity_sync',
+      columns: ['entity_id', 'last_error'],
+      where: 'entity_type = ? AND entity_id IN ($placeholders)',
+      whereArgs: [SyncEntityType.asset.name, ...uniqueIds],
+      orderBy: 'updated_at DESC',
+    );
+
+    final states = <String, SyncJobState>{};
+    for (final row in blobRows) {
+      final assetId = row['asset_id']! as String;
+      final state = switch (BlobUploadState.values.byName(row['state']! as String)) {
+        BlobUploadState.uploading => SyncJobState.uploading,
+        BlobUploadState.failed => SyncJobState.failed,
+        BlobUploadState.queued => SyncJobState.queued,
+      };
+      states[assetId] = _preferSyncState(states[assetId], state);
+    }
+    for (final row in entityRows) {
+      final assetId = row['entity_id']! as String;
+      final state = ((row['last_error'] as String?)?.trim().isNotEmpty ?? false)
+          ? SyncJobState.failed
+          : SyncJobState.queued;
+      states[assetId] = _preferSyncState(states[assetId], state);
+    }
+    return states;
+  }
+
+  SyncJobState _preferSyncState(SyncJobState? current, SyncJobState next) {
+    if (current == null) {
+      return next;
+    }
+    const rank = <SyncJobState, int>{
+      SyncJobState.failed: 3,
+      SyncJobState.uploading: 2,
+      SyncJobState.queued: 1,
+      SyncJobState.done: 0,
+      SyncJobState.paused: 0,
+    };
+    return (rank[next] ?? 0) >= (rank[current] ?? 0) ? next : current;
   }
 
   Future<PhotoAsset?> getAssetById(String assetId) async {
@@ -1630,10 +1893,18 @@ class AppDatabase {
     CloudProviderType provider,
     ProviderTokenState state, {
     DateTime? connectedAt,
+    String? displayName,
+    String? accountIdentifier,
   }) async {
     await _db.update(
       'provider_accounts',
       {
+        'display_name': (displayName?.trim().isNotEmpty ?? false)
+            ? displayName!.trim()
+            : provider.label,
+        'account_identifier': (accountIdentifier?.trim().isNotEmpty ?? false)
+            ? accountIdentifier!.trim()
+            : null,
         'token_state': state.name,
         'connected_at': connectedAt?.toIso8601String(),
       },

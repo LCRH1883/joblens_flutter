@@ -68,6 +68,13 @@ class _SyncPageState extends ConsumerState<SyncPage>
         title: const Text('Sync'),
         actions: [
           IconButton(
+            onPressed: !canSyncWithCloud
+                ? null
+                : () => _reconcileAllProjects(context, store),
+            icon: const Icon(Icons.travel_explore_outlined),
+            tooltip: 'Rescan cloud',
+          ),
+          IconButton(
             onPressed: store.isBusy || !canSyncWithCloud
                 ? null
                 : store.runSyncNow,
@@ -144,7 +151,7 @@ class _SyncPageState extends ConsumerState<SyncPage>
               queuedCount: queuedCount,
               uploadingCount: uploadingCount,
               failedCount: failedCount,
-              selectedProvider: lockedProvider?.providerType,
+              selectedProviderAccount: lockedProvider,
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) => const _SyncActivityPage(),
@@ -347,6 +354,26 @@ class _SyncPageState extends ConsumerState<SyncPage>
         providerAccount.tokenState == ProviderTokenState.disconnected;
   }
 
+  Future<void> _reconcileAllProjects(
+    BuildContext context,
+    JoblensStore store,
+  ) async {
+    final scheduled = await store.reconcileAllProjects();
+    if (!context.mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          scheduled == 0
+              ? 'No synced projects are ready for cloud reconcile.'
+              : 'Requested cloud rescan for $scheduled project${scheduled == 1 ? '' : 's'}.',
+        ),
+      ),
+    );
+  }
+
 }
 
 class _SyncStatusCard extends StatelessWidget {
@@ -354,14 +381,14 @@ class _SyncStatusCard extends StatelessWidget {
     required this.queuedCount,
     required this.uploadingCount,
     required this.failedCount,
-    required this.selectedProvider,
+    required this.selectedProviderAccount,
     required this.onTap,
   });
 
   final int queuedCount;
   final int uploadingCount;
   final int failedCount;
-  final CloudProviderType? selectedProvider;
+  final ProviderAccount? selectedProviderAccount;
   final VoidCallback onTap;
 
   @override
@@ -382,12 +409,20 @@ class _SyncStatusCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          selectedProvider == null
+                          selectedProviderAccount == null
                               ? 'No cloud provider connected'
-                              : '${selectedProvider!.label} connected',
+                              : '${selectedProviderAccount!.providerType.label} ${selectedProviderAccount!.isExpired ? 'needs attention' : 'connected'}',
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
+                        if (selectedProviderAccount?.connectedAccountLabel case final account?)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              account,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -604,9 +639,10 @@ class _ProviderConnectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final accent = _providerAccent(providerAccount.providerType);
-    final isConnected = providerAccount.isConnected;
-    final canReconnect = canConnect && isConnected;
-    final canShowConnect = canConnect && !isConnected;
+    final hasActiveConnection = providerAccount.hasActiveConnection;
+    final isExpired = providerAccount.isExpired;
+    final canReconnect = canConnect && hasActiveConnection;
+    final canShowConnect = canConnect && !hasActiveConnection;
     final titleStyle = Theme.of(context).textTheme.titleMedium?.copyWith(
       fontWeight: FontWeight.w700,
       letterSpacing: -0.2,
@@ -639,67 +675,82 @@ class _ProviderConnectionCard extends StatelessWidget {
                   Text(
                     statusText,
                     style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: accent,
+                      color: isExpired ? scheme.error : accent,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
+                  if (providerAccount.connectedAccountLabel case final accountLabel?)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        accountLabel,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
                 ],
               ),
             ),
-            if (isConnected) ...[
-              IconButton(
-                onPressed: canReconnect ? onConnect : null,
-                tooltip: 'Reconnect',
-                style: IconButton.styleFrom(
-                  backgroundColor: scheme.surfaceContainerHighest,
-                  foregroundColor: accent,
+            if (hasActiveConnection) ...[
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 110),
+                child: FilledButton(
+                  onPressed: canReconnect ? onConnect : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: isExpired ? scheme.error : accent,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
+                  child: Text(isOpening ? 'Opening...' : 'Reconnect'),
                 ),
-                icon: isOpening
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh_rounded),
               ),
               const SizedBox(width: 8),
-            ],
-            ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 110),
-              child: isConnected
-                  ? FilledButton(
-                      onPressed: onDisconnect,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: accent,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                      ),
-                      child: const Text('Disconnect'),
-                    )
-                  : FilledButton(
-                      onPressed: canShowConnect ? onConnect : null,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: accent,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                      ),
-                      child: Text(
-                        isOpening ? 'Opening...' : 'Connect',
-                      ),
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 110),
+                child: OutlinedButton(
+                  onPressed: onDisconnect,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: isExpired ? scheme.error : accent,
+                    side: BorderSide(
+                      color: isExpired ? scheme.error : accent,
                     ),
-            ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
+                  child: const Text('Disconnect'),
+                ),
+              ),
+            ] else
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 110),
+                child: FilledButton(
+                  onPressed: canShowConnect ? onConnect : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: accent,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                  ),
+                  child: Text(
+                    isOpening ? 'Opening...' : 'Connect',
+                  ),
+                ),
+              ),
           ],
         ),
       ),

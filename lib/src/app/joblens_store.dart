@@ -68,6 +68,7 @@ class JoblensStore extends ChangeNotifier {
   LibraryImportMode _libraryImportMode = LibraryImportMode.copy;
 
   List<PhotoAsset> _assets = const [];
+  Map<String, AssetSyncStatus> _assetSyncStatuses = const {};
   List<Project> _projects = const [];
   Map<int, int> _projectCounts = const {};
   List<ProviderAccount> _providers = const [];
@@ -79,6 +80,8 @@ class JoblensStore extends ChangeNotifier {
   String? get lastError => _lastError;
   int get reauthenticationRequestCount => _reauthenticationRequestCount;
   List<PhotoAsset> get assets => _assets;
+  AssetSyncStatus assetSyncStatusFor(String assetId) =>
+      _assetSyncStatuses[assetId] ?? AssetSyncStatus.local;
   List<Project> get projects => _sortProjects(_projects, _projectSortMode);
   Map<int, int> get projectCounts => _projectCounts;
   List<ProviderAccount> get providers => _providers;
@@ -385,6 +388,7 @@ class JoblensStore extends ChangeNotifier {
         return asset;
       }).toList(growable: false);
       _projectCounts = await _database.getProjectCounts();
+      await _refreshAssetSyncStatuses();
       _notifyListenersIfActive();
       if (movedAssetIds.isNotEmpty || project.remoteProjectId != null) {
         unawaited(_kickSync());
@@ -399,6 +403,7 @@ class JoblensStore extends ChangeNotifier {
     try {
       await _database.moveAssetToProject(assetId, projectId);
       _moveAssetInState(assetId, projectId);
+      await _refreshAssetSyncStatuses();
       _notifyListenersIfActive();
       unawaited(_kickSync());
     } catch (error, stackTrace) {
@@ -421,6 +426,7 @@ class JoblensStore extends ChangeNotifier {
         await _database.moveAssetToProject(assetId, projectId);
         _moveAssetInState(assetId, projectId);
       }
+      await _refreshAssetSyncStatuses();
       _notifyListenersIfActive();
       unawaited(_kickSync());
     } catch (error, stackTrace) {
@@ -490,11 +496,9 @@ class JoblensStore extends ChangeNotifier {
     await _runBusy(() async {
       await _syncService.refreshProviderConnections();
       await _syncService.retryFailed();
-      await _hydrateLocalState();
+      await _hydrateLocalState(includeDiagnostics: false);
       _notifyListenersIfActive();
-      await _syncService.kick(forceBootstrap: true);
-      await _hydrateLocalState();
-      _notifyListenersIfActive();
+      unawaited(_kickSync(forceBootstrap: true));
     });
   }
 
@@ -509,11 +513,9 @@ class JoblensStore extends ChangeNotifier {
         username: username,
         appPassword: appPassword,
       );
-      await _hydrateLocalState();
+      await _hydrateLocalState(includeDiagnostics: false);
       _notifyListenersIfActive();
-      await _syncService.kick(forceBootstrap: true);
-      await _hydrateLocalState();
-      _notifyListenersIfActive();
+      unawaited(_kickSync(forceBootstrap: true));
     });
   }
 
@@ -532,6 +534,39 @@ class JoblensStore extends ChangeNotifier {
       await _hydrateLocalState();
       _notifyListenersIfActive();
     });
+  }
+
+  Future<bool> reconcileProject(Project project) async {
+    if (project.remoteProjectId?.trim().isEmpty ?? true) {
+      return false;
+    }
+    _lastError = null;
+    _notifyListenersIfActive();
+    unawaited(
+      _scheduleBackgroundSyncAction(() async {
+        await _syncService.reconcileProject(project);
+        await _syncService.kick();
+      }),
+    );
+    return true;
+  }
+
+  Future<int> reconcileAllProjects() async {
+    final syncableProjects = _projects
+        .where((project) => project.remoteProjectId?.trim().isNotEmpty ?? false)
+        .toList(growable: false);
+    if (syncableProjects.isEmpty) {
+      return 0;
+    }
+    _lastError = null;
+    _notifyListenersIfActive();
+    unawaited(
+      _scheduleBackgroundSyncAction(() async {
+        await _syncService.reconcileProjects(syncableProjects);
+        await _syncService.kick();
+      }),
+    );
+    return syncableProjects.length;
   }
 
   Future<File> exportSyncLog() async {
@@ -701,6 +736,7 @@ class JoblensStore extends ChangeNotifier {
 
   Future<void> _hydrateLocalState({bool includeDiagnostics = true}) async {
     _assets = await _database.getAssets();
+    await _refreshAssetSyncStatuses();
     _projects = await _database.getProjects();
     _projectCounts = await _database.getProjectCounts();
     _providers = await _database.getProviderAccounts();
@@ -714,12 +750,20 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> _kickSync({bool forceBootstrap = false}) {
+    return _scheduleBackgroundSyncAction(
+      () => _syncService.kick(forceBootstrap: forceBootstrap),
+    );
+  }
+
+  Future<void> _scheduleBackgroundSyncAction(
+    Future<void> Function() action,
+  ) {
     _pendingBackgroundSync = _pendingBackgroundSync.then((_) async {
       if (_isDisposed) {
         return;
       }
       try {
-        await _syncService.kick(forceBootstrap: forceBootstrap);
+        await action();
         if (_isDisposed) {
           return;
         }
@@ -894,6 +938,7 @@ class JoblensStore extends ChangeNotifier {
       final updated = await _database.getAssetById(shell.id);
       if (updated != null) {
         _replaceAssetInState(updated);
+        await _refreshAssetSyncStatuses();
         _notifyListenersIfActive();
       }
       return true;
@@ -928,6 +973,10 @@ class JoblensStore extends ChangeNotifier {
       ..._projectCounts,
       asset.projectId: (_projectCounts[asset.projectId] ?? 0) + 1,
     };
+    _assetSyncStatuses = <String, AssetSyncStatus>{
+      ..._assetSyncStatuses,
+      asset.id: _deriveAssetSyncStatus(asset),
+    };
   }
 
   void _replaceAssetInState(PhotoAsset asset) {
@@ -939,11 +988,18 @@ class JoblensStore extends ChangeNotifier {
     final updated = List<PhotoAsset>.from(_assets);
     updated[index] = asset;
     _assets = updated;
+    _assetSyncStatuses = <String, AssetSyncStatus>{
+      ..._assetSyncStatuses,
+      asset.id: _deriveAssetSyncStatus(asset),
+    };
   }
 
   void _removeAssetFromState(String assetId, int projectId) {
     final removed = _assets.any((item) => item.id == assetId);
     _assets = _assets.where((item) => item.id != assetId).toList(growable: false);
+    final nextStatuses = Map<String, AssetSyncStatus>.from(_assetSyncStatuses);
+    nextStatuses.remove(assetId);
+    _assetSyncStatuses = nextStatuses;
     if (!removed) {
       return;
     }
@@ -966,6 +1022,10 @@ class JoblensStore extends ChangeNotifier {
     final updated = List<PhotoAsset>.from(_assets);
     updated[index] = current.copyWith(projectId: projectId);
     _assets = updated;
+    _assetSyncStatuses = <String, AssetSyncStatus>{
+      ..._assetSyncStatuses,
+      assetId: _deriveAssetSyncStatus(updated[index]),
+    };
     _projectCounts = <int, int>{
       ..._projectCounts,
       current.projectId: ((_projectCounts[current.projectId] ?? 1) - 1).clamp(0, 1 << 30),
@@ -982,6 +1042,42 @@ class JoblensStore extends ChangeNotifier {
     final updated = List<Project>.from(_projects);
     updated[index] = project;
     _projects = updated;
+  }
+
+  Future<void> _refreshAssetSyncStatuses() async {
+    final syncJobStates = await _database.getAssetSyncJobStates(
+      _assets.map((asset) => asset.id),
+    );
+    _assetSyncStatuses = {
+      for (final asset in _assets)
+        asset.id: _deriveAssetSyncStatus(asset, syncJobState: syncJobStates[asset.id]),
+    };
+  }
+
+  AssetSyncStatus _deriveAssetSyncStatus(
+    PhotoAsset asset, {
+    SyncJobState? syncJobState,
+  }) {
+    if (asset.ingestState == AssetIngestState.failed ||
+        (asset.lastSyncErrorCode?.trim().isNotEmpty ?? false)) {
+      return AssetSyncStatus.failed;
+    }
+    if (syncJobState == SyncJobState.failed) {
+      return AssetSyncStatus.failed;
+    }
+    if (asset.cloudState == AssetCloudState.cloudOnly) {
+      return AssetSyncStatus.cloudOnly;
+    }
+    if (asset.ingestState == AssetIngestState.pending ||
+        syncJobState == SyncJobState.queued ||
+        syncJobState == SyncJobState.uploading) {
+      return AssetSyncStatus.syncing;
+    }
+    if ((asset.remoteAssetId?.trim().isNotEmpty ?? false) &&
+        asset.localPath.trim().isNotEmpty) {
+      return AssetSyncStatus.synced;
+    }
+    return AssetSyncStatus.local;
   }
 
   List<Project> _sortProjects(List<Project> projects, ProjectSortMode mode) {
