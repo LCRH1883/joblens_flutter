@@ -141,6 +141,98 @@ void main() {
     expect(jobs, isEmpty);
   });
 
+  test('placeholder ingest finalization queues and uploads asset', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(
+      bulkCheckResponse: BulkCheckAssetsResponse(
+        projectId: 'remote-project-1',
+        duplicateCount: 0,
+        missingCount: 1,
+        results: [
+          BulkCheckResult(
+            deviceAssetId: 'asset-local',
+            sha256: 'a' * 64,
+            status: 'missing',
+            assetId: null,
+          ),
+        ],
+      ),
+      prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
+        'status': 'upload_required',
+        'provider': 'google_drive',
+        'uploadSessionId': 'session-placeholder',
+        'remotePath': 'Joblens/Library/pending.jpg',
+        'remoteFileId': 'provider-file-pending',
+        'upload': {
+          'strategy': 'single_put',
+          'url': 'https://upload.example/file',
+          'method': 'PUT',
+          'headers': {'x-upload-token': 'abc'},
+        },
+      }),
+      commitResponse: CommitAssetResponse.fromMap({
+        'assetId': 'asset-remote-pending',
+        'duplicate': false,
+        'committed': true,
+        'provider': 'google_drive',
+        'remoteFileId': 'provider-file-pending',
+        'remotePath': 'Joblens/Library/pending.jpg',
+      }),
+      projectId: 'remote-project-1',
+    );
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+      mediaStorage: harness.mediaStorage,
+    );
+
+    final project = await harness.createProject('Library');
+    final source = File(p.join(harness.tempDir.path, 'pending_asset.jpg'));
+    await source.writeAsBytes(List<int>.generate(256, (i) => i % 255));
+
+    final assetId = harness.mediaStorage.createAssetId();
+    final shell = PhotoAsset(
+      id: assetId,
+      localPath: '',
+      thumbPath: '',
+      createdAt: DateTime(2026, 4, 8),
+      importedAt: DateTime(2026, 4, 8),
+      projectId: project.id,
+      hash: 'pending:$assetId',
+      status: AssetStatus.active,
+      sourceType: AssetSourceType.imported,
+      cloudState: AssetCloudState.localAndCloud,
+      existsInPhoneStorage: true,
+      ingestState: AssetIngestState.pending,
+    );
+    await harness.database.insertPendingAssetShell(shell);
+
+    final stored = await harness.mediaStorage.ingestIntoStorage(
+      assetId: assetId,
+      source: source,
+    );
+    await harness.database.finalizePendingAssetIngest(
+      assetId: assetId,
+      localPath: stored.localPath,
+      thumbPath: stored.thumbPath,
+      hash: stored.hash,
+      existsInPhoneStorage: true,
+      cloudState: AssetCloudState.localAndCloud,
+    );
+
+    await syncService.kick(forceBootstrap: false);
+
+    final updated = await harness.database.getAssetById(assetId);
+    final uploads = await harness.database.getAllBlobUploadTasks();
+    expect(fakeClient.uploadCalls, 1);
+    expect(updated?.remoteAssetId, 'asset-remote-pending');
+    expect(updated?.remoteFileId, 'provider-file-pending');
+    expect(updated?.uploadPath, 'Joblens/Library/pending.jpg');
+    expect(uploads, isEmpty);
+  });
+
   test(
     'stale sync snapshot reruns and flushes the updated queued job',
     () async {

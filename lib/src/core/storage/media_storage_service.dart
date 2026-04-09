@@ -22,6 +22,8 @@ class MediaStorageService {
   final Directory thumbnailsDir;
   static const _uuid = Uuid();
 
+  String createAssetId() => _uuid.v4();
+
   static Future<MediaStorageService> create({Directory? rootDirectory}) async {
     final root = rootDirectory != null
         ? Directory(p.join(rootDirectory.path, 'joblens_media'))
@@ -51,39 +53,40 @@ class MediaStorageService {
     required int projectId,
     DateTime? createdAt,
   }) async {
-    final id = _uuid.v4();
+    final id = createAssetId();
+    final stored = await ingestIntoStorage(assetId: id, source: source);
+    final now = DateTime.now();
+    return PhotoAsset(
+      id: id,
+      localPath: stored.localPath,
+      thumbPath: stored.thumbPath,
+      createdAt: createdAt ?? now,
+      importedAt: now,
+      projectId: projectId,
+      hash: stored.hash,
+      status: AssetStatus.active,
+      sourceType: sourceType,
+      cloudState: AssetCloudState.localAndCloud,
+      existsInPhoneStorage: false,
+    );
+  }
+
+  Future<({String localPath, String thumbPath, String hash})> ingestIntoStorage({
+    required String assetId,
+    required File source,
+  }) async {
     final extension = p.extension(source.path).isEmpty
         ? '.jpg'
         : p.extension(source.path);
-    final storedPath = p.join(originalsDir.path, '$id$extension');
-    final generatedThumbPath = p.join(thumbnailsDir.path, '$id.jpg');
+    final storedPath = p.join(originalsDir.path, '$assetId$extension');
+    final generatedThumbPath = p.join(thumbnailsDir.path, '$assetId.jpg');
 
     await source.copy(storedPath);
     final result = await Isolate.run(
       () => _generateHashAndThumbnail(storedPath, generatedThumbPath),
     );
     final thumbPath = result.generatedThumbnail ? generatedThumbPath : storedPath;
-
-    final now = DateTime.now();
-    return PhotoAsset(
-      id: id,
-      localPath: storedPath,
-      thumbPath: thumbPath,
-      createdAt: createdAt ?? now,
-      importedAt: now,
-      projectId: projectId,
-      hash: result.hash,
-      status: AssetStatus.active,
-      sourceType: sourceType,
-      cloudState: AssetCloudState.localAndCloud,
-      existsInPhoneStorage: false,
-      remoteAssetId: null,
-      remoteProvider: null,
-      remoteFileId: null,
-      uploadSessionId: null,
-      uploadPath: null,
-      lastSyncErrorCode: null,
-    );
+    return (localPath: storedPath, thumbPath: thumbPath, hash: result.hash);
   }
 
   Future<({String localPath, String thumbPath, String hash})> storeDownloadedBytes({

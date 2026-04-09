@@ -666,6 +666,25 @@ class AppDatabase {
     });
   }
 
+  Future<void> insertPendingAssetShell(PhotoAsset asset) async {
+    await _db.transaction((txn) async {
+      await txn.insert(
+        'photo_assets',
+        asset.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.update(
+        'projects',
+        {
+          'cover_asset_id': asset.id,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [asset.projectId],
+      );
+    });
+  }
+
   Future<void> upsertCloudOnlyAsset({
     required String localAssetId,
     required int projectId,
@@ -1439,11 +1458,17 @@ class AppDatabase {
     return PhotoAsset.fromMap(rows.first);
   }
 
-  Future<PhotoAsset?> getAssetByHash(String hash) async {
+  Future<PhotoAsset?> getAssetByHash(String hash, {String? excludingAssetId}) async {
+    final whereParts = <String>['hash = ?'];
+    final whereArgs = <Object?>[hash];
+    if (excludingAssetId != null) {
+      whereParts.add('id != ?');
+      whereArgs.add(excludingAssetId);
+    }
     final rows = await _db.query(
       'photo_assets',
-      where: 'hash = ?',
-      whereArgs: [hash],
+      where: whereParts.join(' AND '),
+      whereArgs: whereArgs,
       orderBy: 'created_at DESC',
       limit: 1,
     );
@@ -1523,6 +1548,73 @@ class AppDatabase {
       where: 'id = ?',
       whereArgs: [assetId],
     );
+  }
+
+  Future<void> finalizePendingAssetIngest({
+    required String assetId,
+    required String localPath,
+    required String thumbPath,
+    required String hash,
+    required bool existsInPhoneStorage,
+    String? cloudState,
+  }) async {
+    await _db.transaction((txn) async {
+      final rows = await txn.query(
+        'photo_assets',
+        columns: ['upload_generation'],
+        where: 'id = ?',
+        whereArgs: [assetId],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        return;
+      }
+      final uploadGeneration = (rows.first['upload_generation'] as int?) ?? 1;
+      await txn.update(
+        'photo_assets',
+        {
+          'local_path': localPath,
+          'thumb_path': thumbPath,
+          'hash': hash,
+          'cloud_state': cloudState,
+          'exists_in_phone_storage': existsInPhoneStorage ? 1 : 0,
+          'ingest_state': AssetIngestState.ready.name,
+          'last_sync_error_code': null,
+        },
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+      await _upsertBlobUploadExecutor(
+        txn,
+        assetId: assetId,
+        uploadGeneration: uploadGeneration,
+        localUri: localPath,
+      );
+    });
+  }
+
+  Future<void> markAssetIngestFailed(String assetId, {String? errorCode}) async {
+    await _db.update(
+      'photo_assets',
+      {
+        'ingest_state': AssetIngestState.failed.name,
+        'last_sync_error_code': errorCode,
+      },
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
+  Future<void> purgeAsset(String assetId) async {
+    await _db.transaction((txn) async {
+      await txn.delete('blob_upload', where: 'asset_id = ?', whereArgs: [assetId]);
+      await txn.delete(
+        'entity_sync',
+        where: 'entity_type = ? AND entity_id = ?',
+        whereArgs: [SyncEntityType.asset.name, assetId],
+      );
+      await txn.delete('photo_assets', where: 'id = ?', whereArgs: [assetId]);
+    });
   }
 
   Future<void> updateAssetSyncError(String assetId, String? errorCode) async {

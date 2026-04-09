@@ -62,6 +62,7 @@ class JoblensStore extends ChangeNotifier {
   String? _lastError;
   int _reauthenticationRequestCount = 0;
   Future<void> _pendingBackgroundSync = Future.value();
+  Future<void> _pendingLocalIngest = Future.value();
   ProjectSortMode _projectSortMode = ProjectSortMode.name;
   AppThemeMode _appThemeMode = AppThemeMode.system;
   LibraryImportMode _libraryImportMode = LibraryImportMode.copy;
@@ -131,7 +132,7 @@ class JoblensStore extends ChangeNotifier {
     if (_isDisposed) {
       return;
     }
-    await _hydrateLocalState();
+    await _hydrateLocalState(includeDiagnostics: false);
     final authUserId = _currentAuthUserIdProvider?.call();
     if (authUserId == null || authUserId.trim().isEmpty) {
       _lastError = null;
@@ -147,60 +148,69 @@ class JoblensStore extends ChangeNotifier {
     int? projectId,
     bool processSyncNow = false,
   }) async {
-    await _runBusy(() async {
-      final targetProjectId = projectId ?? _defaultProjectId;
-      final asset = await _mediaStorage.ingestFile(
-        source: sourceFile,
-        sourceType: AssetSourceType.captured,
-        projectId: targetProjectId,
-      );
-
-      if (await _database.assetExistsByHash(asset.hash)) {
-        return;
-      }
-
-      await _database.upsertAsset(asset);
-      await _hydrateLocalState();
-      _notifyListenersIfActive();
-      if (processSyncNow) {
-        await _syncService.kick();
-      } else {
-        unawaited(_kickSync());
-      }
-    });
+    _lastError = null;
+    final targetProjectId = projectId ?? _defaultProjectId;
+    final asset = _createPendingAssetShell(
+      sourceType: AssetSourceType.captured,
+      projectId: targetProjectId,
+    );
+    await _database.insertPendingAssetShell(asset);
+    _insertAssetIntoState(asset);
+    _notifyListenersIfActive();
+    unawaited(
+      _enqueueLocalIngest(() async {
+        await _finalizePendingAssetIngest(
+          asset,
+          sourceFile: sourceFile,
+          existsInPhoneStorage: false,
+        );
+        if (processSyncNow) {
+          await _syncService.kick();
+          await _hydrateLocalState(includeDiagnostics: false);
+          _notifyListenersIfActive();
+        } else {
+          unawaited(_kickSync());
+        }
+      }),
+    );
   }
 
   Future<void> importFromPhoneGallery({int? projectId}) async {
+    _lastError = null;
     final selectedFiles = await _picker.pickMultiImage(imageQuality: 100);
     if (selectedFiles.isEmpty) {
       return;
     }
 
     final targetProjectId = projectId ?? _defaultProjectId;
+    final pendingImports = <(PhotoAsset, File)>[];
+    for (final selected in selectedFiles) {
+      final source = File(selected.path);
+      if (!source.existsSync()) {
+        continue;
+      }
+      final asset = _createPendingAssetShell(
+        sourceType: AssetSourceType.imported,
+        projectId: targetProjectId,
+      );
+      await _database.insertPendingAssetShell(asset);
+      pendingImports.add((asset, source));
+      _insertAssetIntoState(asset);
+    }
+    _notifyListenersIfActive();
+    if (pendingImports.isEmpty) {
+      return;
+    }
+
     unawaited(
-      _runImportTask(() async {
-        for (final selected in selectedFiles) {
-          final source = File(selected.path);
-          if (!source.existsSync()) {
-            continue;
-          }
-
-          final asset = await _mediaStorage.ingestFile(
-            source: source,
-            sourceType: AssetSourceType.imported,
-            projectId: targetProjectId,
+      _enqueueLocalIngest(() async {
+        for (final entry in pendingImports) {
+          await _finalizePendingAssetIngest(
+            entry.$1,
+            sourceFile: entry.$2,
+            existsInPhoneStorage: true,
           );
-
-          if (await _database.assetExistsByHash(asset.hash)) {
-            continue;
-          }
-
-          await _database.upsertAsset(asset);
-          await _database.setAssetExistsInPhoneStorage(asset.id, true);
-          await _hydrateLocalState();
-          _notifyListenersIfActive();
         }
-
         unawaited(_kickSync());
       }),
     );
@@ -211,48 +221,55 @@ class JoblensStore extends ChangeNotifier {
     int? projectId,
     required LibraryImportMode mode,
   }) async {
+    _lastError = null;
     if (assets.isEmpty) {
       return;
     }
 
-    final importedAssetIds = <String>[];
     final targetProjectId = projectId ?? _defaultProjectId;
     final tempDir = await getTemporaryDirectory();
+    final pendingImports = <(PhotoAsset, AssetEntity)>[];
+    for (final entity in assets) {
+      final asset = _createPendingAssetShell(
+        sourceType: AssetSourceType.imported,
+        projectId: targetProjectId,
+        createdAt: entity.createDateTime,
+      );
+      await _database.insertPendingAssetShell(asset);
+      pendingImports.add((asset, entity));
+      _insertAssetIntoState(asset);
+    }
+    _notifyListenersIfActive();
+    if (pendingImports.isEmpty) {
+      return;
+    }
 
-    await _runImportTask(() async {
-      for (final entity in assets) {
-        final source = await _resolveLibraryAssetFile(entity, tempDir);
-        if (source == null || !source.existsSync()) {
-          continue;
+    unawaited(
+      _enqueueLocalIngest(() async {
+        final importedAssetIds = <String>[];
+        for (final entry in pendingImports) {
+          final source = await _resolveLibraryAssetFile(entry.$2, tempDir);
+          if (source == null || !source.existsSync()) {
+            await _discardPendingAsset(entry.$1.id, entry.$1.projectId);
+            continue;
+          }
+          final completed = await _finalizePendingAssetIngest(
+            entry.$1,
+            sourceFile: source,
+            existsInPhoneStorage: mode == LibraryImportMode.copy,
+          );
+          if (completed && mode == LibraryImportMode.move) {
+            importedAssetIds.add(entry.$2.id);
+          }
         }
 
-        final asset = await _mediaStorage.ingestFile(
-          source: source,
-          sourceType: AssetSourceType.imported,
-          projectId: targetProjectId,
-          createdAt: entity.createDateTime,
-        );
-
-        if (await _database.assetExistsByHash(asset.hash)) {
-          continue;
+        if (mode == LibraryImportMode.move && importedAssetIds.isNotEmpty) {
+          await PhotoManager.editor.deleteWithIds(importedAssetIds);
         }
 
-        await _database.upsertAsset(asset);
-        await _database.setAssetExistsInPhoneStorage(
-          asset.id,
-          mode == LibraryImportMode.copy,
-        );
-        importedAssetIds.add(entity.id);
-        await _hydrateLocalState();
-        _notifyListenersIfActive();
-      }
-
-      if (mode == LibraryImportMode.move && importedAssetIds.isNotEmpty) {
-        await PhotoManager.editor.deleteWithIds(importedAssetIds);
-      }
-
-      unawaited(_kickSync());
-    });
+        unawaited(_kickSync());
+      }),
+    );
   }
 
   Future<void> createProject(String name, {DateTime? startDate}) async {
@@ -261,16 +278,23 @@ class JoblensStore extends ChangeNotifier {
       return;
     }
 
-    await _runBusy(() async {
+    _lastError = null;
+    try {
       final normalizedStartDate = _normalizeProjectStartDate(startDate);
-      await _database.createProject(
+      final projectId = await _database.createProject(
         trimmed,
         startDate: normalizedStartDate,
       );
-      await _hydrateLocalState();
-      _notifyListenersIfActive();
+      final project = await _database.getProjectById(projectId);
+      if (project != null) {
+        _upsertProjectInState(project);
+        _projectCounts = <int, int>{..._projectCounts, project.id: 0};
+        _notifyListenersIfActive();
+      }
       unawaited(_kickSync());
-    });
+    } catch (error, stackTrace) {
+      await _recordForegroundError(error, stackTrace);
+    }
   }
 
   Future<void> updateProjectMetadata(
@@ -283,10 +307,12 @@ class JoblensStore extends ChangeNotifier {
       return;
     }
 
-    await _runBusy(() async {
-      final existing = (await _database.getProjects()).firstWhere(
-        (item) => item.id == projectId,
-      );
+    _lastError = null;
+    try {
+      final existing = await _database.getProjectById(projectId);
+      if (existing == null) {
+        return;
+      }
       final normalizedStartDate = _normalizeProjectStartDate(startDate);
       final normalizedName = existing.name == 'Inbox' ? 'Inbox' : trimmed;
       await _database.updateProjectMetadata(
@@ -294,10 +320,15 @@ class JoblensStore extends ChangeNotifier {
         name: normalizedName,
         startDate: normalizedStartDate,
       );
-      await _hydrateLocalState();
+      final updated = await _database.getProjectById(projectId);
+      if (updated != null) {
+        _upsertProjectInState(updated);
+      }
       _notifyListenersIfActive();
       unawaited(_kickSync());
-    });
+    } catch (error, stackTrace) {
+      await _recordForegroundError(error, stackTrace);
+    }
   }
 
   Future<void> updateProjectNotes(int projectId, String notes) async {
@@ -331,7 +362,8 @@ class JoblensStore extends ChangeNotifier {
       return;
     }
 
-    await _runBusy(() async {
+    _lastError = null;
+    try {
       final currentProjects = await _database.getProjects();
       final project = currentProjects.firstWhere(
         (item) => item.id == projectId,
@@ -345,25 +377,33 @@ class JoblensStore extends ChangeNotifier {
         projectId,
         fallbackProjectId: _defaultProjectId,
       );
-      final updatedAssets = await _database.getAssets();
-      final movedAssets = updatedAssets
-          .where((asset) => movedAssetIds.contains(asset.id))
-          .toList(growable: false);
-      await _hydrateLocalState();
+      _projects = _projects.where((item) => item.id != projectId).toList(growable: false);
+      _assets = _assets.map((asset) {
+        if (movedAssetIds.contains(asset.id)) {
+          return asset.copyWith(projectId: _defaultProjectId);
+        }
+        return asset;
+      }).toList(growable: false);
+      _projectCounts = await _database.getProjectCounts();
       _notifyListenersIfActive();
-      if (movedAssets.isNotEmpty || project.remoteProjectId != null) {
+      if (movedAssetIds.isNotEmpty || project.remoteProjectId != null) {
         unawaited(_kickSync());
       }
-    });
+    } catch (error, stackTrace) {
+      await _recordForegroundError(error, stackTrace);
+    }
   }
 
   Future<void> moveAssetToProject(String assetId, int projectId) async {
-    await _runBusy(() async {
+    _lastError = null;
+    try {
       await _database.moveAssetToProject(assetId, projectId);
-      await _hydrateLocalState();
+      _moveAssetInState(assetId, projectId);
       _notifyListenersIfActive();
       unawaited(_kickSync());
-    });
+    } catch (error, stackTrace) {
+      await _recordForegroundError(error, stackTrace);
+    }
   }
 
   Future<void> moveAssetsToProject(
@@ -375,26 +415,34 @@ class JoblensStore extends ChangeNotifier {
       return;
     }
 
-    await _runBusy(() async {
+    _lastError = null;
+    try {
       for (final assetId in uniqueIds) {
         await _database.moveAssetToProject(assetId, projectId);
+        _moveAssetInState(assetId, projectId);
       }
-      await _hydrateLocalState();
       _notifyListenersIfActive();
       unawaited(_kickSync());
-    });
+    } catch (error, stackTrace) {
+      await _recordForegroundError(error, stackTrace);
+    }
   }
 
   Future<void> softDeleteAsset(String assetId) async {
-    await _runBusy(() async {
+    _lastError = null;
+    try {
       final asset = await _database.getAssetById(assetId);
       await _database.softDeleteAsset(assetId);
-      await _hydrateLocalState();
+      if (asset != null) {
+        _removeAssetFromState(asset.id, asset.projectId);
+      }
       _notifyListenersIfActive();
       if (asset != null) {
         unawaited(_kickSync());
       }
-    });
+    } catch (error, stackTrace) {
+      await _recordForegroundError(error, stackTrace);
+    }
   }
 
   Future<void> softDeleteAssets(Iterable<String> assetIds) async {
@@ -403,17 +451,22 @@ class JoblensStore extends ChangeNotifier {
       return;
     }
 
-    await _runBusy(() async {
+    _lastError = null;
+    try {
       final assets = await _database.getAssetsByIds(uniqueIds);
       for (final assetId in uniqueIds) {
         await _database.softDeleteAsset(assetId);
       }
-      await _hydrateLocalState();
+      for (final asset in assets) {
+        _removeAssetFromState(asset.id, asset.projectId);
+      }
       _notifyListenersIfActive();
       if (assets.isNotEmpty) {
         unawaited(_kickSync());
       }
-    });
+    } catch (error, stackTrace) {
+      await _recordForegroundError(error, stackTrace);
+    }
   }
 
   Future<void> disconnectProvider(CloudProviderType provider) async {
@@ -633,31 +686,6 @@ class JoblensStore extends ChangeNotifier {
     }
   }
 
-  Future<void> _runImportTask(Future<void> Function() action) async {
-    if (_isBusy) {
-      return;
-    }
-
-    _isBusy = true;
-    _lastError = null;
-    _notifyListenersIfActive();
-
-    try {
-      await action();
-    } catch (error, stackTrace) {
-      await _handleError(error);
-      if (!_requiresReauthentication(error)) {
-        _lastError = error.toString();
-      }
-      if (kDebugMode) {
-        debugPrint('JoblensStore import error: $error\n$stackTrace');
-      }
-    } finally {
-      _isBusy = false;
-      _notifyListenersIfActive();
-    }
-  }
-
   int get _defaultProjectId {
     final inbox = _projects
         .where((project) => project.name == 'Inbox')
@@ -671,16 +699,18 @@ class JoblensStore extends ChangeNotifier {
     throw StateError('No project available');
   }
 
-  Future<void> _hydrateLocalState() async {
+  Future<void> _hydrateLocalState({bool includeDiagnostics = true}) async {
     _assets = await _database.getAssets();
     _projects = await _database.getProjects();
     _projectCounts = await _database.getProjectCounts();
     _providers = await _database.getProviderAccounts();
-    _syncJobs = await _database.getSyncJobs();
-    _syncLogs = await _database.getSyncLogs();
     _projectSortMode = await _database.getProjectSortMode();
     _appThemeMode = await _database.getAppThemeMode();
     _libraryImportMode = await _database.getLibraryImportMode();
+    if (includeDiagnostics) {
+      _syncJobs = await _database.getSyncJobs();
+      _syncLogs = await _database.getSyncLogs();
+    }
   }
 
   Future<void> _kickSync({bool forceBootstrap = false}) {
@@ -693,7 +723,7 @@ class JoblensStore extends ChangeNotifier {
         if (_isDisposed) {
           return;
         }
-        await _hydrateLocalState();
+        await _hydrateLocalState(includeDiagnostics: false);
       } catch (error, stackTrace) {
         if (_isDisposed) {
           return;
@@ -802,6 +832,155 @@ class JoblensStore extends ChangeNotifier {
     );
     await tempFile.writeAsBytes(bytes, flush: true);
     return tempFile;
+  }
+
+  Future<void> _enqueueLocalIngest(Future<void> Function() action) {
+    _pendingLocalIngest = _pendingLocalIngest.then((_) => action());
+    return _pendingLocalIngest;
+  }
+
+  PhotoAsset _createPendingAssetShell({
+    required AssetSourceType sourceType,
+    required int projectId,
+    DateTime? createdAt,
+  }) {
+    final now = DateTime.now();
+    final id = _mediaStorage.createAssetId();
+    return PhotoAsset(
+      id: id,
+      localPath: '',
+      thumbPath: '',
+      createdAt: createdAt ?? now,
+      importedAt: now,
+      projectId: projectId,
+      hash: 'pending:$id',
+      status: AssetStatus.active,
+      sourceType: sourceType,
+      cloudState: AssetCloudState.localAndCloud,
+      existsInPhoneStorage: false,
+      ingestState: AssetIngestState.pending,
+    );
+  }
+
+  Future<bool> _finalizePendingAssetIngest(
+    PhotoAsset shell, {
+    required File sourceFile,
+    required bool existsInPhoneStorage,
+  }) async {
+    try {
+      final stored = await _mediaStorage.ingestIntoStorage(
+        assetId: shell.id,
+        source: sourceFile,
+      );
+      final existingDuplicate = await _database.getAssetByHash(
+        stored.hash,
+        excludingAssetId: shell.id,
+      );
+      if (existingDuplicate != null &&
+          existingDuplicate.status == AssetStatus.active) {
+        await _discardPendingAsset(shell.id, shell.projectId);
+        return true;
+      }
+
+      await _database.finalizePendingAssetIngest(
+        assetId: shell.id,
+        localPath: stored.localPath,
+        thumbPath: stored.thumbPath,
+        hash: stored.hash,
+        existsInPhoneStorage: existsInPhoneStorage,
+        cloudState: AssetCloudState.localAndCloud,
+      );
+      final updated = await _database.getAssetById(shell.id);
+      if (updated != null) {
+        _replaceAssetInState(updated);
+        _notifyListenersIfActive();
+      }
+      return true;
+    } catch (error, stackTrace) {
+      await _database.markAssetIngestFailed(shell.id, errorCode: 'local_ingest_failed');
+      await _discardPendingAsset(shell.id, shell.projectId);
+      await _recordForegroundError(error, stackTrace);
+      return false;
+    }
+  }
+
+  Future<void> _discardPendingAsset(String assetId, int projectId) async {
+    await _database.purgeAsset(assetId);
+    _removeAssetFromState(assetId, projectId);
+    _notifyListenersIfActive();
+  }
+
+  Future<void> _recordForegroundError(Object error, StackTrace stackTrace) async {
+    await _handleError(error);
+    if (!_requiresReauthentication(error)) {
+      _lastError = error.toString();
+    }
+    if (kDebugMode) {
+      debugPrint('JoblensStore error: $error\n$stackTrace');
+    }
+    _notifyListenersIfActive();
+  }
+
+  void _insertAssetIntoState(PhotoAsset asset) {
+    _assets = [asset, ..._assets.where((item) => item.id != asset.id)];
+    _projectCounts = <int, int>{
+      ..._projectCounts,
+      asset.projectId: (_projectCounts[asset.projectId] ?? 0) + 1,
+    };
+  }
+
+  void _replaceAssetInState(PhotoAsset asset) {
+    final index = _assets.indexWhere((item) => item.id == asset.id);
+    if (index < 0) {
+      _insertAssetIntoState(asset);
+      return;
+    }
+    final updated = List<PhotoAsset>.from(_assets);
+    updated[index] = asset;
+    _assets = updated;
+  }
+
+  void _removeAssetFromState(String assetId, int projectId) {
+    final removed = _assets.any((item) => item.id == assetId);
+    _assets = _assets.where((item) => item.id != assetId).toList(growable: false);
+    if (!removed) {
+      return;
+    }
+    final nextCount = (_projectCounts[projectId] ?? 1) - 1;
+    _projectCounts = <int, int>{
+      ..._projectCounts,
+      projectId: nextCount < 0 ? 0 : nextCount,
+    };
+  }
+
+  void _moveAssetInState(String assetId, int projectId) {
+    final index = _assets.indexWhere((item) => item.id == assetId);
+    if (index < 0) {
+      return;
+    }
+    final current = _assets[index];
+    if (current.projectId == projectId) {
+      return;
+    }
+    final updated = List<PhotoAsset>.from(_assets);
+    updated[index] = current.copyWith(projectId: projectId);
+    _assets = updated;
+    _projectCounts = <int, int>{
+      ..._projectCounts,
+      current.projectId: ((_projectCounts[current.projectId] ?? 1) - 1).clamp(0, 1 << 30),
+      projectId: (_projectCounts[projectId] ?? 0) + 1,
+    };
+  }
+
+  void _upsertProjectInState(Project project) {
+    final index = _projects.indexWhere((item) => item.id == project.id);
+    if (index < 0) {
+      _projects = [..._projects, project];
+      return;
+    }
+    final updated = List<Project>.from(_projects);
+    updated[index] = project;
+    _projects = updated;
   }
 
   List<Project> _sortProjects(List<Project> projects, ProjectSortMode mode) {

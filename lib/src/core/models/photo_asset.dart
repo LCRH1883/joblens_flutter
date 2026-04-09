@@ -6,7 +6,7 @@ enum AssetSourceType { captured, imported }
 
 enum AssetStatus { active, deleted }
 
-enum AssetIngestState { ready, failed }
+enum AssetIngestState { pending, ready, failed }
 
 class AssetCloudState {
   static const localAndCloud = 'local_and_cloud';
