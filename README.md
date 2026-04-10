@@ -65,7 +65,7 @@ Optional crash reporting values:
 For the current GlitchTip setup, the DSN host should use the public ingest domain, for example:
 
 ```text
-SENTRY_DSN=https://<public-key>@crash.joblens.xyz/<project-id>
+SENTRY_DSN=https://9e4622265d264012a6843834b22d5005@glitch.joblens.xyz/2
 SENTRY_ENVIRONMENT=production
 ```
 

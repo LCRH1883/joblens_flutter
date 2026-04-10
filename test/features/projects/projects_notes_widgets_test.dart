@@ -9,7 +9,6 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:joblens_flutter/src/app/joblens_store.dart';
 import 'package:joblens_flutter/src/core/db/app_database.dart';
 import 'package:joblens_flutter/src/core/models/photo_asset.dart';
-import 'package:joblens_flutter/src/core/models/project.dart';
 import 'package:joblens_flutter/src/core/storage/media_storage_service.dart';
 import 'package:joblens_flutter/src/core/sync/sync_service.dart';
 import 'package:joblens_flutter/src/features/gallery/gallery_page.dart';
@@ -215,6 +214,8 @@ class _StoreHarness {
   final Directory tempDir;
 
   Future<void> dispose() async {
+    await store.waitForIdle();
+    store.dispose();
     await database.close();
     if (await tempDir.exists()) {
       await tempDir.delete(recursive: true);
@@ -229,5 +230,5 @@ class _NoopSyncService extends SyncService {
   Future<void> enqueueAsset(PhotoAsset asset) async {}
 
   @override
-  Future<void> processQueue(List<Project> projects) async {}
+  Future<void> kick({bool forceBootstrap = false}) async {}
 }

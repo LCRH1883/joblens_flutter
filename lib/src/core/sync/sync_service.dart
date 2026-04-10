@@ -17,7 +17,6 @@ import '../models/photo_asset.dart';
 import '../models/project.dart';
 import '../models/provider_account.dart';
 import '../models/sync_log_entry.dart';
-import '../models/sync_job.dart';
 import '../storage/media_storage_service.dart';
 import 'cloud_adapter.dart';
 
@@ -338,7 +337,7 @@ class SyncService {
     await _db.markBlobUploadUploading(task.assetId, task.uploadGeneration);
 
     final remoteProjectId = await _ensureProjectRemoteId(asset.projectId);
-    final context = _PendingAssetContext(asset: asset, jobs: const []);
+    final context = _PendingAssetContext(asset: asset);
     try {
       final bulkCheck = await _backendApiClient!.bulkCheckAssets(
         projectId: remoteProjectId,
@@ -757,55 +756,6 @@ class SyncService {
     }
   }
 
-  Future<void> enqueueProjectBackfill(
-    Project project,
-    List<PhotoAsset> assets,
-  ) async {
-    for (final asset in assets.where((item) => item.projectId == project.id)) {
-      await _db.enqueueSyncJob(
-        assetId: asset.id,
-        projectId: project.id,
-        provider: CloudProviderType.backend,
-      );
-    }
-  }
-
-  Future<void> pauseProvider(CloudProviderType provider) async {
-    if (provider != CloudProviderType.backend) {
-      await _db.updateProviderAccountStatus(
-        provider,
-        connectionStatus: ProviderConnectionStatus.disconnected,
-      );
-      return;
-    }
-
-    final jobs = await _db.getSyncJobs();
-    for (final job in jobs.where(
-      (item) =>
-          item.providerType == provider &&
-          (item.state == SyncJobState.queued ||
-              item.state == SyncJobState.failed),
-    )) {
-      await _db.updateSyncJob(job.copyWith(state: SyncJobState.paused));
-    }
-  }
-
-  Future<void> resumeProvider(CloudProviderType provider) async {
-    if (provider != CloudProviderType.backend) {
-      return;
-    }
-
-    final jobs = await _db.getSyncJobs();
-    for (final job in jobs.where(
-      (item) =>
-          item.providerType == provider && item.state == SyncJobState.paused,
-    )) {
-      await _db.updateSyncJob(
-        job.copyWith(state: SyncJobState.queued, lastError: null),
-      );
-    }
-  }
-
   Future<void> retryFailed() async {
     await _db.cleanupSyncState();
     final syncRecords = await _db.getAllEntitySyncRecords();
@@ -1098,10 +1048,6 @@ class SyncService {
       return;
     }
     await client.archiveProject(remoteProjectId);
-  }
-
-  Future<void> processQueue(List<Project> projects) async {
-    await kick();
   }
 
   Future<void> mergeRemoteAssets(List<Project> projects) async {
@@ -1450,7 +1396,6 @@ class SyncService {
         lastSyncErrorCode: null,
       );
       await _db.updateAssetSyncError(context.asset.id, null);
-      await _markJobsDone(context.jobs);
       return;
     }
 
@@ -1467,7 +1412,6 @@ class SyncService {
       message: 'Matched an existing remote asset during sync.',
     );
     await _db.updateAssetSyncError(context.asset.id, null);
-    await _markJobsDone(context.jobs);
   }
 
   Future<bool> _recoverDuplicateUploadFailure(
@@ -1750,25 +1694,6 @@ class SyncService {
     return remoteAssetId;
   }
 
-  Future<void> _markJobsDone(List<SyncJob> jobs) async {
-    for (final job in jobs) {
-      final latestJob = await _db.getSyncJobForAsset(
-        assetId: job.assetId,
-        provider: job.providerType,
-      );
-      if (latestJob == null) {
-        continue;
-      }
-      await _db.updateSyncJob(
-        latestJob.copyWith(
-          state: SyncJobState.done,
-          attemptCount: latestJob.attemptCount + 1,
-          lastError: null,
-        ),
-      );
-    }
-  }
-
   _MappedSyncError _mapSyncError(Object error) {
     if (error is ApiException) {
       return _MappedSyncError(code: error.code, message: error.message);
@@ -1817,10 +1742,9 @@ class SyncService {
 }
 
 class _PendingAssetContext {
-  const _PendingAssetContext({required this.asset, required this.jobs});
+  const _PendingAssetContext({required this.asset});
 
   final PhotoAsset asset;
-  final List<SyncJob> jobs;
 }
 
 class _UploadOutcome {

@@ -34,9 +34,11 @@ class AppDatabase {
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 9) {
-          await _resetSchema(db);
-          await _createSchema(db);
-        } else if (oldVersion < 10) {
+          await _migrateLegacySchema(db);
+          return;
+        }
+
+        if (oldVersion < 10) {
           await db.execute(
             'ALTER TABLE provider_accounts ADD COLUMN account_identifier TEXT',
           );
@@ -121,6 +123,368 @@ class AppDatabase {
     await db.execute('DROP TABLE IF EXISTS photo_assets');
     await db.execute('DROP TABLE IF EXISTS projects');
     await db.execute('DROP TABLE IF EXISTS app_state');
+  }
+
+  static Future<void> _migrateLegacySchema(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        notes TEXT NOT NULL DEFAULT '',
+        start_date TEXT,
+        remote_project_id TEXT,
+        cover_asset_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        sync_folder_map TEXT NOT NULL DEFAULT '{}',
+        deleted_at TEXT,
+        remote_rev INTEGER,
+        local_seq INTEGER NOT NULL DEFAULT 0,
+        dirty_fields TEXT NOT NULL DEFAULT '[]'
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS photo_assets (
+        id TEXT PRIMARY KEY,
+        local_path TEXT NOT NULL,
+        thumb_path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        imported_at TEXT NOT NULL,
+        project_id INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        remote_asset_id TEXT,
+        remote_provider TEXT,
+        remote_file_id TEXT,
+        upload_session_id TEXT,
+        upload_path TEXT,
+        cloud_state TEXT NOT NULL DEFAULT 'local_and_cloud',
+        exists_in_phone_storage INTEGER NOT NULL DEFAULT 0,
+        last_sync_error_code TEXT,
+        deleted_at TEXT,
+        remote_rev INTEGER,
+        local_seq INTEGER NOT NULL DEFAULT 0,
+        dirty_fields TEXT NOT NULL DEFAULT '[]',
+        upload_generation INTEGER NOT NULL DEFAULT 1,
+        ingest_state TEXT NOT NULL DEFAULT 'ready',
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS provider_accounts (
+        id TEXT PRIMARY KEY,
+        provider_type TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        connection_id TEXT,
+        account_identifier TEXT,
+        connection_status TEXT NOT NULL DEFAULT 'disconnected',
+        token_state TEXT NOT NULL,
+        connected_at TEXT,
+        root_display_name TEXT,
+        root_folder_path TEXT,
+        last_error TEXT,
+        is_active INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+
+    await _ensureColumn(
+      db,
+      tableName: 'projects',
+      columnName: 'notes',
+      columnSql: "TEXT NOT NULL DEFAULT ''",
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'projects',
+      columnName: 'start_date',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'projects',
+      columnName: 'remote_project_id',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'projects',
+      columnName: 'deleted_at',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'projects',
+      columnName: 'remote_rev',
+      columnSql: 'INTEGER',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'projects',
+      columnName: 'local_seq',
+      columnSql: 'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'projects',
+      columnName: 'dirty_fields',
+      columnSql: "TEXT NOT NULL DEFAULT '[]'",
+    );
+
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'remote_asset_id',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'remote_provider',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'remote_file_id',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'upload_session_id',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'upload_path',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'cloud_state',
+      columnSql: "TEXT NOT NULL DEFAULT 'local_and_cloud'",
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'exists_in_phone_storage',
+      columnSql: 'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'last_sync_error_code',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'deleted_at',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'remote_rev',
+      columnSql: 'INTEGER',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'local_seq',
+      columnSql: 'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'dirty_fields',
+      columnSql: "TEXT NOT NULL DEFAULT '[]'",
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'upload_generation',
+      columnSql: 'INTEGER NOT NULL DEFAULT 1',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'ingest_state',
+      columnSql: "TEXT NOT NULL DEFAULT 'ready'",
+    );
+
+    await _ensureColumn(
+      db,
+      tableName: 'provider_accounts',
+      columnName: 'connection_id',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'provider_accounts',
+      columnName: 'account_identifier',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'provider_accounts',
+      columnName: 'connection_status',
+      columnSql: "TEXT NOT NULL DEFAULT 'disconnected'",
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'provider_accounts',
+      columnName: 'root_display_name',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'provider_accounts',
+      columnName: 'root_folder_path',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'provider_accounts',
+      columnName: 'last_error',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'provider_accounts',
+      columnName: 'is_active',
+      columnSql: 'INTEGER NOT NULL DEFAULT 0',
+    );
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS entity_sync (
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        next_attempt_at TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        leased_until TEXT,
+        last_error TEXT,
+        dirty_fields TEXT NOT NULL DEFAULT '[]',
+        base_remote_rev INTEGER,
+        local_seq INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (entity_type, entity_id)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS blob_upload (
+        asset_id TEXT NOT NULL,
+        upload_generation INTEGER NOT NULL,
+        local_uri TEXT NOT NULL,
+        state TEXT NOT NULL,
+        bytes_sent INTEGER NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        leased_until TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (asset_id, upload_generation),
+        FOREIGN KEY(asset_id) REFERENCES photo_assets(id)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_state (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_log_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        level TEXT NOT NULL,
+        event TEXT NOT NULL,
+        message TEXT NOT NULL,
+        asset_id TEXT,
+        project_id INTEGER,
+        created_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS project_provider_mirrors (
+        local_project_id INTEGER NOT NULL,
+        provider_connection_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        provider_folder_id TEXT,
+        provider_rev TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (local_project_id, provider_connection_id)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS asset_provider_mirrors (
+        asset_id TEXT NOT NULL,
+        provider_connection_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        provider_file_id TEXT,
+        remote_path TEXT,
+        provider_rev TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (asset_id, provider_connection_id)
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_assets_project ON photo_assets(project_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_assets_created ON photo_assets(created_at DESC)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_assets_remote_asset_id ON photo_assets(remote_asset_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_projects_remote_project_id ON projects(remote_project_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_entity_sync_next_attempt ON entity_sync(next_attempt_at, updated_at)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_blob_upload_state ON blob_upload(state, updated_at)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_project_provider_mirrors_connection ON project_provider_mirrors(provider_connection_id, status, updated_at)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_asset_provider_mirrors_connection ON asset_provider_mirrors(provider_connection_id, status, updated_at)',
+    );
+  }
+
+  static Future<void> _ensureColumn(
+    Database db, {
+    required String tableName,
+    required String columnName,
+    required String columnSql,
+  }) async {
+    final columns = await db.rawQuery('PRAGMA table_info($tableName)');
+    final existingNames = columns
+        .map((row) => row['name'] as String?)
+        .whereType<String>()
+        .toSet();
+    if (existingNames.contains(columnName)) {
+      return;
+    }
+    await db.execute(
+      'ALTER TABLE $tableName ADD COLUMN $columnName $columnSql',
+    );
   }
 
   static Future<void> _createSchema(Database db) async {
@@ -1102,44 +1466,6 @@ class AppDatabase {
     return rows.map(ProviderAccount.fromMap).toList();
   }
 
-  Future<void> setProviderConnection(
-    CloudProviderType provider,
-    ProviderTokenState state,
-  ) async {
-    final connectionStatus = switch (state) {
-      ProviderTokenState.connected => ProviderConnectionStatus.ready,
-      ProviderTokenState.expired => ProviderConnectionStatus.reconnectRequired,
-      ProviderTokenState.disconnected => ProviderConnectionStatus.disconnected,
-    };
-    await _db.update(
-      'provider_accounts',
-      {
-        'connection_status': connectionStatus.storageValue,
-        'token_state': state.name,
-        'connected_at': state == ProviderTokenState.connected
-            ? DateTime.now().toIso8601String()
-            : null,
-        'is_active': state == ProviderTokenState.disconnected ? 0 : 1,
-      },
-      where: 'provider_type = ?',
-      whereArgs: [provider.key],
-    );
-  }
-
-  Future<List<CloudProviderType>> getConnectedProviders() async {
-    final rows = await _db.query(
-      'provider_accounts',
-      columns: ['provider_type'],
-      where: 'token_state = ?',
-      whereArgs: [ProviderTokenState.connected.name],
-    );
-    return rows
-        .map(
-          (row) => CloudProviderTypeX.fromKey(row['provider_type']! as String),
-        )
-        .toList();
-  }
-
   Future<void> enqueueSyncJob({
     required String assetId,
     required int projectId,
@@ -1513,19 +1839,6 @@ class AppDatabase {
       where: 'asset_id = ?',
       whereArgs: [assetId],
     );
-  }
-
-  Future<List<SyncJob>> getPendingSyncJobs() async {
-    final jobs = await _buildSyntheticSyncJobs();
-    return jobs
-        .where(
-          (job) =>
-              job.state == SyncJobState.queued ||
-              job.state == SyncJobState.failed ||
-              job.state == SyncJobState.paused,
-        )
-        .take(25)
-        .toList(growable: false);
   }
 
   Future<bool> updateSyncJob(SyncJob job) async {

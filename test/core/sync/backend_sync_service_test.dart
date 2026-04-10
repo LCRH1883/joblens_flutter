@@ -61,7 +61,8 @@ void main() {
         provider: CloudProviderType.backend,
       );
 
-      await syncService.processQueue([project]);
+      await harness.database.markBootstrapCompleted();
+      await syncService.kick(forceBootstrap: false);
 
       final updated = await harness.database.getAssetById(asset.id);
       final jobs = await harness.database.getSyncJobs();
@@ -130,7 +131,8 @@ void main() {
       provider: CloudProviderType.backend,
     );
 
-    await syncService.processQueue([project]);
+    await harness.database.markBootstrapCompleted();
+    await syncService.kick(forceBootstrap: false);
 
     final updated = await harness.database.getAssetById(asset.id);
     final jobs = await harness.database.getSyncJobs();
@@ -552,7 +554,8 @@ void main() {
         );
       };
 
-      await syncService.processQueue([sourceProject, destinationProject]);
+      await harness.database.markBootstrapCompleted();
+      await syncService.kick(forceBootstrap: false);
 
       final jobs = await harness.database.getSyncJobs();
       final updatedAsset = await harness.database.getAssetById(asset.id);
@@ -632,7 +635,8 @@ void main() {
         provider: CloudProviderType.backend,
       );
 
-      await syncService.processQueue([project]);
+      await harness.database.markBootstrapCompleted();
+      await syncService.kick(forceBootstrap: false);
 
       final updated = await harness.database.getAssetById(asset.id);
       final jobs = await harness.database.getSyncJobs();
@@ -711,7 +715,8 @@ void main() {
         provider: CloudProviderType.backend,
       );
 
-      await syncService.processQueue([project]);
+      await harness.database.markBootstrapCompleted();
+      await syncService.kick(forceBootstrap: false);
 
       final updated = await harness.database.getAssetById(asset.id);
       final jobs = await harness.database.getSyncJobs();
@@ -766,7 +771,8 @@ void main() {
       provider: CloudProviderType.backend,
     );
 
-    await syncService.processQueue([project]);
+    await harness.database.markBootstrapCompleted();
+    await syncService.kick(forceBootstrap: false);
 
     final updated = await harness.database.getAssetById(asset.id);
     final jobs = await harness.database.getSyncJobs();

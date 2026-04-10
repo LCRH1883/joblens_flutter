@@ -32,8 +32,10 @@ void main() {
       mediaStorage: mediaStorage,
       syncService: _NoopSyncService(database),
     );
-    addTearDown(store.dispose);
-    addTearDown(database.close);
+    addTearDown(() async {
+      store.dispose();
+      await database.close();
+    });
 
     await store.initialize();
     await store.createProject(
@@ -75,5 +77,5 @@ class _NoopSyncService extends SyncService {
   _NoopSyncService(super.db) : super();
 
   @override
-  Future<void> processQueue(List<Project> projects) async {}
+  Future<void> kick({bool forceBootstrap = false}) async {}
 }

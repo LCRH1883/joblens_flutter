@@ -7,7 +7,6 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:joblens_flutter/src/app/joblens_store.dart';
 import 'package:joblens_flutter/src/core/db/app_database.dart';
 import 'package:joblens_flutter/src/core/models/photo_asset.dart';
-import 'package:joblens_flutter/src/core/models/project.dart';
 import 'package:joblens_flutter/src/core/storage/media_storage_service.dart';
 import 'package:joblens_flutter/src/core/sync/sync_service.dart';
 
@@ -37,6 +36,10 @@ void main() {
       mediaStorage: mediaStorage,
       syncService: _NoopSyncService(database),
     );
+    addTearDown(() async {
+      store.dispose();
+      await database.close();
+    });
 
     await store.initialize();
     await store.createProject('Library Notes');
@@ -51,8 +54,6 @@ void main() {
     );
     expect(updated.notes, 'line one\nline two');
     expect(store.lastError, isNull);
-
-    await database.close();
   });
 }
 
@@ -63,5 +64,5 @@ class _NoopSyncService extends SyncService {
   Future<void> enqueueAsset(PhotoAsset asset) async {}
 
   @override
-  Future<void> processQueue(List<Project> projects) async {}
+  Future<void> kick({bool forceBootstrap = false}) async {}
 }

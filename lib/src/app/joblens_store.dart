@@ -160,22 +160,26 @@ class JoblensStore extends ChangeNotifier {
     await _database.insertPendingAssetShell(asset);
     _insertAssetIntoState(asset);
     _notifyListenersIfActive();
-    unawaited(
-      _enqueueLocalIngest(() async {
-        await _finalizePendingAssetIngest(
-          asset,
-          sourceFile: sourceFile,
-          existsInPhoneStorage: false,
-        );
-        if (processSyncNow) {
-          await _syncService.kick();
-          await _hydrateLocalState(includeDiagnostics: false);
-          _notifyListenersIfActive();
-        } else {
-          unawaited(_kickSync());
+    await _enqueueLocalIngest(() async {
+      await _finalizePendingAssetIngest(
+        asset,
+        sourceFile: sourceFile,
+        existsInPhoneStorage: false,
+      );
+      if (_isDisposed) {
+        return;
+      }
+      if (processSyncNow) {
+        await _syncService.kick();
+        if (_isDisposed) {
+          return;
         }
-      }),
-    );
+        await _hydrateLocalState(includeDiagnostics: false);
+        _notifyListenersIfActive();
+      } else {
+        unawaited(_kickSync());
+      }
+    });
   }
 
   Future<void> importFromPhoneGallery({int? projectId}) async {
@@ -842,8 +846,17 @@ class JoblensStore extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_isDisposed) {
+      return;
+    }
     _isDisposed = true;
     super.dispose();
+  }
+
+  @visibleForTesting
+  Future<void> waitForIdle() async {
+    await _pendingLocalIngest;
+    await _pendingBackgroundSync;
   }
 
   Future<void> _synchronizeAuthUser(String? userId) async {
@@ -927,7 +940,12 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> _enqueueLocalIngest(Future<void> Function() action) {
-    _pendingLocalIngest = _pendingLocalIngest.then((_) => action());
+    _pendingLocalIngest = _pendingLocalIngest.then((_) async {
+      if (_isDisposed) {
+        return;
+      }
+      await action();
+    });
     return _pendingLocalIngest;
   }
 
@@ -960,20 +978,31 @@ class JoblensStore extends ChangeNotifier {
     required bool existsInPhoneStorage,
   }) async {
     try {
+      if (_isDisposed) {
+        return false;
+      }
       final stored = await _mediaStorage.ingestIntoStorage(
         assetId: shell.id,
         source: sourceFile,
       );
+      if (_isDisposed) {
+        return false;
+      }
       final existingDuplicate = await _database.getAssetByHash(
         stored.hash,
         excludingAssetId: shell.id,
       );
       if (existingDuplicate != null &&
           existingDuplicate.status == AssetStatus.active) {
-        await _discardPendingAsset(shell.id, shell.projectId);
+        if (!_isDisposed) {
+          await _discardPendingAsset(shell.id, shell.projectId);
+        }
         return true;
       }
 
+      if (_isDisposed) {
+        return false;
+      }
       await _database.finalizePendingAssetIngest(
         assetId: shell.id,
         localPath: stored.localPath,
@@ -982,6 +1011,9 @@ class JoblensStore extends ChangeNotifier {
         existsInPhoneStorage: existsInPhoneStorage,
         cloudState: AssetCloudState.localAndCloud,
       );
+      if (_isDisposed) {
+        return false;
+      }
       final updated = await _database.getAssetById(shell.id);
       if (updated != null) {
         _replaceAssetInState(updated);
@@ -990,14 +1022,22 @@ class JoblensStore extends ChangeNotifier {
       }
       return true;
     } catch (error, stackTrace) {
-      await _database.markAssetIngestFailed(shell.id, errorCode: 'local_ingest_failed');
-      await _discardPendingAsset(shell.id, shell.projectId);
-      await _recordForegroundError(error, stackTrace);
+      if (!_isDisposed) {
+        await _database.markAssetIngestFailed(
+          shell.id,
+          errorCode: 'local_ingest_failed',
+        );
+        await _discardPendingAsset(shell.id, shell.projectId);
+        await _recordForegroundError(error, stackTrace);
+      }
       return false;
     }
   }
 
   Future<void> _discardPendingAsset(String assetId, int projectId) async {
+    if (_isDisposed) {
+      return;
+    }
     await _database.purgeAsset(assetId);
     _removeAssetFromState(assetId, projectId);
     _notifyListenersIfActive();
