@@ -503,6 +503,27 @@ class AppDatabase {
     return rows.first['id'] as int;
   }
 
+  Future<int?> getLocalProjectIdByName(
+    String name, {
+    bool includeDeleted = true,
+  }) async {
+    final normalized = name.trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+    final rows = await _db.query(
+      'projects',
+      columns: ['id'],
+      where: includeDeleted ? 'name = ?' : 'name = ? AND deleted_at IS NULL',
+      whereArgs: [normalized],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return rows.first['id'] as int;
+  }
+
   Future<Project?> getProjectById(
     int projectId, {
     bool includeDeleted = true,
@@ -647,6 +668,24 @@ class AppDatabase {
         whereArgs: [existingId],
       );
       return existingId;
+    }
+
+    final existingByNameId = await getLocalProjectIdByName(name);
+    if (existingByNameId != null) {
+      await _db.update(
+        'projects',
+        {
+          'name': name,
+          'remote_project_id': remoteProjectId,
+          'remote_rev': remoteRev,
+          'deleted_at': deleted ? now : null,
+          'dirty_fields': '[]',
+          'updated_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [existingByNameId],
+      );
+      return existingByNameId;
     }
 
     return _db.insert('projects', {
@@ -1288,6 +1327,34 @@ class AppDatabase {
     );
   }
 
+  Future<int> backfillEligibleProjectSyncRecords() async {
+    return _db.transaction((txn) async {
+      final rows = await txn.rawQuery(
+        '''
+        SELECT id, local_seq
+        FROM projects
+        WHERE deleted_at IS NULL
+          AND TRIM(COALESCE(remote_project_id, '')) = ''
+          AND CAST(id AS TEXT) NOT IN (
+            SELECT entity_id FROM entity_sync WHERE entity_type = ?
+          )
+      ''',
+        [SyncEntityType.project.name],
+      );
+      for (final row in rows) {
+        await _upsertEntitySyncExecutor(
+          txn,
+          entityType: SyncEntityType.project,
+          entityId: (row['id']! as int).toString(),
+          dirtyFields: const ['name', 'start_date'],
+          baseRemoteRev: null,
+          localSeq: (row['local_seq'] as int?) ?? 0,
+        );
+      }
+      return rows.length;
+    });
+  }
+
   Future<void> completeEntitySync(
     SyncEntityType entityType,
     String entityId,
@@ -1347,6 +1414,33 @@ class AppDatabase {
       uploadGeneration: uploadGeneration,
       localUri: localUri,
     );
+  }
+
+  Future<int> backfillEligibleBlobUploads() async {
+    return _db.transaction((txn) async {
+      final rows = await txn.rawQuery(
+        '''
+        SELECT id, upload_generation, local_path
+        FROM photo_assets
+        WHERE status = ?
+          AND deleted_at IS NULL
+          AND ingest_state = ?
+          AND TRIM(COALESCE(local_path, '')) != ''
+          AND TRIM(COALESCE(remote_asset_id, '')) = ''
+          AND id NOT IN (SELECT asset_id FROM blob_upload)
+      ''',
+        [AssetStatus.active.name, AssetIngestState.ready.name],
+      );
+      for (final row in rows) {
+        await _upsertBlobUploadExecutor(
+          txn,
+          assetId: row['id']! as String,
+          uploadGeneration: (row['upload_generation'] as int?) ?? 1,
+          localUri: row['local_path']! as String,
+        );
+      }
+      return rows.length;
+    });
   }
 
   Future<List<BlobUploadTask>> getPendingBlobUploadTasks({

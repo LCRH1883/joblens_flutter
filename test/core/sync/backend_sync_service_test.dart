@@ -12,6 +12,7 @@ import 'package:joblens_flutter/src/core/api/joblens_backend_api_client.dart';
 import 'package:joblens_flutter/src/core/db/app_database.dart';
 import 'package:joblens_flutter/src/core/models/backend_sync_event.dart';
 import 'package:joblens_flutter/src/core/models/cloud_provider.dart';
+import 'package:joblens_flutter/src/core/models/entity_sync_record.dart';
 import 'package:joblens_flutter/src/core/models/photo_asset.dart';
 import 'package:joblens_flutter/src/core/models/project.dart';
 import 'package:joblens_flutter/src/core/models/provider_account.dart';
@@ -232,6 +233,111 @@ void main() {
     expect(updated?.remoteFileId, 'provider-file-pending');
     expect(updated?.uploadPath, 'Joblens/Library/pending.jpg');
     expect(uploads, isEmpty);
+  });
+
+  test('active provider backfills existing local-only asset into upload lane', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(
+      bulkCheckResponse: BulkCheckAssetsResponse(
+        projectId: 'remote-project-1',
+        duplicateCount: 0,
+        missingCount: 1,
+        results: [
+          BulkCheckResult(
+            deviceAssetId: 'asset-local',
+            sha256: 'a' * 64,
+            status: 'missing',
+            assetId: null,
+          ),
+        ],
+      ),
+      prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
+        'status': 'upload_required',
+        'provider': 'dropbox',
+        'uploadSessionId': 'session-existing-local',
+        'remotePath': 'Joblens/Library/existing.jpg',
+        'remoteFileId': 'provider-file-existing',
+        'upload': {
+          'strategy': 'single_put',
+          'url': 'https://upload.example/file',
+          'method': 'PUT',
+          'headers': {'x-upload-token': 'abc'},
+        },
+      }),
+      commitResponse: CommitAssetResponse.fromMap({
+        'assetId': 'asset-remote-existing',
+        'duplicate': false,
+        'committed': true,
+        'provider': 'dropbox',
+        'remoteFileId': 'provider-file-existing',
+        'remotePath': 'Joblens/Library/existing.jpg',
+      }),
+      projectId: 'remote-project-1',
+    );
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+      mediaStorage: harness.mediaStorage,
+    );
+
+    final project = await harness.createProject('Library');
+    await harness.database.markProjectSynced(
+      project.id,
+      remoteProjectId: 'remote-project-1',
+      remoteRev: 1,
+    );
+    await harness.database.updateProviderAccountStatus(
+      CloudProviderType.dropbox,
+      connectionStatus: ProviderConnectionStatus.ready,
+      displayName: 'Dropbox',
+      accountIdentifier: 'jane@example.com',
+      isActive: true,
+    );
+    final asset = await harness.ingestAsset(projectId: project.id, seed: 42);
+    await harness.database.deleteBlobUploadsForAsset(asset.id);
+
+    expect(await harness.database.getAllBlobUploadTasks(), isEmpty);
+
+    await harness.database.markBootstrapCompleted();
+    await syncService.kick(forceBootstrap: false);
+
+    final updated = await harness.database.getAssetById(asset.id);
+    final uploads = await harness.database.getAllBlobUploadTasks();
+    expect(fakeClient.uploadCalls, 1);
+    expect(updated?.remoteAssetId, 'asset-remote-existing');
+    expect(updated?.remoteProvider, CloudProviderType.dropbox.key);
+    expect(updated?.remoteFileId, 'provider-file-existing');
+    expect(uploads, isEmpty);
+  });
+
+  test('sync startup backfills existing local-only project into backend sync', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(
+      projectId: 'remote-existing-project',
+      listProjectsResponse: const ListProjectsResponse(projects: []),
+    );
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+      mediaStorage: harness.mediaStorage,
+    );
+
+    final project = await harness.createProject('Existing Local Project');
+    await harness.database.completeEntitySync(
+      SyncEntityType.project,
+      project.id.toString(),
+    );
+    await harness.database.markBootstrapCompleted();
+
+    await syncService.kick(forceBootstrap: false);
+
+    final updated = await harness.database.getProjectById(project.id);
+    expect(updated?.remoteProjectId, 'remote-existing-project');
+    expect(updated?.remoteRev, 1);
   });
 
   test('bootstrap failure does not block pending uploads', () async {
@@ -836,6 +942,65 @@ void main() {
     expect(assets.single.remoteAssetId, 'asset-remote-1');
     expect(assets.single.remoteRev, 4);
     expect(assets.single.localPath, isNotEmpty);
+  });
+
+  test('sync events merge remote project into same-name local project', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(
+      projectId: 'remote-electrical',
+      syncEventsResponses: [
+        SyncEventsResponse(
+          events: [
+            BackendSyncEvent(
+              id: 1,
+              projectId: 'remote-electrical',
+              eventType: 'project_created',
+              entityType: 'project',
+              entityId: 'remote-electrical',
+              payload: const {
+                'project': {
+                  'id': 'remote-electrical',
+                  'projectId': 'remote-electrical',
+                  'name': 'electrical',
+                  'revision': 1,
+                  'deleted': false,
+                  'createdAt': '2026-04-09T00:00:00.000Z',
+                  'updatedAt': '2026-04-09T00:00:00.000Z',
+                },
+              },
+              createdAt: DateTime(2026, 4, 9),
+            ),
+          ],
+          nextAfter: 1,
+          hasMore: false,
+        ),
+      ],
+    );
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+      mediaStorage: harness.mediaStorage,
+    );
+
+    final localProjectId = await harness.database.createProject('electrical');
+    await harness.database.completeEntitySync(
+      SyncEntityType.project,
+      localProjectId.toString(),
+    );
+    await harness.database.markBootstrapCompleted();
+
+    await syncService.kick(forceBootstrap: false);
+
+    final projects = await harness.database.getProjects(includeDeleted: true);
+    expect(
+      projects.where((project) => project.name == 'electrical'),
+      hasLength(1),
+    );
+    final project = projects.singleWhere((item) => item.id == localProjectId);
+    expect(project.remoteProjectId, 'remote-electrical');
+    expect(project.remoteRev, 1);
   });
 
   test('mergeRemoteAssets does not resurrect a locally deleted asset', () async {

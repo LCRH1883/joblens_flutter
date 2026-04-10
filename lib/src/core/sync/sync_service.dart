@@ -65,6 +65,10 @@ class SyncService {
             () => _bootstrapFromBackend(),
           );
         }
+        await _runVoidLaneSafely(
+          'local_sync_backfill_failed',
+          () => _backfillLocalSyncState(),
+        );
         final pushedMetadata = await _pushMetadata();
         final advancedUploads = await _advanceBlobUploads();
         final pulledEvents = await _runLaneSafely<bool>(
@@ -125,6 +129,36 @@ class SyncService {
       deviceName: Platform.localHostname,
     );
     await _db.setBackendDeviceId(backendDeviceId);
+  }
+
+  Future<void> _backfillLocalSyncState() async {
+    final queuedProjects = await _db.backfillEligibleProjectSyncRecords();
+    if (queuedProjects > 0) {
+      await _logInfo(
+        'local_project_backfill_queued',
+        message:
+            'Queued $queuedProjects existing local project${queuedProjects == 1 ? '' : 's'} for backend sync.',
+      );
+    }
+
+    final providers = await _db.getProviderAccounts();
+    final hasActiveCloudConnection = providers.any(
+      (provider) =>
+          provider.providerType != CloudProviderType.backend &&
+          provider.hasActiveConnection,
+    );
+    if (!hasActiveCloudConnection) {
+      return;
+    }
+    final queued = await _db.backfillEligibleBlobUploads();
+    if (queued <= 0) {
+      return;
+    }
+    await _logInfo(
+      'local_upload_backfill_queued',
+      message:
+          'Queued $queued existing local asset${queued == 1 ? '' : 's'} for background cloud upload.',
+    );
   }
 
   Future<void> _bootstrapFromBackend() async {
@@ -989,7 +1023,7 @@ class SyncService {
       return localProjects;
     }
 
-    var workingProjects = await _db.getProjects();
+    var workingProjects = await _db.getProjects(includeDeleted: true);
     final inboxMatches = workingProjects
         .where((project) => project.name == 'Inbox')
         .toList(growable: false);
@@ -1052,7 +1086,7 @@ class SyncService {
         projectId: localProjectId,
         message: 'Discovered existing remote project "${remoteProject.name}".',
       );
-      workingProjects = await _db.getProjects();
+      workingProjects = await _db.getProjects(includeDeleted: true);
     }
 
     return await _db.getProjects();
