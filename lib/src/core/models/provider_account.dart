@@ -73,6 +73,9 @@ class ProviderAccount {
       connectionStatus == ProviderConnectionStatus.switchInProgress;
 
   String? get connectedAccountLabel {
+    if (!hasActiveConnection) {
+      return null;
+    }
     final trimmedIdentifier = accountIdentifier?.trim();
     final trimmedDisplay = displayName.trim();
     final defaultLabel = providerType.label.toLowerCase();

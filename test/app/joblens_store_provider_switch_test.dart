@@ -130,6 +130,21 @@ void main() {
       expect(syncService.lastKickForceBootstrap, isTrue);
     },
   );
+
+  test('disconnected provider does not expose stale account identity', () async {
+    final account = ProviderAccount(
+      id: 'dropbox',
+      providerType: CloudProviderType.dropbox,
+      displayName: 'Jane Dropbox',
+      accountIdentifier: 'jane@example.com',
+      connectionStatus: ProviderConnectionStatus.disconnected,
+      connectedAt: DateTime(2026, 4, 10),
+      isActive: false,
+    );
+
+    expect(account.hasActiveConnection, isFalse);
+    expect(account.connectedAccountLabel, isNull);
+  });
 }
 
 class _ProviderSwitchSyncService extends SyncService {
