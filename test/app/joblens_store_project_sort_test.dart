@@ -33,6 +33,7 @@ void main() {
       syncService: _NoopSyncService(database),
     );
     addTearDown(() async {
+      await store.waitForIdle();
       store.dispose();
       await database.close();
     });

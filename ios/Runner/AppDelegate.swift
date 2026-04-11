@@ -163,6 +163,8 @@ private final class NativeCameraBridgeCoordinator: NSObject, FlutterStreamHandle
 }
 
 private final class NativeCameraViewController: UIViewController {
+  private static let maxSessionStartAttempts = 4
+
   private let launchConfig: NativeCameraLaunchConfig
   private weak var bridge: NativeCameraBridgeCoordinator?
   private let sessionQueue = DispatchQueue(label: "com.intagri.joblens.native_camera.session")
@@ -180,6 +182,7 @@ private final class NativeCameraViewController: UIViewController {
   private var isCaptureInFlight = false
   private var isSwitchingLens = false
   private var didEmitSessionClosed = false
+  private var isClosing = false
   private var currentInput: AVCaptureDeviceInput?
   private var captureDelegates: [String: NativePhotoCaptureDelegate] = [:]
 
@@ -197,6 +200,7 @@ private final class NativeCameraViewController: UIViewController {
   private let shutterInnerCircle = UIView()
   private var zoomButtons: [UIButton] = []
   private var lifecycleObservers: [NSObjectProtocol] = []
+  private var pendingSessionStartWorkItem: DispatchWorkItem?
 
   init(launchConfig: NativeCameraLaunchConfig, bridge: NativeCameraBridgeCoordinator) {
     self.launchConfig = launchConfig
@@ -443,13 +447,8 @@ private final class NativeCameraViewController: UIViewController {
         object: nil,
         queue: .main
       ) { [weak self] _ in
-        self?.sessionQueue.async {
-          guard let self, self.currentInput != nil else { return }
-          if !self.captureSession.isRunning {
-            self.captureSession.startRunning()
-            self.emitPreviewReadyIfNeeded()
-          }
-        }
+        guard let self else { return }
+        self.startSessionIfNeeded()
       }
     )
   }
@@ -457,13 +456,13 @@ private final class NativeCameraViewController: UIViewController {
   private func requestCameraAccessAndStart() {
     switch AVCaptureDevice.authorizationStatus(for: .video) {
     case .authorized:
-      startSession()
+      startSessionIfNeeded()
     case .notDetermined:
       AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
         DispatchQueue.main.async {
           guard let self else { return }
           if granted {
-            self.startSession()
+            self.startSessionIfNeeded()
           } else {
             self.emitFailure("Camera permission is required to capture photos.")
             self.closeSession()
@@ -476,19 +475,46 @@ private final class NativeCameraViewController: UIViewController {
     }
   }
 
-  private func startSession() {
+  private func startSessionIfNeeded() {
+    pendingSessionStartWorkItem?.cancel()
+    startSession(attempt: 1)
+  }
+
+  private func startSession(attempt: Int) {
     sessionQueue.async {
       do {
         try self.configureSession()
         self.captureSession.startRunning()
+        NSLog("[JoblensNativeCamera][iOS] Camera session started on attempt \(attempt)")
         self.emitPreviewReadyIfNeeded()
       } catch {
         DispatchQueue.main.async {
-          self.emitFailure("Unable to bind camera: \(error.localizedDescription)")
-          self.closeSession()
+          self.handleSessionStartFailure(error, attempt: attempt)
         }
       }
     }
+  }
+
+  private func handleSessionStartFailure(_ error: Error, attempt: Int) {
+    guard isClosing == false else { return }
+    let nsError = error as NSError
+    NSLog(
+      "[JoblensNativeCamera][iOS] Camera start failed on attempt \(attempt): domain=\(nsError.domain) code=\(nsError.code) message=\(nsError.localizedDescription)"
+    )
+
+    if attempt < Self.maxSessionStartAttempts {
+      let delay = 0.2 * Double(attempt)
+      let workItem = DispatchWorkItem { [weak self] in
+        self?.startSession(attempt: attempt + 1)
+      }
+      pendingSessionStartWorkItem?.cancel()
+      pendingSessionStartWorkItem = workItem
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+      return
+    }
+
+    emitFailure("Unable to bind camera: \(nsError.localizedDescription)")
+    closeSession()
   }
 
   private func configureSession() throws {
@@ -496,6 +522,8 @@ private final class NativeCameraViewController: UIViewController {
     guard let device = Self.bestDevice(for: position) else {
       throw NativeCameraError.noCompatibleCamera
     }
+
+    try Self.ensureDeviceReady(device)
 
     let input = try AVCaptureDeviceInput(device: device)
 
@@ -763,6 +791,7 @@ private final class NativeCameraViewController: UIViewController {
   }
 
   @objc private func shutterTapped() {
+    guard isClosing == false else { return }
     guard isCaptureInFlight == false else { return }
     guard let target = currentTarget as NativeCameraTargetOption? else { return }
     isCaptureInFlight = true
@@ -878,6 +907,7 @@ private final class NativeCameraViewController: UIViewController {
 
   private func handleCaptureResult(_ result: NativeCaptureResult) {
     captureDelegates[result.photoId] = nil
+    guard isClosing == false else { return }
     isCaptureInFlight = false
     shutterButton.isEnabled = true
 
@@ -905,13 +935,24 @@ private final class NativeCameraViewController: UIViewController {
   }
 
   private func emitFailure(_ message: String) {
+    guard isClosing == false else { return }
     bridge?.emit(sessionEvent(type: "captureFailed", message: message))
   }
 
   private func closeSession() {
+    guard isClosing == false else { return }
+    isClosing = true
+    pendingSessionStartWorkItem?.cancel()
+    shutterButton.isEnabled = false
+    sessionQueue.async { [captureSession] in
+      if captureSession.isRunning {
+        captureSession.stopRunning()
+      }
+    }
     emitSessionClosedIfNeeded()
+    bridge?.didCloseCamera(self)
     dismiss(animated: true) {
-      self.bridge?.didCloseCamera(self)
+      self.captureDelegates.removeAll()
     }
   }
 
@@ -1010,6 +1051,11 @@ private final class NativeCameraViewController: UIViewController {
       position: position
     )
     return discoverySession.devices.first
+  }
+
+  private static func ensureDeviceReady(_ device: AVCaptureDevice) throws {
+    try device.lockForConfiguration()
+    device.unlockForConfiguration()
   }
 }
 

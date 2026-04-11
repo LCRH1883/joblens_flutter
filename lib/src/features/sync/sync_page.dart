@@ -610,11 +610,13 @@ class _SyncActivityPage extends ConsumerWidget {
     final shareOrigin = _sharePositionOrigin(context);
     try {
       final file = await store.exportSyncLog();
-      final result = await Share.shareXFiles(
-        [XFile(file.path, mimeType: 'text/plain')],
-        text: 'Joblens sync log',
-        subject: 'Joblens Sync Log',
-        sharePositionOrigin: shareOrigin,
+      final result = await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path, mimeType: 'text/plain')],
+          text: 'Joblens sync log',
+          subject: 'Joblens Sync Log',
+          sharePositionOrigin: shareOrigin,
+        ),
       );
       if (!context.mounted) {
         return;

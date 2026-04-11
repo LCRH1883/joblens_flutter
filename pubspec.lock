@@ -165,10 +165,10 @@ packages:
     dependency: "direct main"
     description:
       name: cupertino_icons
-      sha256: ba631d1c7f7bef6b729a622b7b752645a2d076dba9976925b8f25725a30e1ee6
+      sha256: "41e005c33bd814be4d3096aff55b1908d419fde52ca656c8c47719ec745873cd"
       url: "https://pub.dev"
     source: hosted
-    version: "1.0.8"
+    version: "1.0.9"
   dart_jsonwebtoken:
     dependency: transitive
     description:
@@ -201,6 +201,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
+  ffi_leak_tracker:
+    dependency: transitive
+    description:
+      name: ffi_leak_tracker
+      sha256: "25a58eeab3f50c90b5c8ee734a816af8021777246e3272db296d1d724cc63188"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.1"
   file:
     dependency: transitive
     description:
@@ -676,18 +684,18 @@ packages:
     dependency: "direct main"
     description:
       name: share_plus
-      sha256: fce43200aa03ea87b91ce4c3ac79f0cecd52e2a7a56c7a4185023c271fbfa6da
+      sha256: ad3e91cabb7dc3c7687e0f4bdaf24fb192141d11bfbf9ddea7c26f3d4e8bfb5d
       url: "https://pub.dev"
     source: hosted
-    version: "10.1.4"
+    version: "13.0.0"
   share_plus_platform_interface:
     dependency: transitive
     description:
       name: share_plus_platform_interface
-      sha256: cc012a23fc2d479854e6c80150696c4a5f5bb62cb89af4de1c505cf78d0a5d0b
+      sha256: ccf360f79b95993b083259d8f37baf20a47bcf8e2551ccebdc4f781b4d15e734
       url: "https://pub.dev"
     source: hosted
-    version: "5.0.2"
+    version: "7.0.0"
   shared_preferences:
     dependency: transitive
     description:
@@ -977,10 +985,10 @@ packages:
     dependency: "direct main"
     description:
       name: uuid
-      sha256: a11b666489b1954e01d992f3d601b1804a33937b5a8fe677bd26b8a9f96f96e8
+      sha256: "1fef9e8e11e2991bb773070d4656b7bd5d850967a2456cfc83cf47925ba79489"
       url: "https://pub.dev"
     source: hosted
-    version: "4.5.2"
+    version: "4.5.3"
   vector_math:
     dependency: transitive
     description:
@@ -1025,10 +1033,10 @@ packages:
     dependency: transitive
     description:
       name: win32
-      sha256: d7cb55e04cd34096cd3a79b3330245f54cb96a370a1c27adb3c84b917de8b08e
+      sha256: e7489db51886360dad710b3bc177108267f0554644dd04102dcb35f23b71c738
       url: "https://pub.dev"
     source: hosted
-    version: "5.15.0"
+    version: "6.0.0"
   xdg_directories:
     dependency: transitive
     description:
@@ -1062,5 +1070,5 @@ packages:
     source: hosted
     version: "2.1.0"
 sdks:
-  dart: ">=3.10.4 <4.0.0"
-  flutter: ">=3.38.4"
+  dart: ">=3.11.0 <4.0.0"
+  flutter: ">=3.41.0"

@@ -898,6 +898,13 @@ class JoblensStore extends ChangeNotifier {
       if (_isDisposed) {
         return;
       }
+      final authUserId = _currentAuthUserIdProvider?.call();
+      if (authUserId == null || authUserId.trim().isEmpty) {
+        _lastError = null;
+        await _hydrateLocalState(includeDiagnostics: false);
+        _notifyListenersIfActive();
+        return;
+      }
       try {
         await action();
         if (_isDisposed) {
