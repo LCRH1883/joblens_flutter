@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/joblens_store.dart';
 import '../../core/models/capture_target_preference.dart';
 import '../../core/models/project.dart';
-import 'camera_capture_page.dart' as legacy;
 import 'camera_settings_repository.dart';
 import 'native_camera_bridge.dart';
 
@@ -26,7 +25,6 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
   StreamSubscription<NativeCameraSessionEvent>? _eventSubscription;
   String? _error;
   bool _launching = false;
-  bool _useFallback = false;
   String? _sessionId;
   int _capturedCount = 0;
 
@@ -51,10 +49,6 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_supportsNativeCamera || _useFallback) {
-      return const legacy.CameraCapturePage();
-    }
-
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -98,17 +92,6 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
                   icon: const Icon(Icons.open_in_full_rounded),
                   label: const Text('Open camera'),
                 ),
-                if (_error != null) ...[
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: () {
-                      setState(() {
-                        _useFallback = true;
-                      });
-                    },
-                    child: const Text('Use fallback camera'),
-                  ),
-                ],
               ],
             ),
           ),
@@ -118,7 +101,7 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
   }
 
   Future<void> _openNativeCamera() async {
-    if (!mounted || _launching || _useFallback) {
+    if (!mounted || _launching) {
       return;
     }
 

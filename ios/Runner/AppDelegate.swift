@@ -8,69 +8,45 @@ import UIKit
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    GeneratedPluginRegistrant.register(with: self)
+    if let registrar = self.registrar(forPlugin: "JoblensNativeCameraPlugin") {
+      NativeCameraBridgeCoordinator.shared.configure(
+        messenger: registrar.messenger()
+      )
+    } else {
+      NSLog("[JoblensNativeCamera][iOS] Failed to acquire plugin registrar")
+    }
+    let didLaunch = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    return didLaunch
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
-    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "NativeCameraPlugin") {
-      NativeCameraPlugin.shared.register(with: registrar)
-    }
+    // Plugins are already registered on the root engine in didFinishLaunching.
+    // Re-registering here can crash with duplicate plugin keys on iOS.
   }
 }
 
-final class NativeCameraPlugin: NSObject, FlutterStreamHandler {
-  static let shared = NativeCameraPlugin()
+private final class NativeCameraBridgeCoordinator: NSObject, FlutterStreamHandler {
+  static let shared = NativeCameraBridgeCoordinator()
 
   private let methodChannelName = "com.intagri.joblens/native_camera"
   private let eventChannelName = "com.intagri.joblens/native_camera/events"
+
+  private var methodChannel: FlutterMethodChannel?
+  private var eventChannel: FlutterEventChannel?
   private var eventSink: FlutterEventSink?
+  private weak var cameraViewController: NativeCameraViewController?
 
-  func register(with registrar: FlutterPluginRegistrar) {
-    let methodChannel = FlutterMethodChannel(
-      name: methodChannelName,
-      binaryMessenger: registrar.messenger()
-    )
-    let eventChannel = FlutterEventChannel(
-      name: eventChannelName,
-      binaryMessenger: registrar.messenger()
-    )
-    eventChannel.setStreamHandler(self)
-
-    methodChannel.setMethodCallHandler { [weak self] call, result in
-      guard let self else {
-        result(FlutterError(code: "unavailable", message: "Native camera plugin unavailable.", details: nil))
-        return
-      }
-      switch call.method {
-      case "openCamera":
-        guard let payload = call.arguments as? String else {
-          result(
-            FlutterError(
-              code: "invalid_arguments",
-              message: "Camera payload was missing.",
-              details: nil
-            )
-          )
-          return
-        }
-        do {
-          let config = try NativeCameraLaunchConfig(payload: payload)
-          presentCamera(with: config)
-          result(nil)
-        } catch {
-          result(
-            FlutterError(
-              code: "invalid_payload",
-              message: "Unable to parse camera payload.",
-              details: error.localizedDescription
-            )
-          )
-        }
-      default:
-        result(FlutterMethodNotImplemented)
-      }
+  func configure(messenger: FlutterBinaryMessenger) {
+    NSLog("[JoblensNativeCamera][iOS] Configuring method and event channels")
+    methodChannel?.setMethodCallHandler(nil)
+    methodChannel = FlutterMethodChannel(name: methodChannelName, binaryMessenger: messenger)
+    methodChannel?.setMethodCallHandler { [weak self] call, result in
+      self?.handle(call, result: result)
     }
+
+    eventChannel = FlutterEventChannel(name: eventChannelName, binaryMessenger: messenger)
+    eventChannel?.setStreamHandler(self)
   }
 
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
@@ -84,70 +60,155 @@ final class NativeCameraPlugin: NSObject, FlutterStreamHandler {
   }
 
   func emit(_ event: [String: Any?]) {
-    eventSink?(event.compactMapValues { $0 })
-  }
-
-  private func presentCamera(with config: NativeCameraLaunchConfig) {
-    guard let presenter = topViewController() else { return }
-    let controller = NativeCameraViewController(config: config, eventEmitter: emit(_:))
-    controller.modalPresentationStyle = .fullScreen
-    presenter.present(controller, animated: true)
-  }
-
-  private func topViewController() -> UIViewController? {
-    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-    let windows = scenes.flatMap(\.windows)
-    let root = windows.first(where: \.isKeyWindow)?.rootViewController
-    var top = root
-    while let presented = top?.presentedViewController {
-      top = presented
+    let filtered = event.compactMapValues { $0 }
+    DispatchQueue.main.async { [weak self] in
+      self?.eventSink?(filtered)
     }
-    return top
+  }
+
+  private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    NSLog("[JoblensNativeCamera][iOS] Received method call: \(call.method)")
+    switch call.method {
+    case "openCamera":
+      guard let payload = call.arguments as? String, !payload.isEmpty else {
+        result(
+          FlutterError(
+            code: "invalid_arguments",
+            message: "Camera payload was missing.",
+            details: nil
+          )
+        )
+        return
+      }
+
+      let config: NativeCameraLaunchConfig
+      do {
+        config = try NativeCameraLaunchConfig.fromPayload(payload)
+      } catch {
+        result(
+          FlutterError(
+            code: "invalid_payload",
+            message: "Unable to decode camera session payload.",
+            details: error.localizedDescription
+          )
+        )
+        return
+      }
+
+      DispatchQueue.main.async {
+        guard self.cameraViewController == nil else {
+          NSLog("[JoblensNativeCamera][iOS] Camera already open")
+          result(
+            FlutterError(
+              code: "camera_already_open",
+              message: "A native camera session is already open.",
+              details: nil
+            )
+          )
+          return
+        }
+
+        guard let presenter = Self.topMostViewController() else {
+          NSLog("[JoblensNativeCamera][iOS] Presenter unavailable")
+          result(
+            FlutterError(
+              code: "presenter_unavailable",
+              message: "Unable to present the native camera.",
+              details: nil
+            )
+          )
+          return
+        }
+
+        let viewController = NativeCameraViewController(
+          launchConfig: config,
+          bridge: self
+        )
+        viewController.modalPresentationStyle = .fullScreen
+        self.cameraViewController = viewController
+        NSLog("[JoblensNativeCamera][iOS] Presenting native camera")
+        presenter.present(viewController, animated: true) {
+          result(nil)
+        }
+      }
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  func didCloseCamera(_ viewController: NativeCameraViewController) {
+    if cameraViewController === viewController {
+      cameraViewController = nil
+    }
+  }
+
+  private static func topMostViewController(
+    from root: UIViewController? = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows)
+      .first(where: \.isKeyWindow)?
+      .rootViewController
+  ) -> UIViewController? {
+    if let navigationController = root as? UINavigationController {
+      return topMostViewController(from: navigationController.visibleViewController)
+    }
+    if let tabBarController = root as? UITabBarController {
+      return topMostViewController(from: tabBarController.selectedViewController)
+    }
+    if let presentedViewController = root?.presentedViewController {
+      return topMostViewController(from: presentedViewController)
+    }
+    return root
   }
 }
 
-private final class NativeCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate {
-  private let config: NativeCameraLaunchConfig
-  private let emitEvent: ([String: Any?]) -> Void
-  private let session = AVCaptureSession()
-  private let sessionQueue = DispatchQueue(label: "com.intagri.joblens.nativecamera.session")
-  private let photoOutput = AVCapturePhotoOutput()
+private final class NativeCameraViewController: UIViewController {
+  private let launchConfig: NativeCameraLaunchConfig
+  private weak var bridge: NativeCameraBridgeCoordinator?
+  private let sessionQueue = DispatchQueue(label: "com.intagri.joblens.native_camera.session")
+  private let captureSession = AVCaptureSession()
   private let previewLayer = AVCaptureVideoPreviewLayer()
-  private let captureFeedbackGenerator = UIImpactFeedbackGenerator(style: .light)
-  private let previewContainerView = UIView()
-  private let feedbackOverlayView = UIView()
-  private let controlsOverlayView = UIView()
+  private let photoOutput = AVCapturePhotoOutput()
 
-  private var currentInput: AVCaptureDeviceInput?
   private var currentTarget: NativeCameraTargetOption
-  private var currentPosition: AVCaptureDevice.Position
+  private var currentLensPosition: AVCaptureDevice.Position
   private var currentFlashMode: AVCaptureDevice.FlashMode
   private var currentZoomFactor: CGFloat
-  private var captureInFlight = false
   private var capturedCount = 0
-  private var openedAt = CACurrentMediaTime()
+  private var openedAt = Date()
   private var previewReadySent = false
-  private var pendingCaptureStart: CFTimeInterval?
-  private var pendingPhotoId: String?
-  private var targetButton = UIButton(type: .system)
-  private var flashButton = UIButton(type: .system)
-  private var lensButton = UIButton(type: .system)
-  private var shutterButton = UIButton(type: .system)
-  private var flashOverlayView = UIView()
-  private var countLabel = InsetLabel()
-  private var zoomButtons: [UIButton] = []
-  private var zoomStack = UIStackView()
+  private var isCaptureInFlight = false
+  private var isSwitchingLens = false
+  private var didEmitSessionClosed = false
+  private var currentInput: AVCaptureDeviceInput?
+  private var captureDelegates: [String: NativePhotoCaptureDelegate] = [:]
 
-  init(config: NativeCameraLaunchConfig, eventEmitter: @escaping ([String: Any?]) -> Void) {
-    self.config = config
-    self.emitEvent = eventEmitter
-    self.currentTarget = config.resolveCurrentTarget()
-    self.currentPosition = config.settings.lensPosition
-    self.currentFlashMode = config.settings.flashMode
-    self.currentZoomFactor = max(config.settings.zoomStop, 1)
+  private let dimBackgroundView = UIView()
+  private let topBar = UIView()
+  private let bottomContainer = UIStackView()
+  private let zoomStack = UIStackView()
+  private let bottomRow = UIView()
+  private let closeButton = UIButton(type: .system)
+  private let targetButton = UIButton(type: .system)
+  private let flashButton = UIButton(type: .system)
+  private let lensButton = UIButton(type: .system)
+  private let captureCountLabel = PaddingLabel()
+  private let shutterButton = UIButton(type: .custom)
+  private let shutterInnerCircle = UIView()
+  private var zoomButtons: [UIButton] = []
+  private var lifecycleObservers: [NSObjectProtocol] = []
+
+  init(launchConfig: NativeCameraLaunchConfig, bridge: NativeCameraBridgeCoordinator) {
+    self.launchConfig = launchConfig
+    self.bridge = bridge
+    self.currentTarget = launchConfig.resolveCurrentTarget()
+    self.currentLensPosition = launchConfig.settings.lensPosition
+    self.currentFlashMode = launchConfig.settings.flashMode
+    self.currentZoomFactor = CGFloat(launchConfig.settings.zoomStop)
     super.init(nibName: nil, bundle: nil)
   }
 
+  @available(*, unavailable)
   required init?(coder: NSCoder) {
     fatalError("init(coder:) has not been implemented")
   }
@@ -155,185 +216,255 @@ private final class NativeCameraViewController: UIViewController, AVCapturePhoto
   override func viewDidLoad() {
     super.viewDidLoad()
     view.backgroundColor = .black
-    definesPresentationContext = true
-    configureUI()
-    updateTargetButton()
-    updateFlashButton()
-    updateLensButton()
-    updateCountLabel()
-    captureFeedbackGenerator.prepare()
-    NotificationCenter.default.addObserver(
-      self,
-      selector: #selector(handleWillResignActive),
-      name: UIApplication.willResignActiveNotification,
-      object: nil
-    )
-    NotificationCenter.default.addObserver(
-      self,
-      selector: #selector(handleDidBecomeActive),
-      name: UIApplication.didBecomeActiveNotification,
-      object: nil
-    )
-    authorizeAndStart()
+    openedAt = Date()
+    configurePreview()
+    configureChrome()
+    configureLifecycleObservers()
+    requestCameraAccessAndStart()
   }
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
-    previewLayer.frame = previewContainerView.bounds
-    view.bringSubviewToFront(feedbackOverlayView)
-    view.bringSubviewToFront(controlsOverlayView)
+    previewLayer.frame = view.bounds
   }
 
   override func viewDidDisappear(_ animated: Bool) {
     super.viewDidDisappear(animated)
     if isBeingDismissed || navigationController?.isBeingDismissed == true {
-      sessionQueue.async { [weak self] in
-        self?.session.stopRunning()
-      }
+      emitSessionClosedIfNeeded()
+      bridge?.didCloseCamera(self)
     }
   }
 
   deinit {
-    NotificationCenter.default.removeObserver(self)
+    lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+    sessionQueue.async { [captureSession] in
+      captureSession.stopRunning()
+    }
   }
 
-  private func configureUI() {
+  private func configurePreview() {
+    previewLayer.session = captureSession
     previewLayer.videoGravity = .resizeAspectFill
-    previewContainerView.translatesAutoresizingMaskIntoConstraints = false
-    previewContainerView.backgroundColor = .black
-    previewContainerView.layer.addSublayer(previewLayer)
-    previewContainerView.isUserInteractionEnabled = false
-    previewContainerView.layer.zPosition = 0
+    view.layer.addSublayer(previewLayer)
+  }
 
-    feedbackOverlayView.translatesAutoresizingMaskIntoConstraints = false
-    feedbackOverlayView.backgroundColor = .clear
-    feedbackOverlayView.isUserInteractionEnabled = false
-    feedbackOverlayView.layer.zPosition = 1
+  private func configureChrome() {
+    dimBackgroundView.translatesAutoresizingMaskIntoConstraints = false
+    dimBackgroundView.backgroundColor = .clear
+    view.addSubview(dimBackgroundView)
 
-    controlsOverlayView.translatesAutoresizingMaskIntoConstraints = false
-    controlsOverlayView.backgroundColor = .clear
-    controlsOverlayView.isUserInteractionEnabled = true
-    controlsOverlayView.layer.zPosition = 2
+    topBar.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(topBar)
 
-    flashOverlayView.translatesAutoresizingMaskIntoConstraints = false
-    flashOverlayView.backgroundColor = .white
-    flashOverlayView.alpha = 0
-    flashOverlayView.isUserInteractionEnabled = false
+    bottomContainer.translatesAutoresizingMaskIntoConstraints = false
+    bottomContainer.axis = .vertical
+    bottomContainer.alignment = .center
+    bottomContainer.spacing = 16
+    view.addSubview(bottomContainer)
 
-    let backButton = makeCircleIconButton(symbolName: "xmark", action: #selector(closeSession))
-    targetButton = makeTargetButton(title: "Inbox", action: #selector(showTargetPicker))
-    flashButton = makeCircleIconButton(symbolName: "bolt.slash", action: #selector(cycleFlashMode))
-    lensButton = makeCircleIconButton(symbolName: "camera.rotate", action: #selector(switchLens))
+    configureTopBar()
+    configureBottomControls()
 
-    let rightStack = UIStackView(arrangedSubviews: [flashButton, lensButton])
-    rightStack.axis = .horizontal
-    rightStack.alignment = .center
-    rightStack.spacing = 12
-    rightStack.translatesAutoresizingMaskIntoConstraints = false
-
-    zoomStack = UIStackView()
-    zoomStack.axis = .horizontal
-    zoomStack.alignment = .center
-    zoomStack.distribution = .fill
-    zoomStack.spacing = 6
-    zoomStack.translatesAutoresizingMaskIntoConstraints = false
-
-    countLabel.translatesAutoresizingMaskIntoConstraints = false
-    countLabel.textColor = .white
-    countLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-    countLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-    countLabel.layer.cornerRadius = 20
-    countLabel.layer.masksToBounds = true
-    countLabel.textAlignment = .center
-    countLabel.isHidden = true
-    countLabel.textInsets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
-
-    shutterButton = UIButton(type: .custom)
-    shutterButton.translatesAutoresizingMaskIntoConstraints = false
-    shutterButton.backgroundColor = UIColor.white.withAlphaComponent(0.08)
-    shutterButton.layer.cornerRadius = 44
-    shutterButton.layer.borderWidth = 3
-    shutterButton.layer.borderColor = UIColor.white.cgColor
-    shutterButton.addTarget(self, action: #selector(capturePhoto), for: .touchUpInside)
-    let shutterInner = UIView()
-    shutterInner.translatesAutoresizingMaskIntoConstraints = false
-    shutterInner.backgroundColor = .white
-    shutterInner.layer.cornerRadius = 32
-    shutterButton.addSubview(shutterInner)
-
-    view.addSubview(previewContainerView)
-    view.addSubview(feedbackOverlayView)
-    view.addSubview(controlsOverlayView)
-    feedbackOverlayView.addSubview(flashOverlayView)
-    controlsOverlayView.addSubview(backButton)
-    controlsOverlayView.addSubview(targetButton)
-    controlsOverlayView.addSubview(rightStack)
-    controlsOverlayView.addSubview(zoomStack)
-    controlsOverlayView.addSubview(countLabel)
-    controlsOverlayView.addSubview(shutterButton)
-
-    let guide = view.safeAreaLayoutGuide
     NSLayoutConstraint.activate([
-      previewContainerView.topAnchor.constraint(equalTo: view.topAnchor),
-      previewContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-      previewContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-      previewContainerView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-      feedbackOverlayView.topAnchor.constraint(equalTo: view.topAnchor),
-      feedbackOverlayView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-      feedbackOverlayView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-      feedbackOverlayView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-      controlsOverlayView.topAnchor.constraint(equalTo: view.topAnchor),
-      controlsOverlayView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-      controlsOverlayView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-      controlsOverlayView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-      flashOverlayView.topAnchor.constraint(equalTo: feedbackOverlayView.topAnchor),
-      flashOverlayView.leadingAnchor.constraint(equalTo: feedbackOverlayView.leadingAnchor),
-      flashOverlayView.trailingAnchor.constraint(equalTo: feedbackOverlayView.trailingAnchor),
-      flashOverlayView.bottomAnchor.constraint(equalTo: feedbackOverlayView.bottomAnchor),
-      backButton.topAnchor.constraint(equalTo: guide.topAnchor, constant: 12),
-      backButton.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 16),
-      backButton.widthAnchor.constraint(equalToConstant: 48),
-      backButton.heightAnchor.constraint(equalToConstant: 48),
-      targetButton.centerXAnchor.constraint(equalTo: guide.centerXAnchor),
-      targetButton.centerYAnchor.constraint(equalTo: backButton.centerYAnchor),
-      targetButton.leadingAnchor.constraint(greaterThanOrEqualTo: backButton.trailingAnchor, constant: 16),
-      targetButton.trailingAnchor.constraint(lessThanOrEqualTo: rightStack.leadingAnchor, constant: -16),
-      targetButton.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
-      rightStack.topAnchor.constraint(equalTo: guide.topAnchor, constant: 12),
-      rightStack.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -16),
-      flashButton.widthAnchor.constraint(equalToConstant: 48),
-      flashButton.heightAnchor.constraint(equalToConstant: 48),
-      lensButton.widthAnchor.constraint(equalToConstant: 48),
-      lensButton.heightAnchor.constraint(equalToConstant: 48),
-      zoomStack.centerXAnchor.constraint(equalTo: guide.centerXAnchor),
-      zoomStack.leadingAnchor.constraint(greaterThanOrEqualTo: guide.leadingAnchor, constant: 24),
-      zoomStack.trailingAnchor.constraint(lessThanOrEqualTo: guide.trailingAnchor, constant: -24),
-      zoomStack.bottomAnchor.constraint(equalTo: shutterButton.topAnchor, constant: -20),
-      countLabel.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 16),
-      countLabel.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
-      countLabel.trailingAnchor.constraint(lessThanOrEqualTo: shutterButton.leadingAnchor, constant: -16),
-      shutterButton.widthAnchor.constraint(equalToConstant: 88),
-      shutterButton.heightAnchor.constraint(equalToConstant: 88),
-      shutterInner.widthAnchor.constraint(equalToConstant: 64),
-      shutterInner.heightAnchor.constraint(equalToConstant: 64),
-      shutterInner.centerXAnchor.constraint(equalTo: shutterButton.centerXAnchor),
-      shutterInner.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
-      shutterButton.centerXAnchor.constraint(equalTo: guide.centerXAnchor),
-      shutterButton.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -16)
+      dimBackgroundView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      dimBackgroundView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      dimBackgroundView.topAnchor.constraint(equalTo: view.topAnchor),
+      dimBackgroundView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+      topBar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+      topBar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+      topBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+      topBar.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
+
+      bottomContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+      bottomContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+      bottomContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
     ])
   }
 
-  private func authorizeAndStart() {
+  private func configureTopBar() {
+    let rightButtons = UIStackView(arrangedSubviews: [flashButton, lensButton])
+    rightButtons.axis = .horizontal
+    rightButtons.alignment = .center
+    rightButtons.spacing = 12
+    rightButtons.translatesAutoresizingMaskIntoConstraints = false
+    topBar.addSubview(rightButtons)
+
+    configureIconButton(
+      closeButton,
+      symbolName: "xmark",
+      accessibilityLabel: "Close camera",
+      action: #selector(closeTapped)
+    )
+    closeButton.translatesAutoresizingMaskIntoConstraints = false
+    topBar.addSubview(closeButton)
+
+    configureTargetButton()
+    topBar.addSubview(targetButton)
+
+    configureIconButton(
+      flashButton,
+      symbolName: "bolt.slash",
+      accessibilityLabel: "Flash off",
+      action: #selector(flashTapped)
+    )
+    configureIconButton(
+      lensButton,
+      symbolName: "camera.rotate",
+      accessibilityLabel: "Switch camera",
+      action: #selector(lensTapped)
+    )
+
+    NSLayoutConstraint.activate([
+      closeButton.leadingAnchor.constraint(equalTo: topBar.leadingAnchor),
+      closeButton.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
+      closeButton.widthAnchor.constraint(equalToConstant: 48),
+      closeButton.heightAnchor.constraint(equalToConstant: 48),
+
+      rightButtons.trailingAnchor.constraint(equalTo: topBar.trailingAnchor),
+      rightButtons.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
+
+      targetButton.centerXAnchor.constraint(equalTo: topBar.centerXAnchor),
+      targetButton.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
+      targetButton.widthAnchor.constraint(lessThanOrEqualTo: topBar.widthAnchor, multiplier: 0.6),
+      targetButton.leadingAnchor.constraint(greaterThanOrEqualTo: closeButton.trailingAnchor, constant: 12),
+      targetButton.trailingAnchor.constraint(lessThanOrEqualTo: rightButtons.leadingAnchor, constant: -12),
+    ])
+
+    updateTargetButton()
+    updateFlashButton()
+    updateLensButton()
+  }
+
+  private func configureBottomControls() {
+    zoomStack.axis = .horizontal
+    zoomStack.alignment = .center
+    zoomStack.spacing = 4
+    zoomStack.translatesAutoresizingMaskIntoConstraints = false
+    bottomContainer.addArrangedSubview(zoomStack)
+
+    bottomRow.translatesAutoresizingMaskIntoConstraints = false
+    bottomContainer.addArrangedSubview(bottomRow)
+    NSLayoutConstraint.activate([
+      bottomRow.widthAnchor.constraint(equalTo: bottomContainer.widthAnchor),
+      bottomRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 88),
+    ])
+
+    captureCountLabel.translatesAutoresizingMaskIntoConstraints = false
+    captureCountLabel.textColor = .white
+    captureCountLabel.font = .systemFont(ofSize: 14, weight: .bold)
+    captureCountLabel.insets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
+    captureCountLabel.backgroundColor = UIColor(white: 0, alpha: 0.55)
+    captureCountLabel.layer.cornerRadius = 20
+    captureCountLabel.clipsToBounds = true
+    captureCountLabel.isHidden = true
+    bottomRow.addSubview(captureCountLabel)
+
+    shutterButton.translatesAutoresizingMaskIntoConstraints = false
+    shutterButton.backgroundColor = UIColor(white: 1, alpha: 0.1)
+    shutterButton.layer.cornerRadius = 44
+    shutterButton.layer.borderColor = UIColor.white.cgColor
+    shutterButton.layer.borderWidth = 3
+    shutterButton.addTarget(self, action: #selector(shutterTapped), for: .touchUpInside)
+    bottomRow.addSubview(shutterButton)
+
+    shutterInnerCircle.translatesAutoresizingMaskIntoConstraints = false
+    shutterInnerCircle.backgroundColor = .white
+    shutterInnerCircle.layer.cornerRadius = 32
+    shutterInnerCircle.isUserInteractionEnabled = false
+    shutterButton.addSubview(shutterInnerCircle)
+
+    NSLayoutConstraint.activate([
+      captureCountLabel.leadingAnchor.constraint(equalTo: bottomRow.leadingAnchor),
+      captureCountLabel.centerYAnchor.constraint(equalTo: bottomRow.centerYAnchor),
+
+      shutterButton.centerXAnchor.constraint(equalTo: bottomRow.centerXAnchor),
+      shutterButton.centerYAnchor.constraint(equalTo: bottomRow.centerYAnchor),
+      shutterButton.widthAnchor.constraint(equalToConstant: 88),
+      shutterButton.heightAnchor.constraint(equalToConstant: 88),
+
+      shutterInnerCircle.centerXAnchor.constraint(equalTo: shutterButton.centerXAnchor),
+      shutterInnerCircle.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
+      shutterInnerCircle.widthAnchor.constraint(equalToConstant: 64),
+      shutterInnerCircle.heightAnchor.constraint(equalToConstant: 64),
+    ])
+  }
+
+  private func configureTargetButton() {
+    targetButton.translatesAutoresizingMaskIntoConstraints = false
+    targetButton.backgroundColor = UIColor(white: 0, alpha: 0.55)
+    targetButton.layer.cornerRadius = 20
+    targetButton.clipsToBounds = true
+    targetButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+    targetButton.setTitleColor(.white, for: .normal)
+    targetButton.tintColor = .white
+    targetButton.contentEdgeInsets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
+    targetButton.semanticContentAttribute = .forceLeftToRight
+    targetButton.addTarget(self, action: #selector(targetTapped), for: .touchUpInside)
+  }
+
+  private func configureIconButton(
+    _ button: UIButton,
+    symbolName: String,
+    accessibilityLabel: String,
+    action: Selector
+  ) {
+    button.translatesAutoresizingMaskIntoConstraints = false
+    button.backgroundColor = UIColor(white: 0, alpha: 0.55)
+    button.layer.cornerRadius = 24
+    button.clipsToBounds = true
+    button.tintColor = .white
+    button.setImage(UIImage(systemName: symbolName), for: .normal)
+    button.accessibilityLabel = accessibilityLabel
+    button.addTarget(self, action: action, for: .touchUpInside)
+    NSLayoutConstraint.activate([
+      button.widthAnchor.constraint(equalToConstant: 48),
+      button.heightAnchor.constraint(equalToConstant: 48),
+    ])
+  }
+
+  private func configureLifecycleObservers() {
+    let notificationCenter = NotificationCenter.default
+    lifecycleObservers.append(
+      notificationCenter.addObserver(
+        forName: UIApplication.willResignActiveNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        self?.sessionQueue.async {
+          self?.captureSession.stopRunning()
+        }
+      }
+    )
+    lifecycleObservers.append(
+      notificationCenter.addObserver(
+        forName: UIApplication.didBecomeActiveNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        self?.sessionQueue.async {
+          guard let self, self.currentInput != nil else { return }
+          if !self.captureSession.isRunning {
+            self.captureSession.startRunning()
+            self.emitPreviewReadyIfNeeded()
+          }
+        }
+      }
+    )
+  }
+
+  private func requestCameraAccessAndStart() {
     switch AVCaptureDevice.authorizationStatus(for: .video) {
     case .authorized:
-      configureSession()
+      startSession()
     case .notDetermined:
       AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-        guard let self else { return }
-        if granted {
-          self.configureSession()
-        } else {
-          DispatchQueue.main.async {
+        DispatchQueue.main.async {
+          guard let self else { return }
+          if granted {
+            self.startSession()
+          } else {
             self.emitFailure("Camera permission is required to capture photos.")
             self.closeSession()
           }
@@ -345,418 +476,209 @@ private final class NativeCameraViewController: UIViewController, AVCapturePhoto
     }
   }
 
-  private func configureSession() {
-    log("configure_session_start", data: [
-      "position": currentPosition.flutterName,
-      "zoom": currentZoomFactor,
-      "flash": currentFlashMode.flutterName,
-    ])
-    sessionQueue.async { [weak self] in
-      guard let self else { return }
-      self.session.beginConfiguration()
-      self.session.sessionPreset = .photo
-      self.session.inputs.forEach { self.session.removeInput($0) }
-      self.session.outputs.forEach { self.session.removeOutput($0) }
-
-      guard let device = self.bestDevice(for: self.currentPosition) else {
-        DispatchQueue.main.async {
-          self.log("configure_session_no_device", data: [
-            "position": self.currentPosition.flutterName,
-          ])
-          self.emitFailure("No compatible camera was found on this device.")
-          self.closeSession()
-        }
-        self.session.commitConfiguration()
-        return
-      }
-
+  private func startSession() {
+    sessionQueue.async {
       do {
-        let input = try AVCaptureDeviceInput(device: device)
-        if self.session.canAddInput(input) {
-          self.session.addInput(input)
-          self.currentInput = input
-        }
-        if self.session.canAddOutput(self.photoOutput) {
-          self.session.addOutput(self.photoOutput)
-        }
-        if #available(iOS 13.0, *) {
-          self.photoOutput.maxPhotoQualityPrioritization = .speed
-        }
-        self.photoOutput.isHighResolutionCaptureEnabled = false
-        self.photoOutput.isLivePhotoCaptureEnabled = false
-        self.applyZoomLocked(device: device, zoom: self.currentZoomFactor)
-        self.session.commitConfiguration()
-        self.previewLayer.session = self.session
-        self.session.startRunning()
-        DispatchQueue.main.async {
-          self.log("configure_session_ready", data: [
-            "device": device.localizedName,
-            "position": self.currentPosition.flutterName,
-            "zoom": self.currentZoomFactor,
-          ])
-          self.lensButton.isEnabled = true
-          self.refreshZoomButtons(for: device)
-          self.updateFlashButton()
-          self.updateLensButton()
-          if !self.previewReadySent {
-            self.previewReadySent = true
-            self.emitEvent(
-              self.sessionEvent(
-                type: "previewReady",
-                openDurationMs: Int((CACurrentMediaTime() - self.openedAt) * 1000)
-              )
-            )
-          }
-        }
+        try self.configureSession()
+        self.captureSession.startRunning()
+        self.emitPreviewReadyIfNeeded()
       } catch {
-        self.session.commitConfiguration()
         DispatchQueue.main.async {
-          self.log("configure_session_error", data: [
-            "message": error.localizedDescription,
-          ])
-          self.emitFailure("Unable to configure camera: \(error.localizedDescription)")
+          self.emitFailure("Unable to bind camera: \(error.localizedDescription)")
           self.closeSession()
         }
       }
     }
   }
 
-  private func bestDevice(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
-    let deviceTypes: [AVCaptureDevice.DeviceType]
-    if position == .back {
-      deviceTypes = [
-        .builtInTripleCamera,
-        .builtInDualWideCamera,
-        .builtInDualCamera,
-        .builtInUltraWideCamera,
-        .builtInTelephotoCamera,
-        .builtInWideAngleCamera,
-      ]
+  private func configureSession() throws {
+    let position = currentLensPosition
+    guard let device = Self.bestDevice(for: position) else {
+      throw NativeCameraError.noCompatibleCamera
+    }
+
+    let input = try AVCaptureDeviceInput(device: device)
+
+    captureSession.beginConfiguration()
+    captureSession.sessionPreset = .photo
+
+    if let currentInput {
+      captureSession.removeInput(currentInput)
+    }
+    if captureSession.inputs.contains(where: { $0 === input }) == false,
+       captureSession.canAddInput(input) {
+      captureSession.addInput(input)
+    }
+
+    if captureSession.outputs.contains(photoOutput) == false,
+       captureSession.canAddOutput(photoOutput) {
+      captureSession.addOutput(photoOutput)
+      photoOutput.isHighResolutionCaptureEnabled = true
+    }
+    captureSession.commitConfiguration()
+
+    currentInput = input
+    currentLensPosition = device.position
+
+    try device.lockForConfiguration()
+    let zoomRange: ClosedRange<CGFloat>
+    if #available(iOS 13.0, *) {
+      zoomRange = device.minAvailableVideoZoomFactor...device.maxAvailableVideoZoomFactor
     } else {
-      deviceTypes = [
-        .builtInTrueDepthCamera,
-        .builtInWideAngleCamera,
-      ]
+      zoomRange = 1...max(device.activeFormat.videoMaxZoomFactor, 1)
     }
-    let discovery = AVCaptureDevice.DiscoverySession(
-      deviceTypes: deviceTypes,
-      mediaType: .video,
-      position: position
-    )
-    for type in deviceTypes {
-      if let device = discovery.devices.first(where: { $0.deviceType == type }) {
-        return device
-      }
+    let clampedZoom = max(zoomRange.lowerBound, min(currentZoomFactor, zoomRange.upperBound))
+    device.videoZoomFactor = clampedZoom
+    currentZoomFactor = clampedZoom
+    device.unlockForConfiguration()
+
+    DispatchQueue.main.async {
+      self.rebuildZoomButtons(for: device)
+      self.updateFlashButton()
+      self.updateLensButton()
     }
-    return discovery.devices.first
   }
 
-  private func refreshZoomButtons(for device: AVCaptureDevice) {
+  private func emitPreviewReadyIfNeeded() {
+    guard previewReadySent == false else { return }
+    previewReadySent = true
+    bridge?.emit(
+      sessionEvent(
+        type: "previewReady",
+        openDurationMs: Int(Date().timeIntervalSince(openedAt) * 1000)
+      )
+    )
+  }
+
+  private func rebuildZoomButtons(for device: AVCaptureDevice) {
+    let minZoom: CGFloat
+    let maxZoom: CGFloat
+    if #available(iOS 13.0, *) {
+      minZoom = device.minAvailableVideoZoomFactor
+      maxZoom = device.maxAvailableVideoZoomFactor
+    } else {
+      minZoom = 1
+      maxZoom = max(device.activeFormat.videoMaxZoomFactor, 1)
+    }
+
+    let preferredStops: [CGFloat] = [0.5, 1, 2, 3, 5]
+    var stops: [CGFloat] = []
+    for raw in preferredStops {
+      let clamped = max(minZoom, min(raw, maxZoom))
+      if stops.contains(where: { abs($0 - clamped) < 0.05 }) == false {
+        stops.append(clamped)
+      }
+    }
+    if stops.isEmpty {
+      stops = [currentZoomFactor]
+    }
+
     zoomButtons.forEach { $0.removeFromSuperview() }
     zoomButtons.removeAll()
-    let stops = meaningfulZoomStops(for: device)
     zoomStack.isHidden = stops.count <= 1
+
     for stop in stops {
-      let button = makeZoomPillButton(title: "\(formatZoom(stop))x", action: #selector(handleZoomButton(_:)))
-      button.accessibilityIdentifier = "\(stop)"
-      setSelectedStyle(for: button, selected: abs(stop - currentZoomFactor) < 0.05)
-      zoomButtons.append(button)
+      let button = UIButton(type: .system)
+      button.setTitle("\(formatZoom(stop))x", for: .normal)
+      button.setTitleColor(.white, for: .normal)
+      button.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+      button.backgroundColor = UIColor(white: 0, alpha: 0.55)
+      button.layer.cornerRadius = 16
+      button.contentEdgeInsets = UIEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+      button.tag = Int(stop * 100)
+      button.addTarget(self, action: #selector(zoomTapped(_:)), for: .touchUpInside)
+      updateZoomButtonStyle(button, selected: abs(stop - currentZoomFactor) < 0.05)
       zoomStack.addArrangedSubview(button)
-    }
-    log("zoom_buttons_refreshed", data: [
-      "position": currentPosition.flutterName,
-      "stops": stops.map { formatZoom($0) }.joined(separator: ","),
-    ])
-  }
-
-  private func meaningfulZoomStops(for device: AVCaptureDevice) -> [CGFloat] {
-    let maxZoom = min(device.activeFormat.videoMaxZoomFactor, 6)
-    var stops: [CGFloat] = [1]
-    if currentPosition == .back {
-      if #available(iOS 13.0, *) {
-        for factor in device.virtualDeviceSwitchOverVideoZoomFactors {
-          let stop = max(1, min(CGFloat(truncating: factor), maxZoom))
-          if stop > 1.05, !stops.contains(where: { abs($0 - stop) < 0.05 }) {
-            stops.append(stop)
-          }
-        }
-      }
-    }
-    let sorted = stops.sorted()
-    return sorted.isEmpty ? [1] : sorted
-  }
-
-  private func applyZoomLocked(device: AVCaptureDevice, zoom: CGFloat) {
-    let clamped = max(1, min(zoom, device.activeFormat.videoMaxZoomFactor))
-    do {
-      try device.lockForConfiguration()
-      device.videoZoomFactor = clamped
-      device.unlockForConfiguration()
-      currentZoomFactor = clamped
-    } catch {
-      log("zoom_apply_failed", data: [
-        "requestedZoom": zoom,
-        "message": error.localizedDescription,
-      ])
-      currentZoomFactor = 1
+      zoomButtons.append(button)
     }
   }
 
-  private func applyZoom(_ zoom: CGFloat) {
-    guard let device = currentInput?.device else { return }
-    sessionQueue.async { [weak self] in
-      self?.applyZoomLocked(device: device, zoom: zoom)
-      DispatchQueue.main.async {
-        self?.log("zoom_applied", data: ["zoom": self?.currentZoomFactor ?? 1])
-        self?.zoomButtons.forEach { button in
-          let value = CGFloat(Double(button.accessibilityIdentifier ?? "1") ?? 1)
-          self?.setSelectedStyle(for: button, selected: abs(value - (self?.currentZoomFactor ?? 1)) < 0.05)
-        }
-      }
-    }
-  }
-
-  @objc private func handleZoomButton(_ sender: UIButton) {
-    let value = CGFloat(Double(sender.accessibilityIdentifier ?? "1") ?? 1)
-    log("zoom_tapped", data: ["requestedZoom": value])
-    applyZoom(value)
-  }
-
-  @objc private func cycleFlashMode() {
-    guard let device = currentInput?.device, device.hasFlash else {
-      flashButton.isEnabled = false
-      log("flash_unavailable")
-      return
-    }
-    currentFlashMode = switch currentFlashMode {
-    case .off: .auto
-    case .auto: .on
-    default: .off
-    }
-    log("flash_changed", data: ["flash": currentFlashMode.flutterName])
-    updateFlashButton()
-  }
-
-  @objc private func switchLens() {
-    guard lensButton.isEnabled else { return }
-    log("lens_switch_tapped", data: ["from": currentPosition.flutterName])
-    lensButton.isEnabled = false
-    currentPosition = currentPosition == .back ? .front : .back
-    configureSession()
-  }
-
-  @objc private func showTargetPicker() {
-    log("target_picker_opened", data: [
-      "targetProjectId": currentTarget.resolvedProjectId,
-      "targetProjectName": currentTarget.resolvedProjectName,
-    ])
-    let selector = TargetSelectionViewController(
-      targets: config.targets,
-      currentTarget: currentTarget
-    ) { [weak self] option in
-      guard let self else { return }
-      self.currentTarget = option
-      self.log("target_changed", data: [
-        "targetProjectId": option.resolvedProjectId,
-        "targetProjectName": option.resolvedProjectName,
-      ])
-      self.updateTargetButton()
-      self.emitEvent(
-        self.sessionEvent(
-          type: "targetChanged",
-          targetMode: option.mode.storageValue,
-          targetProjectId: option.resolvedProjectId,
-          targetProjectName: option.resolvedProjectName,
-          fixedProjectId: option.fixedProjectId
-        )
-      )
-    }
-    selector.modalPresentationStyle = .overCurrentContext
-    selector.modalTransitionStyle = .crossDissolve
-    present(selector, animated: true)
-  }
-
-  @objc private func capturePhoto() {
-    guard !captureInFlight else { return }
-    guard currentInput != nil else {
-      emitFailure("Camera is not ready yet.")
-      return
-    }
-    let target = currentTarget
-    captureInFlight = true
-    shutterButton.isEnabled = false
-    log("capture_tapped", data: [
-      "targetProjectId": target.resolvedProjectId,
-      "targetProjectName": target.resolvedProjectName,
-      "flash": currentFlashMode.flutterName,
-      "position": currentPosition.flutterName,
-    ])
-    animateShutterPress()
-    let photoId = UUID().uuidString
-    pendingPhotoId = photoId
-    pendingCaptureStart = CACurrentMediaTime()
-    let settings: AVCapturePhotoSettings
-    if photoOutput.availablePhotoCodecTypes.contains(.jpeg) {
-      settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
-    } else {
-      settings = AVCapturePhotoSettings()
-    }
-    if photoOutput.supportedFlashModes.contains(currentFlashMode) {
-      settings.flashMode = currentFlashMode
-    }
-    if #available(iOS 13.0, *) {
-      settings.photoQualityPrioritization = .speed
-    }
-    settings.isHighResolutionPhotoEnabled = false
-    settings.isAutoStillImageStabilizationEnabled = true
-    if let connection = photoOutput.connection(with: .video),
-      connection.isVideoOrientationSupported
-    {
-      connection.videoOrientation = .portrait
-    }
-    emitEvent(
-      sessionEvent(
-        type: "captureStarted",
-        photoId: photoId,
-        targetMode: target.mode.storageValue,
-        targetProjectId: target.resolvedProjectId,
-        targetProjectName: target.resolvedProjectName,
-        fixedProjectId: target.fixedProjectId
-      )
-    )
-    photoOutput.capturePhoto(with: settings, delegate: self)
-  }
-
-  func photoOutput(
-    _ output: AVCapturePhotoOutput,
-    didFinishProcessingPhoto photo: AVCapturePhoto,
-    error: Error?
-  ) {
-    defer {
-      captureInFlight = false
-      DispatchQueue.main.async {
-        self.shutterButton.isEnabled = true
-      }
-    }
-
-    if let error {
-      DispatchQueue.main.async {
-        self.emitFailure("Capture failed: \(error.localizedDescription)")
-      }
-      return
-    }
-
-    guard
-      let data = photo.fileDataRepresentation(),
-      let photoId = pendingPhotoId
-    else {
-      DispatchQueue.main.async {
-        self.emitFailure("Capture failed before photo data was available.")
-      }
-      return
-    }
-    let target = currentTarget
-
-    do {
-      let fileURL = try createOutputURL(photoId: photoId)
-      try data.write(to: fileURL, options: .atomic)
-      let durationMs = pendingCaptureStart.map { Int((CACurrentMediaTime() - $0) * 1000) }
-      DispatchQueue.main.async {
-        self.capturedCount += 1
-        self.updateCountLabel()
-        self.playCaptureSuccessFeedback()
-        self.log("capture_saved", data: [
-          "photoId": photoId,
-          "captureDurationMs": durationMs ?? -1,
-          "capturedCount": self.capturedCount,
-        ])
-        self.emitEvent(
-          self.sessionEvent(
-            type: "captureSaved",
-            photoId: photoId,
-            localPath: fileURL.path,
-            targetMode: target.mode.storageValue,
-            targetProjectId: target.resolvedProjectId,
-            targetProjectName: target.resolvedProjectName,
-            fixedProjectId: target.fixedProjectId,
-            capturedAt: ISO8601DateFormatter().string(from: Date()),
-            captureDurationMs: durationMs
-          )
-        )
-      }
-    } catch {
-      DispatchQueue.main.async {
-        self.emitFailure("Unable to save photo locally: \(error.localizedDescription)")
-      }
-    }
-  }
-
-  @objc private func closeSession() {
-    log("session_closed", data: ["capturedCount": capturedCount])
-    emitEvent(
-      sessionEvent(
-        type: "sessionClosed",
-        capturedCount: capturedCount,
-        settings: [
-          "flashMode": currentFlashMode.flutterName,
-          "lensDirection": currentPosition.flutterName,
-          "zoomStop": currentZoomFactor
-        ]
-      )
-    )
-    dismiss(animated: true)
-  }
-
-  @objc private func handleWillResignActive() {
-    log("app_will_resign_active")
-    sessionQueue.async { [weak self] in
-      self?.session.stopRunning()
-    }
-  }
-
-  @objc private func handleDidBecomeActive() {
-    log("app_did_become_active")
-    sessionQueue.async { [weak self] in
-      guard let self, !self.session.isRunning else { return }
-      self.session.startRunning()
-    }
+  private func updateZoomButtonStyle(_ button: UIButton, selected: Bool) {
+    button.backgroundColor = selected ? .white : UIColor(white: 0, alpha: 0.55)
+    button.setTitleColor(selected ? .black : .white, for: .normal)
   }
 
   private func updateTargetButton() {
-    targetButton.setImage(UIImage(systemName: "folder"), for: .normal)
-    targetButton.setTitle(" \(currentTarget.resolvedProjectName) ▾", for: .normal)
+    let folderImage = UIImage(systemName: "folder")
+    let chevronImage = UIImage(systemName: "chevron.down")
+    targetButton.setTitle(currentTarget.resolvedProjectName, for: .normal)
+    targetButton.setImage(folderImage, for: .normal)
+    targetButton.semanticContentAttribute = .forceLeftToRight
+    targetButton.imageView?.contentMode = .scaleAspectFit
+    targetButton.setNeedsLayout()
+    targetButton.layoutIfNeeded()
+    targetButton.subviews.compactMap { $0 as? UIImageView }.forEach { imageView in
+      imageView.tintColor = .white
+    }
+
+    let trailingChevron = UIImageView(image: chevronImage)
+    trailingChevron.translatesAutoresizingMaskIntoConstraints = false
+    trailingChevron.tintColor = .white
+    trailingChevron.isUserInteractionEnabled = false
+    targetButton.subviews.filter { $0.tag == 9001 }.forEach { $0.removeFromSuperview() }
+    trailingChevron.tag = 9001
+    targetButton.addSubview(trailingChevron)
+    NSLayoutConstraint.activate([
+      trailingChevron.centerYAnchor.constraint(equalTo: targetButton.centerYAnchor),
+      trailingChevron.trailingAnchor.constraint(equalTo: targetButton.trailingAnchor, constant: -12),
+      trailingChevron.widthAnchor.constraint(equalToConstant: 12),
+      trailingChevron.heightAnchor.constraint(equalToConstant: 12),
+    ])
+    targetButton.contentEdgeInsets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 30)
+    targetButton.titleEdgeInsets = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
   }
 
   private func updateFlashButton() {
-    let hasFlash = currentInput?.device.hasFlash == true
-    flashButton.isHidden = !hasFlash
-    guard hasFlash else { return }
-    let symbolName = switch currentFlashMode {
-    case .auto: "bolt.badge.a"
-    case .on: "bolt.fill"
-    default: "bolt.slash"
+    guard let device = currentInput?.device else {
+      flashButton.isHidden = true
+      return
+    }
+    let supportsFlash = photoOutput.supportedFlashModes.contains(currentFlashMode) &&
+      device.hasFlash
+    flashButton.isHidden = supportsFlash == false
+    guard supportsFlash else { return }
+
+    let symbolName: String
+    let label: String
+    let selected: Bool
+    switch currentFlashMode {
+    case .auto:
+      symbolName = "bolt.badge.a"
+      label = "Flash auto"
+      selected = true
+    case .on:
+      symbolName = "bolt.fill"
+      label = "Flash on"
+      selected = true
+    default:
+      symbolName = "bolt.slash"
+      label = "Flash off"
+      selected = false
     }
     flashButton.setImage(UIImage(systemName: symbolName), for: .normal)
-    flashButton.accessibilityLabel = currentFlashMode.label
-    setSelectedStyle(for: flashButton, selected: currentFlashMode != .off)
+    flashButton.accessibilityLabel = label
+    flashButton.tintColor = selected ? .black : .white
+    flashButton.backgroundColor = selected ? .white : UIColor(white: 0, alpha: 0.55)
   }
 
   private func updateLensButton() {
-    let canSwitch = bestDevice(for: currentPosition == .front ? .back : .front) != nil
-    lensButton.isHidden = !canSwitch
-    lensButton.isEnabled = canSwitch
-    lensButton.setImage(UIImage(systemName: "camera.rotate"), for: .normal)
-    lensButton.accessibilityLabel = currentPosition == .front ? "Front camera" : "Rear camera"
-    setSelectedStyle(for: lensButton, selected: currentPosition == .front)
+    let hasFront = Self.bestDevice(for: .front) != nil
+    let hasBack = Self.bestDevice(for: .back) != nil
+    let canSwitch = hasFront && hasBack
+    lensButton.isHidden = canSwitch == false
+    lensButton.isEnabled = canSwitch && isSwitchingLens == false
+    let selected = currentLensPosition == .front
+    lensButton.tintColor = selected ? .black : .white
+    lensButton.backgroundColor = selected ? .white : UIColor(white: 0, alpha: 0.55)
+    lensButton.accessibilityLabel = selected ? "Front camera" : "Rear camera"
   }
 
-  private func updateCountLabel() {
-    countLabel.isHidden = capturedCount == 0
-    countLabel.text = "\(capturedCount) saved"
+  private func updateCaptureCount() {
+    captureCountLabel.isHidden = capturedCount == 0
+    captureCountLabel.text = "\(capturedCount) saved"
   }
 
   private func animateShutterPress() {
-    shutterButton.layer.removeAllAnimations()
     UIView.animate(withDuration: 0.06, animations: {
       self.shutterButton.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
       self.shutterButton.alpha = 0.88
@@ -769,124 +691,244 @@ private final class NativeCameraViewController: UIViewController, AVCapturePhoto
   }
 
   private func playCaptureSuccessFeedback() {
-    captureFeedbackGenerator.impactOccurred()
-    captureFeedbackGenerator.prepare()
-
-    flashOverlayView.layer.removeAllAnimations()
-    flashOverlayView.alpha = 0
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    let overlay = UIView(frame: view.bounds)
+    overlay.backgroundColor = UIColor.white.withAlphaComponent(0.18)
+    overlay.alpha = 0
+    view.addSubview(overlay)
     UIView.animate(withDuration: 0.045, animations: {
-      self.flashOverlayView.alpha = 0.18
+      overlay.alpha = 1
     }) { _ in
-      UIView.animate(withDuration: 0.11) {
-        self.flashOverlayView.alpha = 0
+      UIView.animate(withDuration: 0.11, animations: {
+        overlay.alpha = 0
+      }) { _ in
+        overlay.removeFromSuperview()
       }
     }
 
-    countLabel.layer.removeAllAnimations()
-    countLabel.transform = .identity
-    countLabel.alpha = 1
+    captureCountLabel.transform = .identity
     UIView.animate(withDuration: 0.09, animations: {
-      self.countLabel.transform = CGAffineTransform(scaleX: 1.06, y: 1.06)
-      self.countLabel.alpha = 0.95
+      self.captureCountLabel.transform = CGAffineTransform(scaleX: 1.06, y: 1.06)
+      self.captureCountLabel.alpha = 0.95
     }) { _ in
       UIView.animate(withDuration: 0.14) {
-        self.countLabel.transform = .identity
-        self.countLabel.alpha = 1
+        self.captureCountLabel.transform = .identity
+        self.captureCountLabel.alpha = 1
       }
     }
   }
 
-  private func makeTextPillButton(title: String, action: Selector) -> UIButton {
-    let button = UIButton(type: .system)
-    button.translatesAutoresizingMaskIntoConstraints = false
-    button.setTitle(title, for: .normal)
-    button.setTitleColor(.white, for: .normal)
-    button.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
-    button.contentEdgeInsets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
-    button.layer.cornerRadius = 18
-    button.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-    button.addTarget(self, action: action, for: .touchUpInside)
-    return button
+  @objc private func closeTapped() {
+    closeSession()
   }
 
-  private func makeZoomPillButton(title: String, action: Selector) -> UIButton {
-    let button = makeTextPillButton(title: title, action: action)
-    button.titleLabel?.font = .systemFont(ofSize: 11, weight: .semibold)
-    button.contentEdgeInsets = UIEdgeInsets(top: 2, left: 6, bottom: 2, right: 6)
-    button.layer.cornerRadius = 10
-    button.titleLabel?.adjustsFontSizeToFitWidth = false
-    button.setContentHuggingPriority(.required, for: .horizontal)
-    button.setContentCompressionResistancePriority(.required, for: .horizontal)
-    return button
+  @objc private func flashTapped() {
+    guard photoOutput.supportedFlashModes.isEmpty == false else { return }
+    let nextMode: AVCaptureDevice.FlashMode
+    switch currentFlashMode {
+    case .off:
+      nextMode = .auto
+    case .auto:
+      nextMode = .on
+    default:
+      nextMode = .off
+    }
+    currentFlashMode = nextMode
+    updateFlashButton()
   }
 
-  private func makeTargetButton(title: String, action: Selector) -> UIButton {
-    let button = makeTextPillButton(title: title, action: action)
-    button.semanticContentAttribute = .forceLeftToRight
-    button.contentEdgeInsets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
-    button.titleLabel?.lineBreakMode = .byTruncatingTail
-    return button
+  @objc private func lensTapped() {
+    guard isSwitchingLens == false else { return }
+    let target: AVCaptureDevice.Position = currentLensPosition == .back ? .front : .back
+    guard Self.bestDevice(for: target) != nil else { return }
+    isSwitchingLens = true
+    lensButton.isEnabled = false
+    currentLensPosition = target
+    sessionQueue.async {
+      do {
+        try self.configureSession()
+        self.captureSession.startRunning()
+        DispatchQueue.main.async {
+          self.isSwitchingLens = false
+          self.updateLensButton()
+        }
+      } catch {
+        DispatchQueue.main.async {
+          self.isSwitchingLens = false
+          self.emitFailure("Unable to bind camera: \(error.localizedDescription)")
+          self.closeSession()
+        }
+      }
+    }
   }
 
-  private func makeCircleIconButton(symbolName: String, action: Selector) -> UIButton {
-    let button = UIButton(type: .system)
-    button.translatesAutoresizingMaskIntoConstraints = false
-    button.setImage(UIImage(systemName: symbolName), for: .normal)
-    button.tintColor = .white
-    button.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-    button.layer.cornerRadius = 24
-    button.layer.borderWidth = 1
-    button.layer.borderColor = UIColor.white.withAlphaComponent(0.35).cgColor
-    button.addTarget(self, action: action, for: .touchUpInside)
-    return button
+  @objc private func shutterTapped() {
+    guard isCaptureInFlight == false else { return }
+    guard let target = currentTarget as NativeCameraTargetOption? else { return }
+    isCaptureInFlight = true
+    shutterButton.isEnabled = false
+    animateShutterPress()
+
+    let photoId = UUID().uuidString.lowercased()
+    let captureStart = Date()
+    bridge?.emit(
+      sessionEvent(
+        type: "captureStarted",
+        photoId: photoId,
+        targetMode: target.mode.wireValue,
+        targetProjectId: target.resolvedProjectId,
+        targetProjectName: target.resolvedProjectName,
+        fixedProjectId: target.fixedProjectId
+      )
+    )
+
+    let settings = AVCapturePhotoSettings()
+    if photoOutput.supportedFlashModes.contains(currentFlashMode) {
+      settings.flashMode = currentFlashMode
+    }
+    if photoOutput.availablePhotoCodecTypes.contains(.jpeg) {
+      settings.availablePreviewPhotoPixelFormatTypes.first.map { _ in
+        settings.previewPhotoFormat = [
+          kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+      }
+    }
+
+    let outputUrl: URL
+    do {
+      outputUrl = try createOutputFile(photoId: photoId)
+    } catch {
+      isCaptureInFlight = false
+      shutterButton.isEnabled = true
+      emitFailure("Capture failed: \(error.localizedDescription)")
+      return
+    }
+
+    let delegate = NativePhotoCaptureDelegate(
+      photoId: photoId,
+      outputUrl: outputUrl,
+      captureStartedAt: captureStart,
+      target: target
+    ) { [weak self] result in
+      guard let self else { return }
+      DispatchQueue.main.async {
+        self.handleCaptureResult(result)
+      }
+    }
+    captureDelegates[photoId] = delegate
+    photoOutput.capturePhoto(with: settings, delegate: delegate)
   }
 
-  private func setSelectedStyle(for button: UIButton, selected: Bool) {
-    button.backgroundColor = selected
-      ? UIColor.white.withAlphaComponent(0.95)
-      : UIColor.black.withAlphaComponent(0.55)
-    button.setTitleColor(selected ? .black : .white, for: .normal)
-    button.tintColor = selected ? .black : .white
-    button.layer.borderWidth = 1
-    button.layer.borderColor = (selected ? UIColor.white : UIColor.white.withAlphaComponent(0.35)).cgColor
+  @objc private func targetTapped() {
+    let picker = NativeCameraTargetPickerViewController(
+      options: launchConfig.targets,
+      selectedTarget: currentTarget
+    ) { [weak self] option in
+      guard let self else { return }
+      self.currentTarget = option
+      self.updateTargetButton()
+      self.bridge?.emit(
+        self.sessionEvent(
+          type: "targetChanged",
+          targetMode: option.mode.wireValue,
+          targetProjectId: option.resolvedProjectId,
+          targetProjectName: option.resolvedProjectName,
+          fixedProjectId: option.fixedProjectId
+        )
+      )
+    }
+    picker.modalPresentationStyle = .pageSheet
+    if #available(iOS 15.0, *), let sheet = picker.sheetPresentationController {
+      sheet.detents = [.medium(), .large()]
+      sheet.prefersGrabberVisible = true
+    }
+    present(picker, animated: true)
+  }
+
+  @objc private func zoomTapped(_ sender: UIButton) {
+    guard let device = currentInput?.device else { return }
+    let zoomValue = CGFloat(sender.tag) / 100
+    sessionQueue.async {
+      do {
+        try device.lockForConfiguration()
+        let maxZoom: CGFloat
+        let minZoom: CGFloat
+        if #available(iOS 13.0, *) {
+          minZoom = device.minAvailableVideoZoomFactor
+          maxZoom = device.maxAvailableVideoZoomFactor
+        } else {
+          minZoom = 1
+          maxZoom = max(device.activeFormat.videoMaxZoomFactor, 1)
+        }
+        let clamped = max(minZoom, min(zoomValue, maxZoom))
+        device.videoZoomFactor = clamped
+        device.unlockForConfiguration()
+        DispatchQueue.main.async {
+          self.currentZoomFactor = clamped
+          self.zoomButtons.forEach { button in
+            let stop = CGFloat(button.tag) / 100
+            self.updateZoomButtonStyle(button, selected: abs(stop - clamped) < 0.05)
+          }
+        }
+      } catch {
+        // Ignore unsupported zoom operations.
+      }
+    }
+  }
+
+  private func handleCaptureResult(_ result: NativeCaptureResult) {
+    captureDelegates[result.photoId] = nil
+    isCaptureInFlight = false
+    shutterButton.isEnabled = true
+
+    switch result {
+    case .success(let photoId, let localPath, let target, let capturedAt, let captureDurationMs):
+      capturedCount += 1
+      updateCaptureCount()
+      playCaptureSuccessFeedback()
+      bridge?.emit(
+        sessionEvent(
+          type: "captureSaved",
+          photoId: photoId,
+          localPath: localPath,
+          targetMode: target.mode.wireValue,
+          targetProjectId: target.resolvedProjectId,
+          targetProjectName: target.resolvedProjectName,
+          fixedProjectId: target.fixedProjectId,
+          capturedAt: capturedAt,
+          captureDurationMs: captureDurationMs
+        )
+      )
+    case .failure(_, let message):
+      emitFailure(message)
+    }
   }
 
   private func emitFailure(_ message: String) {
-    log("capture_failure", data: ["message": message])
-    emitEvent(sessionEvent(type: "captureFailed", message: message))
+    bridge?.emit(sessionEvent(type: "captureFailed", message: message))
   }
 
-  private func log(_ event: String, data: [String: Any?] = [:]) {
-    let normalizedData = data
-      .compactMapValues { value -> String? in
-        guard let value else { return nil }
-        return String(describing: value)
-      }
-      .map { "\($0.key)=\($0.value)" }
-      .sorted()
-      .joined(separator: " ")
-    if normalizedData.isEmpty {
-      NSLog("[JoblensNativeCamera][iOS] %@", event)
-    } else {
-      NSLog("[JoblensNativeCamera][iOS] %@ %@", event, normalizedData)
+  private func closeSession() {
+    emitSessionClosedIfNeeded()
+    dismiss(animated: true) {
+      self.bridge?.didCloseCamera(self)
     }
   }
 
-  private func createOutputURL(photoId: String) throws -> URL {
-    let applicationSupport = try FileManager.default.url(
-      for: .applicationSupportDirectory,
-      in: .userDomainMask,
-      appropriateFor: nil,
-      create: true
+  private func emitSessionClosedIfNeeded() {
+    guard didEmitSessionClosed == false else { return }
+    didEmitSessionClosed = true
+    bridge?.emit(
+      sessionEvent(
+        type: "sessionClosed",
+        capturedCount: capturedCount,
+        settings: [
+          "flashMode": currentFlashMode.flutterName,
+          "lensDirection": currentLensPosition.flutterLensName,
+          "zoomStop": Double(currentZoomFactor)
+        ]
+      )
     )
-    let sessionDirectory = applicationSupport
-      .appendingPathComponent("captures", isDirectory: true)
-      .appendingPathComponent(config.sessionId, isDirectory: true)
-    try FileManager.default.createDirectory(
-      at: sessionDirectory,
-      withIntermediateDirectories: true
-    )
-    return sessionDirectory.appendingPathComponent("\(photoId).jpg")
   }
 
   private func sessionEvent(
@@ -906,7 +948,7 @@ private final class NativeCameraViewController: UIViewController, AVCapturePhoto
   ) -> [String: Any?] {
     [
       "type": type,
-      "sessionId": config.sessionId,
+      "sessionId": launchConfig.sessionId,
       "message": message,
       "photoId": photoId,
       "localPath": localPath,
@@ -922,32 +964,72 @@ private final class NativeCameraViewController: UIViewController, AVCapturePhoto
     ]
   }
 
+  private func createOutputFile(photoId: String) throws -> URL {
+    let baseDirectory = try FileManager.default.url(
+      for: .applicationSupportDirectory,
+      in: .userDomainMask,
+      appropriateFor: nil,
+      create: true
+    )
+    let sessionDirectory = baseDirectory
+      .appendingPathComponent("captures", isDirectory: true)
+      .appendingPathComponent(launchConfig.sessionId, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: sessionDirectory,
+      withIntermediateDirectories: true
+    )
+    return sessionDirectory.appendingPathComponent("\(photoId).jpg")
+  }
+
   private func formatZoom(_ zoom: CGFloat) -> String {
     let rounded = round(zoom)
-    if abs(rounded - zoom) < 0.05 {
-      return "\(Int(rounded))"
+    if abs(zoom - rounded) < 0.05 {
+      return String(Int(rounded))
     }
     return String(format: "%.1f", zoom)
   }
+
+  private static func bestDevice(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+    let deviceTypes: [AVCaptureDevice.DeviceType]
+    switch position {
+    case .front:
+      deviceTypes = [.builtInTrueDepthCamera, .builtInWideAngleCamera]
+    default:
+      deviceTypes = [
+        .builtInTripleCamera,
+        .builtInDualWideCamera,
+        .builtInDualCamera,
+        .builtInWideAngleCamera,
+        .builtInUltraWideCamera,
+      ]
+    }
+
+    let discoverySession = AVCaptureDevice.DiscoverySession(
+      deviceTypes: deviceTypes,
+      mediaType: .video,
+      position: position
+    )
+    return discoverySession.devices.first
+  }
 }
 
-private final class TargetSelectionViewController: UIViewController, UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate {
-  private let targets: [NativeCameraTargetOption]
-  private var currentTarget: NativeCameraTargetOption
+private final class NativeCameraTargetPickerViewController: UIViewController, UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate {
+  private let options: [NativeCameraTargetOption]
+  private let selectedTarget: NativeCameraTargetOption
   private let onSelect: (NativeCameraTargetOption) -> Void
-  private var query = ""
-  private let backdropButton = UIButton(type: .custom)
-  private let containerView = UIView()
-  private let searchField = UITextField()
+
+  private let searchBar = UISearchBar()
   private let tableView = UITableView(frame: .zero, style: .plain)
+  private var filteredOptions: [NativeCameraTargetOption]
 
   init(
-    targets: [NativeCameraTargetOption],
-    currentTarget: NativeCameraTargetOption,
+    options: [NativeCameraTargetOption],
+    selectedTarget: NativeCameraTargetOption,
     onSelect: @escaping (NativeCameraTargetOption) -> Void
   ) {
-    self.targets = targets
-    self.currentTarget = currentTarget
+    self.options = options.sorted { $0.resolvedProjectName.localizedCaseInsensitiveCompare($1.resolvedProjectName) == .orderedAscending }
+    self.selectedTarget = selectedTarget
+    self.filteredOptions = self.options
     self.onSelect = onSelect
     super.init(nibName: nil, bundle: nil)
   }
@@ -959,267 +1041,229 @@ private final class TargetSelectionViewController: UIViewController, UITableView
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    view.backgroundColor = .clear
+    view.backgroundColor = .systemBackground
+    title = "Capture target"
 
-    backdropButton.translatesAutoresizingMaskIntoConstraints = false
-    backdropButton.backgroundColor = UIColor.black.withAlphaComponent(0.2)
-    backdropButton.addTarget(self, action: #selector(closeSheet), for: .touchUpInside)
-
-    containerView.translatesAutoresizingMaskIntoConstraints = false
-    containerView.backgroundColor = UIColor(white: 0.1, alpha: 0.95)
-    containerView.layer.cornerRadius = 22
-    containerView.layer.borderWidth = 1
-    containerView.layer.borderColor = UIColor.white.withAlphaComponent(0.14).cgColor
-    containerView.clipsToBounds = true
-
-    searchField.translatesAutoresizingMaskIntoConstraints = false
-    searchField.attributedPlaceholder = NSAttributedString(
-      string: "Search projects",
-      attributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.55)]
+    let navBar = UINavigationBar()
+    navBar.translatesAutoresizingMaskIntoConstraints = false
+    let navItem = UINavigationItem(title: "Capture target")
+    navItem.rightBarButtonItem = UIBarButtonItem(
+      barButtonSystemItem: .close,
+      target: self,
+      action: #selector(closeTapped)
     )
-    searchField.textColor = .white
-    searchField.tintColor = .white
-    searchField.clearButtonMode = .whileEditing
-    searchField.returnKeyType = .done
-    searchField.autocorrectionType = .no
-    searchField.autocapitalizationType = .none
-    searchField.delegate = self
-    searchField.backgroundColor = UIColor.black.withAlphaComponent(0.32)
-    searchField.layer.cornerRadius = 16
-    searchField.layer.borderWidth = 1
-    searchField.layer.borderColor = UIColor.white.withAlphaComponent(0.12).cgColor
-    searchField.leftView = UIImageView(
-      image: UIImage(systemName: "magnifyingglass")?.withTintColor(
-        UIColor.white.withAlphaComponent(0.75),
-        renderingMode: .alwaysOriginal
-      )
-    ).wrappedWithPadding(horizontal: 12)
-    searchField.leftViewMode = .always
-    searchField.addTarget(self, action: #selector(searchChanged), for: .editingChanged)
+    navBar.items = [navItem]
+    view.addSubview(navBar)
+
+    searchBar.translatesAutoresizingMaskIntoConstraints = false
+    searchBar.placeholder = "Search projects"
+    searchBar.delegate = self
+    searchBar.searchBarStyle = .minimal
+    view.addSubview(searchBar)
 
     tableView.translatesAutoresizingMaskIntoConstraints = false
-    tableView.backgroundColor = .clear
-    tableView.separatorStyle = .none
-    tableView.showsVerticalScrollIndicator = false
-    tableView.keyboardDismissMode = .onDrag
-    tableView.rowHeight = 52
     tableView.dataSource = self
     tableView.delegate = self
+    tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
+    tableView.tableFooterView = UIView()
+    view.addSubview(tableView)
 
-    view.addSubview(backdropButton)
-    view.addSubview(containerView)
-    containerView.addSubview(searchField)
-    containerView.addSubview(tableView)
-
-    let guide = view.safeAreaLayoutGuide
-    let preferredWidth = containerView.widthAnchor.constraint(equalToConstant: 340)
-    preferredWidth.priority = UILayoutPriority.defaultHigh
     NSLayoutConstraint.activate([
-      backdropButton.topAnchor.constraint(equalTo: view.topAnchor),
-      backdropButton.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-      backdropButton.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-      backdropButton.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+      navBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+      navBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      navBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
-      containerView.topAnchor.constraint(equalTo: guide.topAnchor, constant: 56),
-      containerView.centerXAnchor.constraint(equalTo: guide.centerXAnchor),
-      containerView.leadingAnchor.constraint(greaterThanOrEqualTo: guide.leadingAnchor, constant: 16),
-      containerView.trailingAnchor.constraint(lessThanOrEqualTo: guide.trailingAnchor, constant: -16),
-      preferredWidth,
-      containerView.heightAnchor.constraint(lessThanOrEqualToConstant: 360),
+      searchBar.topAnchor.constraint(equalTo: navBar.bottomAnchor, constant: 8),
+      searchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+      searchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
 
-      searchField.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 12),
-      searchField.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 12),
-      searchField.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -12),
-      searchField.heightAnchor.constraint(equalToConstant: 42),
-
-      tableView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
-      tableView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 8),
-      tableView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -8),
-      tableView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -8)
+      tableView.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 8),
+      tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
     ])
   }
 
-  @objc private func closeSheet() {
+  @objc private func closeTapped() {
     dismiss(animated: true)
   }
 
-  @objc private func searchChanged() {
-    query = searchField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    if query.isEmpty {
+      filteredOptions = options
+    } else {
+      filteredOptions = options.filter { option in
+        option.resolvedProjectName.localizedCaseInsensitiveContains(query) ||
+          (option.mode == .inbox && "Inbox".localizedCaseInsensitiveContains(query))
+      }
+    }
     tableView.reloadData()
   }
 
-  func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-    textField.resignFirstResponder()
-    return true
-  }
-
-  private func selectProject(_ option: NativeCameraTargetOption) {
-    currentTarget = option
-    onSelect(option)
-    dismiss(animated: true)
-  }
-
   func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-    filteredTargets.count
+    filteredOptions.count
   }
 
   func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-    let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-    let option = filteredTargets[indexPath.row]
-    let isSelected: Bool
-    switch option.mode {
-    case .inbox:
-      isSelected = currentTarget.mode == .inbox
-    case .fixedProject:
-      isSelected = currentTarget.mode == .fixedProject &&
-        currentTarget.fixedProjectId == option.fixedProjectId
-    case .lastUsed:
-      isSelected = false
-    }
-
+    let option = filteredOptions[indexPath.row]
+    let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
     cell.textLabel?.text = option.resolvedProjectName
-    cell.textLabel?.textColor = isSelected ? .black : .white
-    cell.textLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
-    cell.imageView?.image = UIImage(
-      systemName: option.mode == .inbox ? "tray" : "folder"
-    )?.withTintColor(
-      isSelected ? .black : .white,
-      renderingMode: .alwaysOriginal
-    )
+    cell.textLabel?.textColor = .label
+    cell.imageView?.image = UIImage(systemName: option.mode == .inbox ? "tray" : "folder")
+    cell.imageView?.tintColor = .label
+    cell.accessoryType = option == selectedTarget ? .checkmark : .none
     cell.backgroundColor = .clear
-    cell.contentView.backgroundColor = isSelected
-      ? UIColor.white.withAlphaComponent(0.96)
-      : UIColor.white.withAlphaComponent(0.04)
-    cell.contentView.layer.cornerRadius = 14
-    cell.contentView.layer.masksToBounds = true
-    cell.tintColor = isSelected ? .black : .white
-    cell.accessoryType = isSelected ? .checkmark : .none
-    cell.selectionStyle = .none
     return cell
   }
 
   func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-    tableView.deselectRow(at: indexPath, animated: true)
-    selectProject(filteredTargets[indexPath.row])
+    let option = filteredOptions[indexPath.row]
+    onSelect(option)
+    dismiss(animated: true)
+  }
+}
+
+private final class NativePhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
+  private let photoId: String
+  private let outputUrl: URL
+  private let captureStartedAt: Date
+  private let target: NativeCameraTargetOption
+  private let completion: (NativeCaptureResult) -> Void
+
+  init(
+    photoId: String,
+    outputUrl: URL,
+    captureStartedAt: Date,
+    target: NativeCameraTargetOption,
+    completion: @escaping (NativeCaptureResult) -> Void
+  ) {
+    self.photoId = photoId
+    self.outputUrl = outputUrl
+    self.captureStartedAt = captureStartedAt
+    self.target = target
+    self.completion = completion
   }
 
-  private var inboxTarget: NativeCameraTargetOption? {
-    targets.first(where: { $0.mode == .inbox })
-  }
-
-  private var projectTargets: [NativeCameraTargetOption] {
-    targets
-      .filter { $0.mode == .fixedProject }
-      .sorted {
-        $0.resolvedProjectName.localizedCaseInsensitiveCompare($1.resolvedProjectName) == .orderedAscending
-      }
-  }
-
-  private var filteredTargets: [NativeCameraTargetOption] {
-    let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    var results: [NativeCameraTargetOption] = []
-    if
-      let inboxTarget,
-      normalizedQuery.isEmpty ||
-        "Inbox".localizedCaseInsensitiveContains(normalizedQuery) ||
-        inboxTarget.resolvedProjectName.localizedCaseInsensitiveContains(normalizedQuery)
-    {
-      results.append(inboxTarget)
+  func photoOutput(
+    _ output: AVCapturePhotoOutput,
+    didFinishProcessingPhoto photo: AVCapturePhoto,
+    error: Error?
+  ) {
+    if let error {
+      completion(.failure(photoId: photoId, message: "Capture failed: \(error.localizedDescription)"))
+      return
     }
-    results.append(
-      contentsOf: projectTargets.filter { option in
-        normalizedQuery.isEmpty ||
-          option.resolvedProjectName.localizedCaseInsensitiveContains(normalizedQuery)
-      }
-    )
-    return results
+
+    guard let data = photo.fileDataRepresentation() else {
+      completion(.failure(photoId: photoId, message: "Capture failed: Missing image data."))
+      return
+    }
+
+    do {
+      try data.write(to: outputUrl, options: .atomic)
+      let capturedAt = ISO8601DateFormatter().string(from: Date())
+      let durationMs = Int(Date().timeIntervalSince(captureStartedAt) * 1000)
+      completion(
+        .success(
+          photoId: photoId,
+          localPath: outputUrl.path,
+          target: target,
+          capturedAt: capturedAt,
+          captureDurationMs: durationMs
+        )
+      )
+    } catch {
+      completion(.failure(photoId: photoId, message: "Capture failed: \(error.localizedDescription)"))
+    }
   }
 }
 
-private final class InsetLabel: UILabel {
-  var textInsets = UIEdgeInsets.zero
+private enum NativeCaptureResult {
+  case success(
+    photoId: String,
+    localPath: String,
+    target: NativeCameraTargetOption,
+    capturedAt: String,
+    captureDurationMs: Int
+  )
+  case failure(photoId: String, message: String)
 
-  override func drawText(in rect: CGRect) {
-    super.drawText(in: rect.inset(by: textInsets))
-  }
-
-  override var intrinsicContentSize: CGSize {
-    let size = super.intrinsicContentSize
-    return CGSize(
-      width: size.width + textInsets.left + textInsets.right,
-      height: size.height + textInsets.top + textInsets.bottom
-    )
-  }
-}
-
-private extension UIView {
-  func wrappedWithPadding(horizontal: CGFloat) -> UIView {
-    let contentSize = intrinsicContentSize
-    let width = max(contentSize.width, bounds.width) + horizontal * 2
-    let height = max(contentSize.height, bounds.height, 20)
-    let container = UIView(frame: CGRect(x: 0, y: 0, width: width, height: height))
-    frame = CGRect(
-      x: horizontal,
-      y: (height - max(contentSize.height, bounds.height)) / 2,
-      width: max(contentSize.width, bounds.width),
-      height: max(contentSize.height, bounds.height)
-    )
-    container.addSubview(self)
-    return container
+  var photoId: String {
+    switch self {
+    case .success(let photoId, _, _, _, _):
+      return photoId
+    case .failure(let photoId, _):
+      return photoId
+    }
   }
 }
 
 private struct NativeCameraLaunchConfig {
   let sessionId: String
-  let currentMode: CaptureTargetMode
+  let currentMode: NativeCaptureTargetMode
   let currentProjectId: Int
   let currentProjectName: String
   let targets: [NativeCameraTargetOption]
-  let settings: NativeCameraSettings
-
-  init(payload: String) throws {
-    let data = Data(payload.utf8)
-    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-    guard let json else {
-      throw NSError(domain: "NativeCamera", code: 1)
-    }
-    sessionId = json["sessionId"] as? String ?? UUID().uuidString
-    currentMode = CaptureTargetMode(storageValue: json["currentMode"] as? String)
-    currentProjectId = json["currentProjectId"] as? Int ?? 0
-    currentProjectName = json["currentProjectName"] as? String ?? "Inbox"
-    let targetPayloads = json["targets"] as? [[String: Any]] ?? []
-    targets = targetPayloads.map(NativeCameraTargetOption.init(json:))
-    settings = NativeCameraSettings(json: json["settings"] as? [String: Any] ?? [:])
-  }
+  let settings: NativeCameraSettingsConfig
 
   func resolveCurrentTarget() -> NativeCameraTargetOption {
-    if let exact = targets.first(where: { option in
+    targets.first { option in
       switch currentMode {
       case .fixedProject, .lastUsed:
         return option.mode == .fixedProject && option.fixedProjectId == currentProjectId
       case .inbox:
         return option.mode == .inbox
       }
-    }) {
-      return exact
-    }
-    return targets.first ?? NativeCameraTargetOption(
-      mode: .inbox,
-      label: "Inbox",
-      resolvedProjectId: currentProjectId,
-      resolvedProjectName: currentProjectName,
-      fixedProjectId: nil
+    } ?? targets.first!
+  }
+
+  static func fromPayload(_ payload: String) throws -> NativeCameraLaunchConfig {
+    let data = Data(payload.utf8)
+    let decoded = try JSONDecoder().decode(DecodedPayload.self, from: data)
+    return NativeCameraLaunchConfig(
+      sessionId: decoded.sessionId,
+      currentMode: NativeCaptureTargetMode(rawValue: decoded.currentMode) ?? .inbox,
+      currentProjectId: decoded.currentProjectId,
+      currentProjectName: decoded.currentProjectName,
+      targets: decoded.targets.map(NativeCameraTargetOption.init),
+      settings: NativeCameraSettingsConfig(decoded: decoded.settings)
     )
+  }
+
+  private struct DecodedPayload: Decodable {
+    let sessionId: String
+    let currentMode: String
+    let currentProjectId: Int
+    let currentProjectName: String
+    let targets: [DecodedTarget]
+    let settings: DecodedSettings
   }
 }
 
-private struct NativeCameraSettings {
+private struct NativeCameraTargetOption: Equatable {
+  let mode: NativeCaptureTargetMode
+  let label: String
+  let resolvedProjectId: Int
+  let resolvedProjectName: String
+  let fixedProjectId: Int?
+
+  init(decoded: DecodedTarget) {
+    mode = NativeCaptureTargetMode(rawValue: decoded.mode) ?? .inbox
+    label = decoded.label
+    resolvedProjectId = decoded.resolvedProjectId
+    resolvedProjectName = decoded.resolvedProjectName
+    fixedProjectId = decoded.fixedProjectId
+  }
+}
+
+private struct NativeCameraSettingsConfig {
   let flashMode: AVCaptureDevice.FlashMode
   let lensPosition: AVCaptureDevice.Position
-  let zoomStop: CGFloat
+  let zoomStop: Double
 
-  init(json: [String: Any]) {
-    switch json["flashMode"] as? String {
+  init(decoded: DecodedSettings) {
+    switch decoded.flashMode {
     case "auto":
       flashMode = .auto
     case "always":
@@ -1227,51 +1271,58 @@ private struct NativeCameraSettings {
     default:
       flashMode = .off
     }
-    lensPosition = (json["lensDirection"] as? String) == "front" ? .front : .back
-    zoomStop = CGFloat((json["zoomStop"] as? Double) ?? 1.0)
+    lensPosition = decoded.lensDirection == "front" ? .front : .back
+    zoomStop = decoded.zoomStop ?? 1.0
   }
 }
 
-private struct NativeCameraTargetOption {
-  let mode: CaptureTargetMode
-  let label: String
-  let resolvedProjectId: Int
-  let resolvedProjectName: String
-  let fixedProjectId: Int?
-
-  init(
-    mode: CaptureTargetMode,
-    label: String,
-    resolvedProjectId: Int,
-    resolvedProjectName: String,
-    fixedProjectId: Int?
-  ) {
-    self.mode = mode
-    self.label = label
-    self.resolvedProjectId = resolvedProjectId
-    self.resolvedProjectName = resolvedProjectName
-    self.fixedProjectId = fixedProjectId
-  }
-
-  init(json: [String: Any]) {
-    mode = CaptureTargetMode(storageValue: json["mode"] as? String)
-    label = json["label"] as? String ?? ""
-    resolvedProjectId = json["resolvedProjectId"] as? Int ?? 0
-    resolvedProjectName = json["resolvedProjectName"] as? String ?? "Inbox"
-    fixedProjectId = json["fixedProjectId"] as? Int
-  }
-}
-
-private enum CaptureTargetMode: String {
+private enum NativeCaptureTargetMode: String {
   case inbox = "inbox"
   case lastUsed = "last_used"
   case fixedProject = "fixed_project"
 
-  init(storageValue: String?) {
-    self = CaptureTargetMode(rawValue: storageValue ?? "") ?? .inbox
+  var wireValue: String { rawValue }
+}
+
+private struct DecodedTarget: Decodable {
+  let mode: String
+  let label: String
+  let resolvedProjectId: Int
+  let resolvedProjectName: String
+  let fixedProjectId: Int?
+}
+
+private struct DecodedSettings: Decodable {
+  let flashMode: String?
+  let lensDirection: String?
+  let zoomStop: Double?
+}
+
+private enum NativeCameraError: LocalizedError {
+  case noCompatibleCamera
+
+  var errorDescription: String? {
+    switch self {
+    case .noCompatibleCamera:
+      return "No compatible camera was found on this device."
+    }
+  }
+}
+
+private final class PaddingLabel: UILabel {
+  var insets = UIEdgeInsets.zero
+
+  override func drawText(in rect: CGRect) {
+    super.drawText(in: rect.inset(by: insets))
   }
 
-  var storageValue: String { rawValue }
+  override var intrinsicContentSize: CGSize {
+    let size = super.intrinsicContentSize
+    return CGSize(
+      width: size.width + insets.left + insets.right,
+      height: size.height + insets.top + insets.bottom
+    )
+  }
 }
 
 private extension AVCaptureDevice.FlashMode {
@@ -1285,21 +1336,10 @@ private extension AVCaptureDevice.FlashMode {
       return "off"
     }
   }
-
-  var label: String {
-    switch self {
-    case .auto:
-      return "Flash Auto"
-    case .on:
-      return "Flash On"
-    default:
-      return "Flash Off"
-    }
-  }
 }
 
 private extension AVCaptureDevice.Position {
-  var flutterName: String {
+  var flutterLensName: String {
     self == .front ? "front" : "back"
   }
 }

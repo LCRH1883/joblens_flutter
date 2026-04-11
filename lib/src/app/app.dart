@@ -240,15 +240,25 @@ class _AppShellState extends State<AppShell> {
   int _currentTab = 0;
   int _lastNonCameraTab = 1;
   final _nonCameraPages = const [GalleryPage(), ProjectsPage(), SettingsPage()];
+  late final PageController _nonCameraPageController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nonCameraPageController = PageController(initialPage: _lastNonCameraTab - 1);
+  }
+
+  @override
+  void dispose() {
+    _nonCameraPageController.dispose();
+    super.dispose();
+  }
 
   void showSettingsTab() {
     if (!mounted) {
       return;
     }
-    setState(() {
-      _lastNonCameraTab = 3;
-      _currentTab = 3;
-    });
+    _selectTab(3);
   }
 
   @override
@@ -261,14 +271,7 @@ class _AppShellState extends State<AppShell> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentTab,
-        onDestinationSelected: (index) {
-          setState(() {
-            if (index != 0) {
-              _lastNonCameraTab = index;
-            }
-            _currentTab = index;
-          });
-        },
+        onDestinationSelected: _selectTab,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.photo_camera_outlined),
@@ -294,39 +297,66 @@ class _AppShellState extends State<AppShell> {
   void _onTabSwipeEnd(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
     if (velocity <= -450 && _currentTab < 3) {
-      setState(() {
-        final nextTab = _currentTab + 1;
-        if (nextTab != 0) {
-          _lastNonCameraTab = nextTab;
-        }
-        _currentTab = nextTab;
-      });
+      _selectTab(_currentTab + 1);
       return;
     }
     if (velocity >= 450 && _currentTab > 0) {
-      setState(() {
-        final nextTab = _currentTab - 1;
-        if (nextTab != 0) {
-          _lastNonCameraTab = nextTab;
+      _selectTab(_currentTab - 1);
+    }
+  }
+
+  void _selectTab(int index) {
+    if (!mounted || index == _currentTab) {
+      return;
+    }
+
+    setState(() {
+      if (index != 0) {
+        _lastNonCameraTab = index;
+      }
+      _currentTab = index;
+    });
+
+    if (index != 0 && _nonCameraPageController.hasClients) {
+      _nonCameraPageController.jumpToPage(index - 1);
+      return;
+    }
+
+    if (index != 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_nonCameraPageController.hasClients) {
+          return;
         }
-        _currentTab = nextTab;
+        _nonCameraPageController.jumpToPage(index - 1);
       });
     }
   }
 
   Widget _buildCurrentPage() {
     if (_currentTab == 0) {
-      return JoblensCameraPage(
-        onSessionClosed: () {
-          if (!mounted) {
-            return;
-          }
-          setState(() {
-            _currentTab = _lastNonCameraTab;
-          });
-        },
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          _buildNonCameraPageView(),
+          JoblensCameraPage(
+            onSessionClosed: () {
+              if (!mounted) {
+                return;
+              }
+              _selectTab(_lastNonCameraTab);
+            },
+          ),
+        ],
       );
     }
-    return IndexedStack(index: _currentTab - 1, children: _nonCameraPages);
+    return _buildNonCameraPageView();
+  }
+
+  Widget _buildNonCameraPageView() {
+    return PageView(
+      controller: _nonCameraPageController,
+      physics: const NeverScrollableScrollPhysics(),
+      children: _nonCameraPages,
+    );
   }
 }
