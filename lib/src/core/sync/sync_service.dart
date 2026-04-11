@@ -111,23 +111,52 @@ class SyncService {
   }
 
   Future<void> _ensureDeviceRegistration() async {
-    final client = _backendApiClient;
-    if (client == null) {
-      return;
-    }
-
     final existing = await _db.getBackendDeviceId();
     if (existing != null && existing.trim().isNotEmpty) {
       return;
     }
+    await registerCurrentDevice();
+  }
+
+  Future<RegisterDeviceResponse> registerCurrentDevice() async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw ApiException.authMissing();
+    }
 
     final clientDeviceId = await _db.getOrCreateClientDeviceId();
-    final backendDeviceId = await client.registerDevice(
+    final response = await client.registerDevice(
       clientDeviceId: clientDeviceId,
       platform: Platform.operatingSystem,
       deviceName: Platform.localHostname,
+      osVersion: Platform.operatingSystemVersion,
     );
-    await _db.setBackendDeviceId(backendDeviceId);
+    await _db.setBackendDeviceId(response.deviceId);
+    return response;
+  }
+
+  Future<SignedInDevicesResponse> listSignedInDevices() async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw ApiException.authMissing();
+    }
+    return client.listDevices();
+  }
+
+  Future<void> signOutDevice(String deviceId) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw ApiException.authMissing();
+    }
+    await client.signOutDevice(deviceId);
+  }
+
+  Future<SessionStatusResponse> getSessionStatus() async {
+    final client = _backendApiClient;
+    if (client == null) {
+      throw ApiException.authMissing();
+    }
+    return client.getSessionStatus();
   }
 
   Future<void> _backfillLocalSyncState() async {

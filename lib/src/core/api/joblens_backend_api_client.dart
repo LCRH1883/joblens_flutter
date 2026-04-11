@@ -108,11 +108,12 @@ class JoblensBackendApiClient {
     );
   }
 
-  Future<String> registerDevice({
+  Future<RegisterDeviceResponse> registerDevice({
     required String clientDeviceId,
     required String platform,
     String? appVersion,
     String? deviceName,
+    String? osVersion,
   }) async {
     final map = await _authorizedJsonRequest(
       method: 'POST',
@@ -122,15 +123,33 @@ class JoblensBackendApiClient {
         'platform': platform,
         if (appVersion != null && appVersion.isNotEmpty) 'appVersion': appVersion,
         if (deviceName != null && deviceName.isNotEmpty) 'deviceName': deviceName,
+        if (osVersion != null && osVersion.isNotEmpty) 'osVersion': osVersion,
       },
     );
-    final rawDevice = map['device'];
-    final device = rawDevice is Map<String, dynamic>
-        ? rawDevice
-        : rawDevice is Map
-        ? rawDevice.map((key, value) => MapEntry('$key', value))
-        : map;
-    return device['id']! as String;
+    return RegisterDeviceResponse.fromMap(map);
+  }
+
+  Future<SignedInDevicesResponse> listDevices() async {
+    final map = await _authorizedJsonRequest(
+      method: 'GET',
+      path: '/devices',
+    );
+    return SignedInDevicesResponse.fromMap(map);
+  }
+
+  Future<void> signOutDevice(String deviceId) async {
+    await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/devices/$deviceId/sign-out',
+    );
+  }
+
+  Future<SessionStatusResponse> getSessionStatus() async {
+    final map = await _authorizedJsonRequest(
+      method: 'GET',
+      path: '/session/status',
+    );
+    return SessionStatusResponse.fromMap(map);
   }
 
   Future<SyncEventsResponse> getSyncEvents({
@@ -590,6 +609,11 @@ class JoblensBackendApiClient {
     return switch (method) {
       'POST' => _httpClient.post(uri, headers: headers, body: jsonEncode(body)),
       'GET' => _httpClient.get(uri, headers: headers),
+      'PATCH' => _httpClient.patch(
+        uri,
+        headers: headers,
+        body: jsonEncode(body),
+      ),
       _ => throw ArgumentError.value(method, 'method', 'Unsupported method'),
     };
   }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/models/cloud_provider.dart';
+import '../core/models/app_launch_destination.dart';
 import '../core/models/app_theme_mode.dart';
 import '../features/auth/auth_page.dart';
 import '../features/auth/auth_state.dart';
@@ -24,26 +26,41 @@ class JoblensApp extends ConsumerStatefulWidget {
   ConsumerState<JoblensApp> createState() => _JoblensAppState();
 }
 
-class _JoblensAppState extends ConsumerState<JoblensApp> {
+class _JoblensAppState extends ConsumerState<JoblensApp>
+    with WidgetsBindingObserver {
   final _navigatorKey = GlobalKey<NavigatorState>();
   final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
   final _appShellKey = GlobalKey<_AppShellState>();
   bool _showingPasswordRecovery = false;
   bool _showingAuthPrompt = false;
   int _handledReauthenticationRequest = 0;
+  int _handledForcedSignOutNotice = 0;
   StreamSubscription<Uri>? _appLinkSubscription;
+  RealtimeChannel? _deviceSessionChannel;
   String? _lastHandledProviderCallback;
+  String? _listeningAuthSessionId;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_installAppLinkHandling());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     unawaited(_appLinkSubscription?.cancel());
+    unawaited(_disposeDeviceSessionChannel());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted || state != AppLifecycleState.resumed) {
+      return;
+    }
+    unawaited(_handleAppResume());
   }
 
   @override
@@ -60,6 +77,7 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       unawaited(
         ref.read(joblensStoreProvider).syncAuthSession(authState?.session),
       );
+      unawaited(_syncDeviceSessionChannel(authState?.session));
 
       if (authState?.event == AuthChangeEvent.passwordRecovery) {
         unawaited(_presentPasswordRecovery());
@@ -79,8 +97,25 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       }
       unawaited(_presentAuthPrompt());
     });
+    ref.listen(joblensStoreListenableProvider, (_, next) {
+      if (!mounted) {
+        return;
+      }
+      final noticeCount = next.forcedSignOutNoticeCount;
+      if (noticeCount <= _handledForcedSignOutNotice) {
+        return;
+      }
+      _handledForcedSignOutNotice = noticeCount;
+      final message =
+          next.forcedSignOutMessage ?? 'You were signed out from another device.';
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    });
 
     final store = ref.watch(joblensStoreListenableProvider);
+    final isAuthConfigured = ref.watch(authConfigurationProvider);
+    final authState = ref.watch(authStateStreamProvider);
     final lightScheme = ColorScheme.fromSeed(
       seedColor: const Color(0xFF276749),
     );
@@ -109,7 +144,42 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
         AppThemeMode.light => ThemeMode.light,
         AppThemeMode.dark => ThemeMode.dark,
       },
-      home: AppShell(key: _appShellKey),
+      home: _buildHome(
+        authState: authState,
+        isAuthConfigured: isAuthConfigured,
+        store: store,
+      ),
+    );
+  }
+
+  Widget _buildHome({
+    required AsyncValue<AuthState?> authState,
+    required bool isAuthConfigured,
+    required JoblensStore store,
+  }) {
+    if (!isAuthConfigured) {
+      return AppShell(
+        key: _appShellKey,
+        initialLaunchDestination: store.appLaunchDestination,
+      );
+    }
+
+    if (authState.isLoading && authState.valueOrNull == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final session = authState.valueOrNull?.session;
+    if (session?.user == null) {
+      return const AuthPage();
+    }
+
+    return AppShell(
+      key: _appShellKey,
+      initialLaunchDestination: store.launchDestinationForSession(
+        isAuthenticated: true,
+      ),
     );
   }
 
@@ -131,6 +201,86 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
     } catch (error, stackTrace) {
       debugPrint('Joblens initial app-link error: $error\n$stackTrace');
     }
+  }
+
+  Future<void> _handleAppResume() async {
+    final authState = ref.read(authStateStreamProvider).valueOrNull;
+    final session = authState?.session;
+    if (session?.user == null) {
+      await _disposeDeviceSessionChannel();
+      return;
+    }
+    final store = ref.read(joblensStoreProvider);
+    await store.registerCurrentDeviceSession();
+    await store.checkCurrentSessionStatus();
+  }
+
+  Future<void> _syncDeviceSessionChannel(Session? session) async {
+    final authSessionId = session == null
+        ? null
+        : _extractAuthSessionId(session.accessToken);
+    if (authSessionId == _listeningAuthSessionId) {
+      return;
+    }
+
+    await _disposeDeviceSessionChannel();
+    _listeningAuthSessionId = authSessionId;
+    if (authSessionId == null || authSessionId.isEmpty) {
+      return;
+    }
+
+    final store = ref.read(joblensStoreProvider);
+    final channel = Supabase.instance.client.channel(
+      'device-session:$authSessionId',
+    );
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.update,
+      schema: 'public',
+      table: 'device_auth_sessions',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'auth_session_id',
+        value: authSessionId,
+      ),
+      callback: (payload) {
+        final newRecord = payload.newRecord;
+        final status = newRecord['status']?.toString();
+        if (status != null && status != 'active') {
+          unawaited(store.checkCurrentSessionStatus());
+        }
+      },
+    );
+    channel.subscribe();
+    _deviceSessionChannel = channel;
+  }
+
+  Future<void> _disposeDeviceSessionChannel() async {
+    final channel = _deviceSessionChannel;
+    _deviceSessionChannel = null;
+    _listeningAuthSessionId = null;
+    if (channel == null) {
+      return;
+    }
+    await Supabase.instance.client.removeChannel(channel);
+  }
+
+  String? _extractAuthSessionId(String accessToken) {
+    final parts = accessToken.split('.');
+    if (parts.length < 2) {
+      return null;
+    }
+    try {
+      final normalized = base64Url.normalize(parts[1]);
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(normalized)),
+      );
+      if (payload is Map && payload['session_id'] is String) {
+        return payload['session_id'] as String;
+      }
+    } catch (_) {
+      // Ignore malformed access tokens and skip realtime subscription.
+    }
+    return null;
   }
 
   Future<void> _handleIncomingUri(Uri uri, {required String source}) async {
@@ -230,15 +380,19 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
 }
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  const AppShell({super.key, required this.initialLaunchDestination});
+
+  final AppLaunchDestination initialLaunchDestination;
 
   @override
   State<AppShell> createState() => _AppShellState();
 }
 
 class _AppShellState extends State<AppShell> {
-  int _currentTab = 0;
-  int _lastNonCameraTab = 1;
+  late int _currentTab = _tabIndexForDestination(
+    widget.initialLaunchDestination,
+  );
+  late int _lastNonCameraTab = _currentTab == 0 ? 1 : _currentTab;
   final _nonCameraPages = const [GalleryPage(), ProjectsPage(), SettingsPage()];
   late final PageController _nonCameraPageController;
 
@@ -358,5 +512,12 @@ class _AppShellState extends State<AppShell> {
       physics: const NeverScrollableScrollPhysics(),
       children: _nonCameraPages,
     );
+  }
+
+  static int _tabIndexForDestination(AppLaunchDestination destination) {
+    return switch (destination) {
+      AppLaunchDestination.camera => 0,
+      AppLaunchDestination.projects => 2,
+    };
   }
 }

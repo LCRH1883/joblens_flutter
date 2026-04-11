@@ -1281,13 +1281,18 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   }
 
   @override
-  Future<String> registerDevice({
+  Future<RegisterDeviceResponse> registerDevice({
     required String clientDeviceId,
     required String platform,
     String? appVersion,
     String? deviceName,
+    String? osVersion,
   }) async {
-    return 'device-backend-1';
+    return const RegisterDeviceResponse(
+      deviceId: 'device-backend-1',
+      isCurrent: true,
+      deviceSessionId: 'device-session-1',
+    );
   }
 
   @override

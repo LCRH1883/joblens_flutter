@@ -11,6 +11,7 @@ import '../../core/models/sync_job.dart';
 import '../../core/ui/user_facing_error.dart';
 import '../auth/auth_page.dart';
 import '../auth/auth_state.dart';
+import 'devices_page.dart';
 
 class SyncPage extends ConsumerStatefulWidget {
   const SyncPage({super.key});
@@ -195,6 +196,32 @@ class _SyncPageState extends ConsumerState<SyncPage>
                         : null,
                   );
                 }(),
+            const SizedBox(height: 10),
+            Text(
+              'Devices',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.devices_outlined),
+                title: const Text('Signed-in devices'),
+                subtitle: const Text(
+                  'View and sign out other devices using your Joblens account.',
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                enabled: canSyncWithCloud,
+                onTap: !canSyncWithCloud
+                    ? null
+                    : () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const DevicesPage(),
+                          ),
+                        ),
+              ),
+            ),
           ],
         ),
       ),

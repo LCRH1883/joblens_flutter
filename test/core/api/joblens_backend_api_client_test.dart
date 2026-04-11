@@ -145,6 +145,100 @@ void main() {
     );
   });
 
+  test('register device parses device session payload', () async {
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'device': {
+              'id': 'device-1',
+            },
+            'isCurrent': true,
+            'deviceSessionId': 'session-1',
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final response = await client.registerDevice(
+      clientDeviceId: 'client-1',
+      platform: 'ios',
+      deviceName: 'iPhone',
+      osVersion: '18.4',
+    );
+
+    expect(response.deviceId, 'device-1');
+    expect(response.isCurrent, isTrue);
+    expect(response.deviceSessionId, 'session-1');
+  });
+
+  test('lists signed-in devices', () async {
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'devices': [
+              {
+                'deviceId': 'device-1',
+                'deviceName': 'John’s iPhone',
+                'platform': 'ios',
+                'osVersion': '18.4',
+                'appVersion': '1.0.0',
+                'approxLocation': {
+                  'city': 'Vancouver',
+                  'region': 'BC',
+                  'countryCode': 'CA',
+                  'display': 'Vancouver, BC, CA',
+                },
+                'signedInAt': '2026-04-11T10:00:00.000Z',
+                'lastSeenAt': '2026-04-11T11:00:00.000Z',
+                'isCurrent': true,
+                'canSignOut': false,
+              },
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final response = await client.listDevices();
+    expect(response.devices, hasLength(1));
+    expect(response.devices.single.deviceName, 'John’s iPhone');
+    expect(response.devices.single.approxLocation?.display, 'Vancouver, BC, CA');
+    expect(response.devices.single.isCurrent, isTrue);
+    expect(response.devices.single.canSignOut, isFalse);
+  });
+
+  test('gets device session status', () async {
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'status': 'revoked',
+            'reason': 'remote_user_signout',
+            'message': 'You were signed out from another device.',
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final response = await client.getSessionStatus();
+    expect(response.isRevoked, isTrue);
+    expect(response.reason, 'remote_user_signout');
+  });
+
   test('maps uploaded_object_not_found backend error', () async {
     final client = JoblensBackendApiClient(
       baseUrl: 'https://example.supabase.co/functions/v1/api/v1',

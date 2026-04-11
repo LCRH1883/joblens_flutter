@@ -11,6 +11,8 @@ import 'package:supabase_flutter/supabase_flutter.dart' show Session;
 
 import '../core/db/app_database.dart';
 import '../core/api/api_exception.dart';
+import '../core/api/backend_api_models.dart';
+import '../core/models/app_launch_destination.dart';
 import '../core/models/app_theme_mode.dart';
 import '../core/models/capture_target_preference.dart';
 import '../core/models/cloud_provider.dart';
@@ -62,19 +64,24 @@ class JoblensStore extends ChangeNotifier {
   bool _isDisposed = false;
   String? _lastError;
   int _reauthenticationRequestCount = 0;
+  int _forcedSignOutNoticeCount = 0;
+  String? _forcedSignOutMessage;
   Future<void> _pendingBackgroundSync = Future.value();
   Future<void> _pendingLocalIngest = Future.value();
   ProjectSortMode _projectSortMode = ProjectSortMode.name;
+  AppLaunchDestination _appLaunchDestination = AppLaunchDestination.camera;
   AppThemeMode _appThemeMode = AppThemeMode.system;
   LibraryImportMode _libraryImportMode = LibraryImportMode.copy;
   CaptureTargetPreference _captureTargetPreference =
       CaptureTargetPreference.defaults;
+  bool _hasStoredAppLaunchDestination = false;
 
   List<PhotoAsset> _assets = const [];
   Map<String, AssetSyncStatus> _assetSyncStatuses = const {};
   List<Project> _projects = const [];
   Map<int, int> _projectCounts = const {};
   List<ProviderAccount> _providers = const [];
+  List<SignedInDevice> _signedInDevices = const [];
   List<SyncJob> _syncJobs = const [];
   List<SyncLogEntry> _syncLogs = const [];
 
@@ -82,19 +89,32 @@ class JoblensStore extends ChangeNotifier {
   bool get isBusy => _isBusy;
   String? get lastError => _lastError;
   int get reauthenticationRequestCount => _reauthenticationRequestCount;
+  int get forcedSignOutNoticeCount => _forcedSignOutNoticeCount;
+  String? get forcedSignOutMessage => _forcedSignOutMessage;
   List<PhotoAsset> get assets => _assets;
   AssetSyncStatus assetSyncStatusFor(String assetId) =>
       _assetSyncStatuses[assetId] ?? AssetSyncStatus.local;
   List<Project> get projects => _sortProjects(_projects, _projectSortMode);
   Map<int, int> get projectCounts => _projectCounts;
   List<ProviderAccount> get providers => _providers;
+  List<SignedInDevice> get signedInDevices => _signedInDevices;
   List<SyncJob> get syncJobs => _syncJobs;
   List<SyncLogEntry> get syncLogs => _syncLogs;
   ProjectSortMode get projectSortMode => _projectSortMode;
+  AppLaunchDestination get appLaunchDestination => _appLaunchDestination;
   AppThemeMode get appThemeMode => _appThemeMode;
   LibraryImportMode get libraryImportMode => _libraryImportMode;
   CaptureTargetPreference get captureTargetPreference =>
       _captureTargetPreference;
+
+  AppLaunchDestination launchDestinationForSession({
+    required bool isAuthenticated,
+  }) {
+    if (isAuthenticated && !_hasStoredAppLaunchDestination) {
+      return AppLaunchDestination.projects;
+    }
+    return _appLaunchDestination;
+  }
 
   Future<void> initialize() async {
     await _synchronizeAuthUser(_currentAuthUserIdProvider?.call());
@@ -103,10 +123,88 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> syncAuthSession(Session? session) async {
-    if (session?.user.id != null) {
+    final sessionUserId = session?.user.id.trim();
+    final currentUserId = _currentAuthUserIdProvider?.call()?.trim();
+    final effectiveUserId = (sessionUserId != null && sessionUserId.isNotEmpty)
+        ? sessionUserId
+        : (currentUserId != null && currentUserId.isNotEmpty)
+        ? currentUserId
+        : null;
+    if (effectiveUserId != null) {
       _lastError = null;
     }
-    await _synchronizeAuthUser(session?.user.id);
+    await _synchronizeAuthUser(
+      effectiveUserId,
+      allowClearingForNull: effectiveUserId == null,
+    );
+    if (effectiveUserId != null) {
+      await registerCurrentDeviceSession(refreshDevicesAfterRegister: true);
+    } else {
+      _signedInDevices = const [];
+      _notifyListenersIfActive();
+    }
+  }
+
+  Future<void> registerCurrentDeviceSession({
+    bool refreshDevicesAfterRegister = false,
+  }) async {
+    final authUserId = _currentAuthUserIdProvider?.call();
+    if (authUserId == null || authUserId.trim().isEmpty) {
+      return;
+    }
+    try {
+      await _syncService.registerCurrentDevice();
+      if (refreshDevicesAfterRegister) {
+        final response = await _syncService.listSignedInDevices();
+        final devices = response.devices.toList(growable: false)
+          ..sort((a, b) {
+            if (a.isCurrent != b.isCurrent) {
+              return a.isCurrent ? -1 : 1;
+            }
+            final aSeen = a.lastSeenAt?.millisecondsSinceEpoch ?? 0;
+            final bSeen = b.lastSeenAt?.millisecondsSinceEpoch ?? 0;
+            return bSeen.compareTo(aSeen);
+          });
+        _signedInDevices = devices;
+      }
+    } catch (error, stackTrace) {
+      await _handleError(error);
+      if (!_requiresReauthentication(error) && !_requiresForcedLogout(error)) {
+        _lastError = error.toString();
+      }
+      if (kDebugMode) {
+        debugPrint('Device registration failed: $error\n$stackTrace');
+      }
+    }
+    _notifyListenersIfActive();
+  }
+
+  Future<void> checkCurrentSessionStatus() async {
+    final authUserId = _currentAuthUserIdProvider?.call();
+    if (authUserId == null || authUserId.trim().isEmpty) {
+      return;
+    }
+    try {
+      final status = await _syncService.getSessionStatus();
+      if (status.isRevoked) {
+        await _forceLocalSignOut(
+          status.message ?? 'You were signed out from another device.',
+        );
+        return;
+      }
+      if (status.registrationRequired) {
+        await registerCurrentDeviceSession();
+      }
+    } catch (error, stackTrace) {
+      await _handleError(error);
+      if (!_requiresReauthentication(error) && !_requiresForcedLogout(error)) {
+        _lastError = error.toString();
+      }
+      if (kDebugMode) {
+        debugPrint('Session status check failed: $error\n$stackTrace');
+      }
+      _notifyListenersIfActive();
+    }
   }
 
   Future<void> signOut() async {
@@ -115,6 +213,52 @@ class JoblensStore extends ChangeNotifier {
       if (signOutAction != null) {
         await signOutAction();
       }
+      await _synchronizeAuthUser(null, allowClearingForNull: true);
+    });
+  }
+
+  Future<void> refreshSignedInDevices() async {
+    final authUserId = _currentAuthUserIdProvider?.call();
+    if (authUserId == null || authUserId.trim().isEmpty) {
+      _signedInDevices = const [];
+      _notifyListenersIfActive();
+      return;
+    }
+
+    try {
+      await registerCurrentDeviceSession(refreshDevicesAfterRegister: false);
+      final response = await _syncService.listSignedInDevices();
+      final devices = response.devices.toList(growable: false)
+        ..sort((a, b) {
+          if (a.isCurrent != b.isCurrent) {
+            return a.isCurrent ? -1 : 1;
+          }
+          final aSeen = a.lastSeenAt?.millisecondsSinceEpoch ?? 0;
+          final bSeen = b.lastSeenAt?.millisecondsSinceEpoch ?? 0;
+          return bSeen.compareTo(aSeen);
+        });
+      _signedInDevices = devices;
+      _lastError = null;
+    } catch (error, stackTrace) {
+      await _handleError(error);
+      if (!_requiresReauthentication(error) && !_requiresForcedLogout(error)) {
+        _lastError = error.toString();
+      }
+      if (kDebugMode) {
+        debugPrint('Signed-in device refresh failed: $error\n$stackTrace');
+      }
+    }
+    _notifyListenersIfActive();
+  }
+
+  Future<void> signOutDeviceSession(String deviceId) async {
+    await _runBusy(() async {
+      _signedInDevices = _signedInDevices
+          .where((device) => device.deviceId != deviceId)
+          .toList(growable: false);
+      _notifyListenersIfActive();
+      await _syncService.signOutDevice(deviceId);
+      await refreshSignedInDevices();
     });
   }
 
@@ -680,6 +824,17 @@ class JoblensStore extends ChangeNotifier {
     _notifyListenersIfActive();
   }
 
+  Future<void> setAppLaunchDestination(AppLaunchDestination destination) async {
+    if (_hasStoredAppLaunchDestination &&
+        _appLaunchDestination == destination) {
+      return;
+    }
+    _appLaunchDestination = destination;
+    _hasStoredAppLaunchDestination = true;
+    await _database.setAppLaunchDestination(destination);
+    _notifyListenersIfActive();
+  }
+
   Future<void> setLibraryImportMode(LibraryImportMode mode) async {
     if (_libraryImportMode == mode) {
       return;
@@ -878,6 +1033,11 @@ class JoblensStore extends ChangeNotifier {
     _providers = await _database.getProviderAccounts();
     await _refreshAssetSyncStatuses();
     _projectSortMode = await _database.getProjectSortMode();
+    final storedAppLaunchDestination =
+        await _database.getStoredAppLaunchDestination();
+    _hasStoredAppLaunchDestination = storedAppLaunchDestination != null;
+    _appLaunchDestination =
+        storedAppLaunchDestination ?? AppLaunchDestination.camera;
     _appThemeMode = await _database.getAppThemeMode();
     _libraryImportMode = await _database.getLibraryImportMode();
     _captureTargetPreference = await _database.getCaptureTargetPreference();
@@ -951,19 +1111,41 @@ class JoblensStore extends ChangeNotifier {
     await _pendingBackgroundSync;
   }
 
-  Future<void> _synchronizeAuthUser(String? userId) async {
+  Future<void> _synchronizeAuthUser(
+    String? userId, {
+    bool allowClearingForNull = false,
+  }) async {
     final normalizedUserId = userId?.trim();
     final storedUserId = await _database.getStoredAuthUserId();
+    final storedLaunchDestination =
+        await _database.getStoredAppLaunchDestination();
+    final shouldResetForUserSwitch =
+        storedUserId != null &&
+        normalizedUserId != null &&
+        storedUserId != normalizedUserId;
+    final shouldResetForSignOut =
+        allowClearingForNull &&
+        storedUserId != null &&
+        normalizedUserId == null;
     final shouldResetLocalData =
-        storedUserId != null && storedUserId != normalizedUserId;
+        shouldResetForUserSwitch || shouldResetForSignOut;
+    final shouldSeedProjectsLaunchDestination =
+        storedLaunchDestination == null &&
+        storedUserId == null &&
+        normalizedUserId != null;
 
     if (shouldResetLocalData) {
       await _database.clearUserScopedData();
       await _mediaStorage.clearAll();
+      _signedInDevices = const [];
     }
 
     if (storedUserId != normalizedUserId) {
       await _database.setStoredAuthUserId(normalizedUserId);
+    }
+
+    if (shouldSeedProjectsLaunchDestination) {
+      await _database.setAppLaunchDestination(AppLaunchDestination.projects);
     }
 
     await _database.normalizeAssetMediaPaths(_mediaStorage.rootDir.path);
@@ -973,6 +1155,10 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> _handleError(Object error) async {
+    if (_requiresForcedLogout(error)) {
+      await _forceLocalSignOut('You were signed out from another device.');
+      return;
+    }
     if (!_requiresReauthentication(error)) {
       return;
     }
@@ -999,6 +1185,32 @@ class JoblensStore extends ChangeNotifier {
     }
 
     return error.code == 'unauthorized';
+  }
+
+  bool _requiresForcedLogout(Object error) {
+    if (error is! ApiException) {
+      return false;
+    }
+    return error.code == 'device_session_revoked' ||
+        error.code == 'auth_session_invalid';
+  }
+
+  Future<void> _forceLocalSignOut(String message) async {
+    final signOutAction = _signOutAction;
+    if (signOutAction != null) {
+      try {
+        await signOutAction();
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint('Forced local sign-out failed: $error');
+        }
+      }
+    }
+    _forcedSignOutMessage = message;
+    _forcedSignOutNoticeCount += 1;
+    _lastError = null;
+    await _synchronizeAuthUser(null, allowClearingForNull: true);
+    _notifyListenersIfActive();
   }
 
   Future<File?> _resolveLibraryAssetFile(

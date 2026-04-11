@@ -164,6 +164,153 @@ class ProviderAuthSessionResult {
   }
 }
 
+class RegisterDeviceResponse {
+  const RegisterDeviceResponse({
+    required this.deviceId,
+    required this.isCurrent,
+    this.deviceSessionId,
+  });
+
+  final String deviceId;
+  final bool isCurrent;
+  final String? deviceSessionId;
+
+  factory RegisterDeviceResponse.fromMap(Map<String, dynamic> map) {
+    final rawDevice = map['device'];
+    final device = rawDevice is Map<String, dynamic>
+        ? rawDevice
+        : rawDevice is Map
+        ? rawDevice.map((key, value) => MapEntry('$key', value))
+        : map;
+    return RegisterDeviceResponse(
+      deviceId: _asString(device['id'] ?? map['deviceId']),
+      isCurrent: _asBool(map['isCurrent'] ?? true),
+      deviceSessionId: _asNullableString(
+        map['deviceSessionId'] ?? map['device_session_id'],
+      ),
+    );
+  }
+}
+
+class ApproxLocation {
+  const ApproxLocation({
+    this.city,
+    this.region,
+    this.countryCode,
+    this.display,
+  });
+
+  final String? city;
+  final String? region;
+  final String? countryCode;
+  final String? display;
+
+  factory ApproxLocation.fromMap(Map<String, dynamic> map) {
+    return ApproxLocation(
+      city: _asNullableString(map['city']),
+      region: _asNullableString(map['region']),
+      countryCode: _asNullableString(
+        map['countryCode'] ?? map['country_code'],
+      ),
+      display: _asNullableString(map['display']),
+    );
+  }
+}
+
+class SignedInDevice {
+  const SignedInDevice({
+    required this.deviceId,
+    required this.deviceName,
+    required this.platform,
+    required this.signedInAt,
+    required this.lastSeenAt,
+    required this.lastSyncAt,
+    required this.isCurrent,
+    required this.canSignOut,
+    this.osVersion,
+    this.appVersion,
+    this.approxLocation,
+  });
+
+  final String deviceId;
+  final String deviceName;
+  final String platform;
+  final String? osVersion;
+  final String? appVersion;
+  final ApproxLocation? approxLocation;
+  final DateTime? signedInAt;
+  final DateTime? lastSeenAt;
+  final DateTime? lastSyncAt;
+  final bool isCurrent;
+  final bool canSignOut;
+
+  factory SignedInDevice.fromMap(Map<String, dynamic> map) {
+    final location = _asMap(map['approxLocation'] ?? map['approx_location']);
+    return SignedInDevice(
+      deviceId: _asString(map['deviceId'] ?? map['device_id']),
+      deviceName: _asString(map['deviceName'] ?? map['device_name']),
+      platform: _asString(map['platform'], fallback: 'unknown'),
+      osVersion: _asNullableString(map['osVersion'] ?? map['os_version']),
+      appVersion: _asNullableString(map['appVersion'] ?? map['app_version']),
+      approxLocation: location.isEmpty ? null : ApproxLocation.fromMap(location),
+      signedInAt: _asNullableDateTime(
+        map['signedInAt'] ?? map['signed_in_at'],
+      ),
+      lastSeenAt: _asNullableDateTime(
+        map['lastSeenAt'] ?? map['last_seen_at'],
+      ),
+      lastSyncAt: _asNullableDateTime(
+        map['lastSyncAt'] ?? map['last_sync_at'],
+      ),
+      isCurrent: _asBool(map['isCurrent'] ?? map['is_current']),
+      canSignOut: _asBool(map['canSignOut'] ?? map['can_sign_out']),
+    );
+  }
+}
+
+class SignedInDevicesResponse {
+  const SignedInDevicesResponse({required this.devices});
+
+  final List<SignedInDevice> devices;
+
+  factory SignedInDevicesResponse.fromMap(Map<String, dynamic> map) {
+    final raw = _asList(map['devices']);
+    return SignedInDevicesResponse(
+      devices: _asMapList(raw)
+          .map(SignedInDevice.fromMap)
+          .toList(growable: false),
+    );
+  }
+}
+
+class SessionStatusResponse {
+  const SessionStatusResponse({
+    required this.status,
+    this.reason,
+    this.message,
+    this.registrationRequired = false,
+  });
+
+  final String status;
+  final String? reason;
+  final String? message;
+  final bool registrationRequired;
+
+  bool get isActive => status == 'active';
+  bool get isRevoked => status == 'revoked';
+
+  factory SessionStatusResponse.fromMap(Map<String, dynamic> map) {
+    return SessionStatusResponse(
+      status: _asString(map['status'], fallback: 'active'),
+      reason: _asNullableString(map['reason']),
+      message: _asNullableString(map['message']),
+      registrationRequired: _asBool(
+        map['registrationRequired'] ?? map['registration_required'],
+      ),
+    );
+  }
+}
+
 class NextcloudConnectionRequest {
   const NextcloudConnectionRequest({
     required this.serverUrl,

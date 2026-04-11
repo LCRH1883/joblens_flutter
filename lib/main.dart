@@ -65,7 +65,7 @@ Future<void> _runJoblensApp(AppRuntimeConfiguration config) async {
         ? () => Supabase.instance.client.auth.currentUser?.id
         : null,
     signOutAction: config.isConfigured
-        ? () => Supabase.instance.client.auth.signOut()
+        ? () => Supabase.instance.client.auth.signOut(scope: SignOutScope.local)
         : null,
   );
 
