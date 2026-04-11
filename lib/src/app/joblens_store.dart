@@ -253,12 +253,18 @@ class JoblensStore extends ChangeNotifier {
 
   Future<void> signOutDeviceSession(String deviceId) async {
     await _runBusy(() async {
+      final previousDevices = _signedInDevices;
       _signedInDevices = _signedInDevices
           .where((device) => device.deviceId != deviceId)
           .toList(growable: false);
       _notifyListenersIfActive();
-      await _syncService.signOutDevice(deviceId);
-      await refreshSignedInDevices();
+      try {
+        await _syncService.signOutDevice(deviceId);
+        await refreshSignedInDevices();
+      } catch (_) {
+        _signedInDevices = previousDevices;
+        rethrow;
+      }
     });
   }
 

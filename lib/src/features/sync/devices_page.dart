@@ -134,6 +134,24 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
                           label: 'Signed in',
                           value: _formatTimestamp(device.signedInAt!),
                         ),
+                      if (device.canSignOut) ...[
+                        const SizedBox(height: 12),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: OutlinedButton.icon(
+                            onPressed: store.isBusy
+                                ? null
+                                : () => _confirmSignOutDevice(device),
+                            icon: const Icon(Icons.logout_rounded),
+                            label: const Text('Sign out'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Theme.of(context)
+                                  .colorScheme
+                                  .error,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -145,15 +163,48 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
   }
 
   String _buildPlatformLabel(SignedInDevice device) {
-    final osVersion = device.osVersion?.trim();
-    if (osVersion != null && osVersion.isNotEmpty) {
-      return '${device.platform} · $osVersion';
+    switch (device.platform.trim().toLowerCase()) {
+      case 'ios':
+        return 'iOS';
+      case 'android':
+        return 'Android';
+      case 'macos':
+        return 'macOS';
+      default:
+        final platform = device.platform.trim();
+        if (platform.isEmpty) {
+          return 'Unknown';
+        }
+        return platform;
     }
-    final appVersion = device.appVersion?.trim();
-    if (appVersion != null && appVersion.isNotEmpty) {
-      return '${device.platform} · app $appVersion';
+  }
+
+  Future<void> _confirmSignOutDevice(SignedInDevice device) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Sign out this device?'),
+          content: Text(
+            'This will sign ${device.deviceName} out of Joblens and stop sync until it signs in again.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Sign out'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) {
+      return;
     }
-    return device.platform;
+    await ref.read(joblensStoreProvider).signOutDeviceSession(device.deviceId);
   }
 
   String _formatLastSeen(DateTime? timestamp) {

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
@@ -34,6 +35,7 @@ class SyncService {
   final JoblensBackendApiClient? _backendApiClient;
   final SignedMediaUrlCache _signedMediaUrlCache;
   final MediaStorageService? _mediaStorage;
+  final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
   bool _isRunning = false;
   bool _runAgainRequested = false;
   static const int _maxParallelAssetOperations = 3;
@@ -125,14 +127,77 @@ class SyncService {
     }
 
     final clientDeviceId = await _db.getOrCreateClientDeviceId();
+    final deviceName = await _resolveDeviceName();
     final response = await client.registerDevice(
       clientDeviceId: clientDeviceId,
       platform: Platform.operatingSystem,
-      deviceName: Platform.localHostname,
+      deviceName: deviceName,
       osVersion: Platform.operatingSystemVersion,
     );
     await _db.setBackendDeviceId(response.deviceId);
     return response;
+  }
+
+  Future<String> _resolveDeviceName() async {
+    try {
+      if (Platform.isIOS) {
+        final info = await _deviceInfo.iosInfo;
+        final preferred = [
+          info.name,
+          '${info.model} ${info.systemVersion}'.trim(),
+          info.model,
+          info.utsname.machine,
+          'iPhone',
+        ];
+        return _pickDeviceName(preferred);
+      }
+      if (Platform.isAndroid) {
+        final info = await _deviceInfo.androidInfo;
+        final preferred = [
+          [info.manufacturer, info.model]
+              .where((part) => part.trim().isNotEmpty)
+              .join(' ')
+              .trim(),
+          info.model,
+          info.device,
+          'Android device',
+        ];
+        return _pickDeviceName(preferred);
+      }
+      if (Platform.isMacOS) {
+        final info = await _deviceInfo.macOsInfo;
+        final preferred = [
+          info.computerName,
+          info.model,
+          'Mac',
+        ];
+        return _pickDeviceName(preferred);
+      }
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('Device name lookup failed: $error');
+      }
+    }
+
+    return _pickDeviceName([
+      Platform.localHostname,
+      Platform.operatingSystem,
+      'Joblens device',
+    ]);
+  }
+
+  String _pickDeviceName(Iterable<String?> candidates) {
+    for (final candidate in candidates) {
+      final trimmed = candidate?.trim();
+      if (trimmed == null || trimmed.isEmpty) {
+        continue;
+      }
+      if (trimmed.toLowerCase() == 'localhost') {
+        continue;
+      }
+      return trimmed;
+    }
+    return 'Joblens device';
   }
 
   Future<SignedInDevicesResponse> listSignedInDevices() async {

@@ -27,6 +27,7 @@ dependencies:
   app_links: ^7.0.0
   share_plus: ^13.0.0
   photo_manager: ^3.9.0
+  device_info_plus: ^13.0.0
 
 dev_dependencies:
   flutter_test:
