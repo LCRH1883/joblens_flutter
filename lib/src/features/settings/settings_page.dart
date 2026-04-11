@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app/joblens_store.dart';
+import '../../core/models/app_launch_destination.dart';
 import '../../core/models/app_theme_mode.dart';
+import '../../core/models/photo_asset.dart';
+import '../../core/ui/asset_sync_badge.dart';
 import '../auth/auth_page.dart';
 import '../auth/auth_state.dart';
 import 'storage_page.dart';
@@ -55,6 +58,22 @@ class SettingsPage extends ConsumerWidget {
           ),
           Card(
             child: ListTile(
+              leading: const Icon(Icons.launch_outlined),
+              title: const Text('Open app to'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _openAppLaunchPage(context),
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.help_outline_rounded),
+              title: const Text('Help'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _openHelpPage(context),
+            ),
+          ),
+          Card(
+            child: ListTile(
               title: const Text('Library status'),
               subtitle: Text(
                 '${store.assets.length} photos • ${store.projects.length} projects • ${store.syncJobs.length} sync jobs',
@@ -90,10 +109,59 @@ class SettingsPage extends ConsumerWidget {
     ).push(MaterialPageRoute<void>(builder: (_) => const _AppearancePage()));
   }
 
+  static Future<void> _openAppLaunchPage(BuildContext context) {
+    return Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const _AppLaunchPage()));
+  }
+
   static Future<void> _openAccountPage(BuildContext context) {
     return Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const _AccountPage()));
+  }
+
+  static Future<void> _openHelpPage(BuildContext context) {
+    return Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const _HelpPage()));
+  }
+}
+
+class _AppLaunchPage extends ConsumerWidget {
+  const _AppLaunchPage();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final store = ref.watch(joblensStoreListenableProvider);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Open app to')),
+      body: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
+            child: Column(
+              children: AppLaunchDestination.values
+                  .map(
+                    (destination) => ListTile(
+                      title: Text(destination.label),
+                      trailing: destination == store.appLaunchDestination
+                          ? const Icon(Icons.check_rounded)
+                          : null,
+                      onTap: () {
+                        ref
+                            .read(joblensStoreProvider)
+                            .setAppLaunchDestination(destination);
+                      },
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -406,6 +474,170 @@ class _AccountPage extends ConsumerWidget {
           },
         );
       },
+    );
+  }
+}
+
+class _HelpPage extends StatelessWidget {
+  const _HelpPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 1,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Help'),
+          bottom: const TabBar(tabs: [Tab(text: 'Symbols')]),
+        ),
+        body: const TabBarView(children: [_SymbolsHelpTab()]),
+      ),
+    );
+  }
+}
+
+class _SymbolsHelpTab extends StatelessWidget {
+  const _SymbolsHelpTab();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: const [
+        Card(
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SymbolHelpRow(
+                  symbol: Icon(Icons.check, size: 18),
+                  title: 'Selected',
+                  description:
+                      'The photo is selected for a batch action like move, delete, or copy.',
+                ),
+                SizedBox(height: 12),
+                _SymbolHelpRow(
+                  symbol: Icon(Icons.photo_camera_outlined, size: 18),
+                  title: 'Captured in Joblens',
+                  description:
+                      'This photo was taken with the in-app camera.',
+                ),
+                SizedBox(height: 12),
+                _SymbolHelpRow(
+                  symbol: Icon(Icons.file_download_done_outlined, size: 18),
+                  title: 'Imported from phone',
+                  description:
+                      'This photo was imported from the device photo library or camera roll.',
+                ),
+              ],
+            ),
+          ),
+        ),
+        SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SymbolHelpRow(
+                  symbol: AssetSyncBadge(
+                    status: AssetSyncStatus.local,
+                    compact: false,
+                  ),
+                  title: 'Local',
+                  description:
+                      'The photo is stored on this device and has not finished syncing yet.',
+                ),
+                SizedBox(height: 12),
+                _SymbolHelpRow(
+                  symbol: AssetSyncBadge(
+                    status: AssetSyncStatus.syncing,
+                    compact: false,
+                  ),
+                  title: 'Syncing',
+                  description:
+                      'Joblens is currently uploading, moving, or reconciling this photo in the background.',
+                ),
+                SizedBox(height: 12),
+                _SymbolHelpRow(
+                  symbol: AssetSyncBadge(
+                    status: AssetSyncStatus.synced,
+                    compact: false,
+                  ),
+                  title: 'Synced',
+                  description:
+                      'The photo exists locally and in your connected cloud account.',
+                ),
+                SizedBox(height: 12),
+                _SymbolHelpRow(
+                  symbol: AssetSyncBadge(
+                    status: AssetSyncStatus.failed,
+                    compact: false,
+                  ),
+                  title: 'Failed',
+                  description:
+                      'The last sync attempt failed. Open Sync for more detail or retry.',
+                ),
+                SizedBox(height: 12),
+                _SymbolHelpRow(
+                  symbol: AssetSyncBadge(
+                    status: AssetSyncStatus.cloudOnly,
+                    compact: false,
+                  ),
+                  title: 'Cloud-only',
+                  description:
+                      'The photo exists in the cloud and is available to download to this device.',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SymbolHelpRow extends StatelessWidget {
+  const _SymbolHelpRow({
+    required this.symbol,
+    required this.title,
+    required this.description,
+  });
+
+  final Widget symbol;
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 72,
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: symbol,
+          ),
+        ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(description),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

@@ -6,6 +6,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/cloud_provider.dart';
+import '../models/app_launch_destination.dart';
 import '../models/app_theme_mode.dart';
 import '../models/blob_upload_task.dart';
 import '../models/capture_target_preference.dart';
@@ -767,6 +768,31 @@ class AppDatabase {
     await _db.insert('app_state', {
       'key': 'app_theme_mode',
       'value': mode.storageValue,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<AppLaunchDestination?> getStoredAppLaunchDestination() async {
+    final rows = await _db.query(
+      'app_state',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['app_launch_destination'],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return AppLaunchDestination.fromStorage(rows.first['value'] as String?);
+  }
+
+  Future<AppLaunchDestination> getAppLaunchDestination() async {
+    return await getStoredAppLaunchDestination() ?? AppLaunchDestination.camera;
+  }
+
+  Future<void> setAppLaunchDestination(AppLaunchDestination destination) async {
+    await _db.insert('app_state', {
+      'key': 'app_launch_destination',
+      'value': destination.storageValue,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
