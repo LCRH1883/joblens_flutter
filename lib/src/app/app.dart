@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/models/cloud_provider.dart';
@@ -11,7 +10,7 @@ import '../core/models/app_theme_mode.dart';
 import '../features/auth/auth_page.dart';
 import '../features/auth/auth_state.dart';
 import '../features/auth/password_reset_page.dart';
-import '../features/camera/camera_capture_page.dart';
+import '../features/camera/joblens_camera_page.dart';
 import '../features/gallery/gallery_page.dart';
 import '../features/projects/projects_page.dart';
 import '../features/settings/settings_page.dart';
@@ -50,6 +49,9 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
   @override
   Widget build(BuildContext context) {
     ref.listen(authStateStreamProvider, (_, next) {
+      if (!mounted) {
+        return;
+      }
       final authState = next.valueOrNull;
       debugPrint(
         'Joblens auth event: ${authState?.event.name ?? 'none'} '
@@ -58,22 +60,15 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       unawaited(
         ref.read(joblensStoreProvider).syncAuthSession(authState?.session),
       );
-      unawaited(
-        Future<void>(() async {
-          await Sentry.configureScope((scope) async {
-            final user = authState?.session?.user;
-            await scope.setUser(
-              user == null ? null : SentryUser(id: user.id, email: user.email),
-            );
-          });
-        }),
-      );
 
       if (authState?.event == AuthChangeEvent.passwordRecovery) {
         unawaited(_presentPasswordRecovery());
       }
     });
     ref.listen(joblensStoreListenableProvider, (_, next) {
+      if (!mounted) {
+        return;
+      }
       final requestCount = next.reauthenticationRequestCount;
       if (requestCount <= _handledReauthenticationRequest) {
         return;
@@ -109,7 +104,6 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
         colorScheme: darkScheme,
         appBarTheme: const AppBarTheme(centerTitle: false),
       ),
-      navigatorObservers: [SentryNavigatorObserver()],
       themeMode: switch (store.appThemeMode) {
         AppThemeMode.system => ThemeMode.system,
         AppThemeMode.light => ThemeMode.light,
@@ -140,6 +134,9 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
   }
 
   Future<void> _handleIncomingUri(Uri uri, {required String source}) async {
+    if (!mounted) {
+      return;
+    }
     final callback = ProviderOAuthCallback.tryParse(uri);
     if (callback == null) {
       return;
@@ -178,6 +175,9 @@ class _JoblensAppState extends ConsumerState<JoblensApp> {
       debugPrint('Joblens provider refresh failed: $error\n$stackTrace');
     }
 
+    if (!mounted) {
+      return;
+    }
     _appShellKey.currentState?.showSettingsTab();
     _scaffoldMessengerKey.currentState?.showSnackBar(
       SnackBar(content: Text(callback.userFacingMessage())),
@@ -238,6 +238,7 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _currentTab = 0;
+  int _lastNonCameraTab = 1;
   final _nonCameraPages = const [GalleryPage(), ProjectsPage(), SettingsPage()];
 
   void showSettingsTab() {
@@ -245,6 +246,7 @@ class _AppShellState extends State<AppShell> {
       return;
     }
     setState(() {
+      _lastNonCameraTab = 3;
       _currentTab = 3;
     });
   }
@@ -261,6 +263,9 @@ class _AppShellState extends State<AppShell> {
         selectedIndex: _currentTab,
         onDestinationSelected: (index) {
           setState(() {
+            if (index != 0) {
+              _lastNonCameraTab = index;
+            }
             _currentTab = index;
           });
         },
@@ -290,20 +295,37 @@ class _AppShellState extends State<AppShell> {
     final velocity = details.primaryVelocity ?? 0;
     if (velocity <= -450 && _currentTab < 3) {
       setState(() {
-        _currentTab += 1;
+        final nextTab = _currentTab + 1;
+        if (nextTab != 0) {
+          _lastNonCameraTab = nextTab;
+        }
+        _currentTab = nextTab;
       });
       return;
     }
     if (velocity >= 450 && _currentTab > 0) {
       setState(() {
-        _currentTab -= 1;
+        final nextTab = _currentTab - 1;
+        if (nextTab != 0) {
+          _lastNonCameraTab = nextTab;
+        }
+        _currentTab = nextTab;
       });
     }
   }
 
   Widget _buildCurrentPage() {
     if (_currentTab == 0) {
-      return const CameraCapturePage();
+      return JoblensCameraPage(
+        onSessionClosed: () {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _currentTab = _lastNonCameraTab;
+          });
+        },
+      );
     }
     return IndexedStack(index: _currentTab - 1, children: _nonCameraPages);
   }

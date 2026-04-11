@@ -1,7 +1,5 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app/joblens_store.dart';
@@ -17,7 +15,6 @@ class SettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final store = ref.watch(joblensStoreListenableProvider);
-    final runtimeConfig = ref.watch(appRuntimeConfigurationProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -64,14 +61,6 @@ class SettingsPage extends ConsumerWidget {
               ),
             ),
           ),
-          if (kDebugMode && runtimeConfig.isSentryConfigured)
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.bug_report_outlined),
-                title: const Text('Send test crash report'),
-                onTap: () => _sendTestCrashReport(context),
-              ),
-            ),
         ],
       ),
     );
@@ -105,19 +94,6 @@ class SettingsPage extends ConsumerWidget {
     return Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const _AccountPage()));
-  }
-
-  static Future<void> _sendTestCrashReport(BuildContext context) async {
-    await Sentry.captureException(
-      StateError('Joblens test GlitchTip event'),
-      stackTrace: StackTrace.current,
-    );
-    if (!context.mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Test crash report sent.')));
   }
 }
 

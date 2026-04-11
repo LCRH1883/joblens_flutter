@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../models/cloud_provider.dart';
 import '../models/app_theme_mode.dart';
 import '../models/blob_upload_task.dart';
+import '../models/capture_target_preference.dart';
 import '../models/entity_sync_record.dart';
 import '../models/library_import_mode.dart';
 import '../models/photo_asset.dart';
@@ -110,20 +111,6 @@ class AppDatabase {
   Future<void> close() async => _db.close();
 
   int _nextLocalSeq() => DateTime.now().microsecondsSinceEpoch;
-
-  static Future<void> _resetSchema(Database db) async {
-    await db.execute('DROP TABLE IF EXISTS entity_sync');
-    await db.execute('DROP TABLE IF EXISTS blob_upload');
-    await db.execute('DROP TABLE IF EXISTS sync_state');
-    await db.execute('DROP TABLE IF EXISTS asset_provider_mirrors');
-    await db.execute('DROP TABLE IF EXISTS project_provider_mirrors');
-    await db.execute('DROP TABLE IF EXISTS sync_jobs');
-    await db.execute('DROP TABLE IF EXISTS sync_log_entries');
-    await db.execute('DROP TABLE IF EXISTS provider_accounts');
-    await db.execute('DROP TABLE IF EXISTS photo_assets');
-    await db.execute('DROP TABLE IF EXISTS projects');
-    await db.execute('DROP TABLE IF EXISTS app_state');
-  }
 
   static Future<void> _migrateLegacySchema(Database db) async {
     await db.execute('''
@@ -804,6 +791,91 @@ class AppDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<CaptureTargetPreference> getCaptureTargetPreference() async {
+    final modeRows = await _db.query(
+      'app_state',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['capture_target_mode'],
+      limit: 1,
+    );
+    final fixedRows = await _db.query(
+      'app_state',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['capture_fixed_project_id'],
+      limit: 1,
+    );
+    final lastUsedRows = await _db.query(
+      'app_state',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['capture_last_used_project_id'],
+      limit: 1,
+    );
+
+    final legacyLastUsedProjectId = lastUsedRows.isEmpty
+        ? null
+        : int.tryParse((lastUsedRows.first['value'] as String?) ?? '');
+    final storedMode = CaptureTargetMode.fromStorage(
+      modeRows.isEmpty ? null : modeRows.first['value'] as String?,
+    );
+
+    return CaptureTargetPreference(
+      mode: switch (storedMode) {
+        CaptureTargetMode.lastUsed when legacyLastUsedProjectId != null =>
+          CaptureTargetMode.fixedProject,
+        CaptureTargetMode.lastUsed => CaptureTargetMode.inbox,
+        _ => storedMode,
+      },
+      fixedProjectId: switch (storedMode) {
+        CaptureTargetMode.lastUsed => legacyLastUsedProjectId,
+        _ =>
+          fixedRows.isEmpty
+              ? null
+              : int.tryParse((fixedRows.first['value'] as String?) ?? ''),
+      },
+      lastUsedProjectId: legacyLastUsedProjectId,
+    );
+  }
+
+  Future<void> setCaptureTargetMode(CaptureTargetMode mode) async {
+    await _db.insert('app_state', {
+      'key': 'capture_target_mode',
+      'value': mode.storageValue,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> setCaptureFixedProjectId(int? projectId) async {
+    if (projectId == null) {
+      await _db.delete(
+        'app_state',
+        where: 'key = ?',
+        whereArgs: ['capture_fixed_project_id'],
+      );
+      return;
+    }
+    await _db.insert('app_state', {
+      'key': 'capture_fixed_project_id',
+      'value': projectId.toString(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> setCaptureLastUsedProjectId(int? projectId) async {
+    if (projectId == null) {
+      await _db.delete(
+        'app_state',
+        where: 'key = ?',
+        whereArgs: ['capture_last_used_project_id'],
+      );
+      return;
+    }
+    await _db.insert('app_state', {
+      'key': 'capture_last_used_project_id',
+      'value': projectId.toString(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   Future<void> clearUserScopedData() async {
     await _db.transaction((txn) async {
       await txn.delete('entity_sync');
@@ -813,6 +885,11 @@ class AppDatabase {
       await txn.delete('photo_assets');
       await txn.delete('projects');
       await txn.delete('provider_accounts');
+      await txn.delete(
+        'app_state',
+        where: 'key IN (?, ?)',
+        whereArgs: ['capture_fixed_project_id', 'capture_last_used_project_id'],
+      );
     });
   }
 
@@ -1003,7 +1080,9 @@ class AppDatabase {
         entityType: SyncEntityType.project,
         entityId: projectId.toString(),
         dirtyFields: const ['name', 'start_date'],
-        baseRemoteRev: current.isEmpty ? null : current.first['remote_rev'] as int?,
+        baseRemoteRev: current.isEmpty
+            ? null
+            : current.first['remote_rev'] as int?,
         localSeq: localSeq,
       );
     });
@@ -1133,7 +1212,9 @@ class AppDatabase {
         entityType: SyncEntityType.project,
         entityId: projectId.toString(),
         dirtyFields: const ['deleted_at'],
-        baseRemoteRev: projectRows.isEmpty ? null : projectRows.first['remote_rev'] as int?,
+        baseRemoteRev: projectRows.isEmpty
+            ? null
+            : projectRows.first['remote_rev'] as int?,
         localSeq: localSeq,
       );
     });
@@ -1145,7 +1226,9 @@ class AppDatabase {
       localSeq: localSeq,
       dirtyFields: const [],
       deletedAt: null,
-      uploadGeneration: asset.uploadGeneration <= 0 ? 1 : asset.uploadGeneration,
+      uploadGeneration: asset.uploadGeneration <= 0
+          ? 1
+          : asset.uploadGeneration,
     );
     await _db.transaction((txn) async {
       await txn.insert(
@@ -1360,7 +1443,9 @@ class AppDatabase {
         entityType: SyncEntityType.asset,
         entityId: assetId,
         dirtyFields: const ['project_id'],
-        baseRemoteRev: current.isEmpty ? null : current.first['remote_rev'] as int?,
+        baseRemoteRev: current.isEmpty
+            ? null
+            : current.first['remote_rev'] as int?,
         localSeq: localSeq,
       );
     });
@@ -1442,7 +1527,8 @@ class AppDatabase {
           'display_name': provider.label,
           'connection_id': null,
           'account_identifier': null,
-          'connection_status': ProviderConnectionStatus.disconnected.storageValue,
+          'connection_status':
+              ProviderConnectionStatus.disconnected.storageValue,
           'connected_at': null,
           'root_display_name': null,
           'root_folder_path': null,
@@ -1513,7 +1599,10 @@ class AppDatabase {
       return null;
     }
     final jobs = await _buildSyntheticSyncJobs(assetIds: {assetId});
-    return jobs.cast<SyncJob?>().firstWhere((job) => job?.assetId == assetId, orElse: () => null);
+    return jobs.cast<SyncJob?>().firstWhere(
+      (job) => job?.assetId == assetId,
+      orElse: () => null,
+    );
   }
 
   Future<void> addSyncLog({
@@ -1564,7 +1653,8 @@ class AppDatabase {
     return generated;
   }
 
-  Future<String?> getBackendDeviceId() => getSyncStateValue('backend_device_id');
+  Future<String?> getBackendDeviceId() =>
+      getSyncStateValue('backend_device_id');
 
   Future<void> setBackendDeviceId(String? value) async {
     await setSyncStateValue('backend_device_id', value);
@@ -1775,9 +1865,12 @@ class AppDatabase {
     final now = DateTime.now().toIso8601String();
     final rows = await _db.query(
       'blob_upload',
-      where:
-          '(leased_until IS NULL OR leased_until <= ?) AND state IN (?, ?)',
-      whereArgs: [now, BlobUploadState.queued.name, BlobUploadState.failed.name],
+      where: '(leased_until IS NULL OR leased_until <= ?) AND state IN (?, ?)',
+      whereArgs: [
+        now,
+        BlobUploadState.queued.name,
+        BlobUploadState.failed.name,
+      ],
       orderBy: 'updated_at ASC',
       limit: limit,
     );
@@ -1929,16 +2022,12 @@ class AppDatabase {
       where: 'state = ?',
       whereArgs: [BlobUploadState.failed.name],
     );
-    await _db.update(
-      'entity_sync',
-      {
-        'last_error': null,
-        'next_attempt_at': DateTime.now().toIso8601String(),
-        'leased_until': null,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: 'last_error IS NOT NULL',
-    );
+    await _db.update('entity_sync', {
+      'last_error': null,
+      'next_attempt_at': DateTime.now().toIso8601String(),
+      'leased_until': null,
+      'updated_at': DateTime.now().toIso8601String(),
+    }, where: 'last_error IS NOT NULL');
   }
 
   Future<void> cleanupSyncState() async {
@@ -1946,14 +2035,12 @@ class AppDatabase {
       final now = DateTime.now();
       final nowIso = now.toIso8601String();
 
-      await txn.execute(
-        '''
+      await txn.execute('''
         DELETE FROM blob_upload
         WHERE NOT EXISTS (
           SELECT 1 FROM photo_assets asset WHERE asset.id = blob_upload.asset_id
         )
-      ''',
-      );
+      ''');
       await txn.execute(
         '''
         DELETE FROM entity_sync
@@ -2033,10 +2120,11 @@ class AppDatabase {
         final entityId = row['entity_id']! as String;
         final remoteAssetId = (row['remote_asset_id'] as String?)?.trim() ?? '';
         final deletedAt = row['deleted_at'] as String?;
-        final dirtyFields = ((jsonDecode((row['dirty_fields'] as String?) ?? '[]')
-                as List<dynamic>))
-            .map((item) => item.toString())
-            .toList(growable: false);
+        final dirtyFields =
+            ((jsonDecode((row['dirty_fields'] as String?) ?? '[]')
+                    as List<dynamic>))
+                .map((item) => item.toString())
+                .toList(growable: false);
         final assetLocalSeq = (row['asset_local_seq'] as int?) ?? 0;
         final recordLocalSeq = (row['record_local_seq'] as int?) ?? 0;
 
@@ -2085,10 +2173,11 @@ class AppDatabase {
       );
       for (final row in projectEntityRows) {
         final entityId = row['entity_id']! as String;
-        final dirtyFields = ((jsonDecode((row['dirty_fields'] as String?) ?? '[]')
-                as List<dynamic>))
-            .map((item) => item.toString())
-            .toList(growable: false);
+        final dirtyFields =
+            ((jsonDecode((row['dirty_fields'] as String?) ?? '[]')
+                    as List<dynamic>))
+                .map((item) => item.toString())
+                .toList(growable: false);
         final projectLocalSeq = (row['project_local_seq'] as int?) ?? 0;
         final recordLocalSeq = (row['record_local_seq'] as int?) ?? 0;
 
@@ -2175,7 +2264,9 @@ class AppDatabase {
     final states = <String, SyncJobState>{};
     for (final row in blobRows) {
       final assetId = row['asset_id']! as String;
-      final state = switch (BlobUploadState.values.byName(row['state']! as String)) {
+      final state = switch (BlobUploadState.values.byName(
+        row['state']! as String,
+      )) {
         BlobUploadState.uploading => SyncJobState.uploading,
         BlobUploadState.failed => SyncJobState.failed,
         BlobUploadState.queued => SyncJobState.queued,
@@ -2247,7 +2338,10 @@ class AppDatabase {
     return PhotoAsset.fromMap(rows.first);
   }
 
-  Future<PhotoAsset?> getAssetByHash(String hash, {String? excludingAssetId}) async {
+  Future<PhotoAsset?> getAssetByHash(
+    String hash, {
+    String? excludingAssetId,
+  }) async {
     final whereParts = <String>['hash = ?'];
     final whereArgs = <Object?>[hash];
     if (excludingAssetId != null) {
@@ -2382,7 +2476,10 @@ class AppDatabase {
     });
   }
 
-  Future<void> markAssetIngestFailed(String assetId, {String? errorCode}) async {
+  Future<void> markAssetIngestFailed(
+    String assetId, {
+    String? errorCode,
+  }) async {
     await _db.update(
       'photo_assets',
       {
@@ -2396,7 +2493,11 @@ class AppDatabase {
 
   Future<void> purgeAsset(String assetId) async {
     await _db.transaction((txn) async {
-      await txn.delete('blob_upload', where: 'asset_id = ?', whereArgs: [assetId]);
+      await txn.delete(
+        'blob_upload',
+        where: 'asset_id = ?',
+        whereArgs: [assetId],
+      );
       await txn.delete(
         'asset_provider_mirrors',
         where: 'asset_id = ?',
@@ -2477,20 +2578,16 @@ class AppDatabase {
     String? lastError,
   }) async {
     final now = DateTime.now().toIso8601String();
-    await _db.insert(
-      'project_provider_mirrors',
-      {
-        'local_project_id': localProjectId,
-        'provider_connection_id': providerConnectionId,
-        'status': status,
-        'provider_folder_id': providerFolderId,
-        'provider_rev': providerRev,
-        'last_error': lastError,
-        'created_at': now,
-        'updated_at': now,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _db.insert('project_provider_mirrors', {
+      'local_project_id': localProjectId,
+      'provider_connection_id': providerConnectionId,
+      'status': status,
+      'provider_folder_id': providerFolderId,
+      'provider_rev': providerRev,
+      'last_error': lastError,
+      'created_at': now,
+      'updated_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> upsertAssetProviderMirror({
@@ -2503,28 +2600,28 @@ class AppDatabase {
     String? lastError,
   }) async {
     final now = DateTime.now().toIso8601String();
-    await _db.insert(
-      'asset_provider_mirrors',
-      {
-        'asset_id': assetId,
-        'provider_connection_id': providerConnectionId,
-        'status': status,
-        'provider_file_id': providerFileId,
-        'remote_path': remotePath,
-        'provider_rev': providerRev,
-        'last_error': lastError,
-        'created_at': now,
-        'updated_at': now,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _db.insert('asset_provider_mirrors', {
+      'asset_id': assetId,
+      'provider_connection_id': providerConnectionId,
+      'status': status,
+      'provider_file_id': providerFileId,
+      'remote_path': remotePath,
+      'provider_rev': providerRev,
+      'last_error': lastError,
+      'created_at': now,
+      'updated_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<Map<String, String>> getAssetProviderMirrorStatuses({
     required Iterable<String> assetIds,
     required String providerConnectionId,
   }) async {
-    final ids = assetIds.map((value) => value.trim()).where((value) => value.isNotEmpty).toSet().toList(growable: false);
+    final ids = assetIds
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
     if (ids.isEmpty) {
       return const <String, String>{};
     }
@@ -2631,8 +2728,7 @@ class AppDatabase {
             columns: ['id'],
             where: 'status != ?',
             whereArgs: [AssetStatus.deleted.name],
-          ))
-              .map((row) => row['id']! as String),
+          )).map((row) => row['id']! as String),
     );
     if (assets.isEmpty) {
       return const [];

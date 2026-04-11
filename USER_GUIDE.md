@@ -6,16 +6,16 @@ Joblens is a photo capture and organization app built for job-site workflows. Yo
 
 ## What Joblens does
 
-- Capture photos directly inside Joblens
-- Import photos from your phone gallery
+- Capture photos from inside Joblens
+- Import photos from your phone library
 - Organize photos into projects
 - Add notes to projects
-- Sync your library through your connected cloud provider
+- Sign in and sync through your own cloud storage
 - Keep using the app even when you are offline
 
 ## Main navigation
 
-The bottom menu has four sections:
+The bottom navigation has four sections:
 
 - `Camera`
 - `Gallery`
@@ -35,27 +35,40 @@ To enable cloud sync:
 5. Open `Cloud sync`
 6. Connect a cloud provider
 
-Cloud sync is optional for basic local use. If you are offline or not signed in, you can still capture photos and organize them on the device.
+Cloud sync is optional. If you are offline or not signed in, you can still capture photos, organize them into projects, and edit notes on the device.
 
 ## Camera
 
-Open `Camera` from the bottom navigation to capture photos directly in the app.
+Open `Camera` from the bottom navigation to capture photos directly in Joblens.
+
+### How camera capture works
+
+On supported phones, Joblens opens a native camera session for capture. If native capture is unavailable, Joblens falls back to the in-app camera automatically.
+
+Captured photos are added to Joblens right away. Cloud sync happens afterward in the background.
 
 ### Camera features
 
-- Back button to return to the app
-- Front/rear camera switching
-- Flash mode toggle
+- Open camera directly from the bottom navigation
+- Capture multiple photos without leaving the camera flow
+- Back out of the camera and return to the app
+- Flash mode control
+- Front or rear lens switching when supported
 - Zoom presets
 - `Single` capture mode
-- `Rapid` capture mode for taking multiple photos without leaving the camera
+- `Rapid` capture mode for faster multi-shot work
 
-### How capture works
+### Capture targets
 
-- `Single` mode uses the highest available capture quality
-- `Rapid` mode is optimized for faster multi-shot capture
-- New photos are added to Joblens right away
-- Cloud sync happens in the background after the local save
+Joblens can save captured photos into different project targets.
+
+Available target modes are:
+
+- `Inbox`
+- `Last used`
+- a specific project
+
+This lets you keep quick captures going to `Inbox` or send them straight into the project you are working on.
 
 ## Gallery
 
@@ -70,7 +83,6 @@ Open `Gallery` to view your full Joblens photo library.
 - Move photos to another project
 - Copy photos back to the phone gallery
 - Delete selected photos
-- Import photos from the phone gallery
 
 ### Full-screen photo viewer
 
@@ -81,14 +93,14 @@ When you open a photo:
 - Joblens uses the local file when available
 - If the photo is cloud-only, Joblens loads it through the sync backend
 
-## Importing from your phone gallery
+## Importing from your phone library
 
 You can import existing photos from your phone into Joblens.
 
 There are two ways to reach import:
 
-- `Gallery > Import photos`
 - `Settings > Storage > Import photos`
+- import flows opened from the library import screen
 
 ### Import behavior
 
@@ -99,7 +111,7 @@ In `Settings > Storage`, you can choose how imports work:
   - removes the original from the phone after import
 - `Copy`
   - imports the photo into Joblens
-  - keeps the original in the phone gallery
+  - keeps the original in the phone library
 
 ### Import flow
 
@@ -134,14 +146,14 @@ Each project card can show:
 
 ### Creating a project
 
-When creating a project, the user can set:
+When creating a project, you can set:
 
 - project name
 - optional start date
 
 ### Editing a project
 
-Project editing lets the user update:
+Project editing lets you update:
 
 - project name
 - start date
@@ -167,7 +179,7 @@ If a project has no photos yet, Joblens shows an empty-state message.
 
 Each project can have notes.
 
-Notes are edited from the project detail screen using the notes button in the top bar.
+Notes are edited from the project detail screen.
 
 Notes are useful for:
 
@@ -209,14 +221,16 @@ To sign in:
 
 ### Confirm email
 
-If email confirmation is enabled, Joblens will show a confirmation screen after sign-up.
+If email confirmation is enabled, Joblens shows a confirmation state after sign-up.
 
-From there, the user can:
+From there, you can:
 
 - resend the confirmation email
 - go back to sign in
 
-If the user opens the email link on their phone, the app should return directly to Joblens.
+If you open the email link on your phone, the app should return directly to Joblens.
+
+If you open the confirmation link on a computer, the backend confirmation page should guide you instead of sending you into the app.
 
 ### Forgot password
 
@@ -228,15 +242,21 @@ From the sign-in screen:
 4. Return to Joblens
 5. Set a new password
 
+### Delete account
+
+Deleting your account removes your Joblens account and backend data.
+
+It does not delete files, folders, or notes already stored in your cloud drive.
+
 ## Cloud sync
 
 Open `Settings > Cloud sync` to manage provider connections and background sync.
 
 ### What cloud sync does
 
-Cloud sync connects your Joblens account to your own cloud storage provider. Joblens then uses the backend to coordinate uploads, downloads, and cross-device synchronization.
+Cloud sync connects your Joblens account to your own cloud storage provider. Joblens then uses the backend to coordinate uploads, downloads, project discovery, and cross-device synchronization.
 
-### Providers
+### Supported providers
 
 The app is built to support:
 
@@ -249,26 +269,34 @@ The app is built to support:
 ### Sync page features
 
 - See whether you are signed in
-- See current provider connection status
+- See the active connected cloud account
 - Connect a provider
 - Disconnect a provider
-- Run sync now
-- Retry failed sync jobs
-- Open sync activity details
+- `Rescan cloud`
+- `Run sync now`
+- `Retry failed`
+- Open `Sync Activity`
 
-### How provider connection works
+### Provider connection flow
 
 For Google Drive, OneDrive, Dropbox, and Box:
 
-- Joblens opens the provider login in the browser
+- Joblens opens the provider sign-in in your browser
 - after sign-in, the app returns to Joblens
+- Joblens prepares its folder and syncs in the background
 
 For Nextcloud:
 
-- the user enters:
+- you enter:
   - server URL
   - username
   - app password
+
+### One active provider at a time
+
+Joblens is designed around one active cloud provider connection at a time for a signed-in account.
+
+If one provider is already connected, the other disconnected providers are not available until you disconnect the active one.
 
 ### Sync status
 
@@ -277,6 +305,24 @@ The sync screen shows the current background state, including:
 - queued jobs
 - active uploads
 - failed jobs
+
+### Sync activity
+
+Open `Sync Activity` from the sync status card to:
+
+- review recent sync entries
+- export the sync log
+- clear the sync log
+
+### Rescan cloud
+
+`Rescan cloud` asks Joblens to reconcile synced projects against the connected cloud provider.
+
+Use this when:
+
+- you signed in on a new device
+- files already exist in the cloud and you want Joblens to discover them
+- you think cloud content changed outside the app
 
 ## Local-first behavior
 
@@ -287,6 +333,7 @@ That means:
 - new photos appear right away
 - moving photos between projects happens right away
 - imports appear right away
+- project edits appear right away
 - cloud sync happens afterward in the background
 
 If the phone is offline, you can still:
@@ -322,7 +369,7 @@ Open `Settings > Storage` to manage import behavior.
   - `Move`
   - `Copy`
 
-This setting controls what happens to the original file in your phone gallery when importing into Joblens.
+This setting controls what happens to the original file in your phone library when importing into Joblens.
 
 ## Library status
 
@@ -338,9 +385,8 @@ The Settings screen shows a simple library summary:
 
 1. Open `Camera`
 2. Capture one or more photos
-3. Open `Gallery`
-4. Select the new photos
-5. Move them into the correct project
+3. Open `Gallery` or `Projects`
+4. Move the photos if needed, or capture directly into the correct project target
 
 ### Create and organize a project
 
@@ -355,7 +401,7 @@ The Settings screen shows a simple library summary:
 1. Open `Settings > Storage`
 2. Choose `Move` or `Copy`
 3. Open `Import photos`
-4. Select images from the phone gallery
+4. Select images from the phone library
 5. Tap `Import`
 
 ### Turn on sync on a second device
@@ -364,7 +410,7 @@ The Settings screen shows a simple library summary:
 2. Open `Settings > Account`
 3. Sign in to the same Joblens account
 4. Open `Settings > Cloud sync`
-5. Refresh or run sync
+5. Pull to refresh or tap `Rescan cloud`
 6. Existing projects and synced photos should appear
 
 ## Troubleshooting
@@ -383,7 +429,8 @@ Try:
 
 1. Open `Settings > Cloud sync`
 2. Pull to refresh
-3. Tap `Run sync now`
+3. Tap `Rescan cloud`
+4. Tap `Run sync now`
 
 ### I forgot my password
 
@@ -397,8 +444,9 @@ That is supported. You can keep using the app for capture and organization witho
 
 Today, Joblens supports:
 
-- in-app photo capture
+- direct camera capture inside Joblens
 - rapid multi-shot capture
+- capture targets for Inbox, last used project, or a specific project
 - gallery import
 - local-first organization
 - projects with metadata and notes

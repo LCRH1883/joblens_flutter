@@ -12,6 +12,7 @@ import 'package:supabase_flutter/supabase_flutter.dart' show Session;
 import '../core/db/app_database.dart';
 import '../core/api/api_exception.dart';
 import '../core/models/app_theme_mode.dart';
+import '../core/models/capture_target_preference.dart';
 import '../core/models/cloud_provider.dart';
 import '../core/models/library_import_mode.dart';
 import '../core/models/photo_asset.dart';
@@ -66,6 +67,8 @@ class JoblensStore extends ChangeNotifier {
   ProjectSortMode _projectSortMode = ProjectSortMode.name;
   AppThemeMode _appThemeMode = AppThemeMode.system;
   LibraryImportMode _libraryImportMode = LibraryImportMode.copy;
+  CaptureTargetPreference _captureTargetPreference =
+      CaptureTargetPreference.defaults;
 
   List<PhotoAsset> _assets = const [];
   Map<String, AssetSyncStatus> _assetSyncStatuses = const {};
@@ -90,6 +93,8 @@ class JoblensStore extends ChangeNotifier {
   ProjectSortMode get projectSortMode => _projectSortMode;
   AppThemeMode get appThemeMode => _appThemeMode;
   LibraryImportMode get libraryImportMode => _libraryImportMode;
+  CaptureTargetPreference get captureTargetPreference =>
+      _captureTargetPreference;
 
   Future<void> initialize() async {
     await _synchronizeAuthUser(_currentAuthUserIdProvider?.call());
@@ -143,7 +148,9 @@ class JoblensStore extends ChangeNotifier {
       return;
     }
     _notifyListenersIfActive();
-    unawaited(_kickSync(forceBootstrap: !await _database.hasCompletedBootstrap()));
+    unawaited(
+      _kickSync(forceBootstrap: !await _database.hasCompletedBootstrap()),
+    );
   }
 
   Future<void> ingestCapturedFile(
@@ -384,13 +391,17 @@ class JoblensStore extends ChangeNotifier {
         projectId,
         fallbackProjectId: _defaultProjectId,
       );
-      _projects = _projects.where((item) => item.id != projectId).toList(growable: false);
-      _assets = _assets.map((asset) {
-        if (movedAssetIds.contains(asset.id)) {
-          return asset.copyWith(projectId: _defaultProjectId);
-        }
-        return asset;
-      }).toList(growable: false);
+      _projects = _projects
+          .where((item) => item.id != projectId)
+          .toList(growable: false);
+      _assets = _assets
+          .map((asset) {
+            if (movedAssetIds.contains(asset.id)) {
+              return asset.copyWith(projectId: _defaultProjectId);
+            }
+            return asset;
+          })
+          .toList(growable: false);
       _projectCounts = await _database.getProjectCounts();
       await _refreshAssetSyncStatuses();
       _notifyListenersIfActive();
@@ -678,6 +689,60 @@ class JoblensStore extends ChangeNotifier {
     _notifyListenersIfActive();
   }
 
+  ResolvedCaptureTarget resolveCaptureTarget() {
+    final currentProjects = projects;
+    final inbox =
+        _findProjectByName(currentProjects, 'Inbox') ??
+        (currentProjects.isNotEmpty ? currentProjects.first : null);
+    if (inbox == null) {
+      throw StateError('No project available');
+    }
+
+    final fixed = _findProjectById(
+      currentProjects,
+      _captureTargetPreference.fixedProjectId,
+    );
+
+    return switch (_captureTargetPreference.mode) {
+      CaptureTargetMode.inbox => ResolvedCaptureTarget(
+        projectId: inbox.id,
+        projectName: inbox.name,
+      ),
+      CaptureTargetMode.fixedProject when fixed != null =>
+        ResolvedCaptureTarget(projectId: fixed.id, projectName: fixed.name),
+      _ => ResolvedCaptureTarget(projectId: inbox.id, projectName: inbox.name),
+    };
+  }
+
+  Future<void> updateCaptureTargetPreference({
+    required CaptureTargetMode mode,
+    int? fixedProjectId,
+  }) async {
+    final normalizedMode = switch (mode) {
+      CaptureTargetMode.fixedProject when fixedProjectId != null =>
+        CaptureTargetMode.fixedProject,
+      CaptureTargetMode.fixedProject => CaptureTargetMode.inbox,
+      CaptureTargetMode.lastUsed when fixedProjectId != null =>
+        CaptureTargetMode.fixedProject,
+      CaptureTargetMode.lastUsed => CaptureTargetMode.inbox,
+      _ => CaptureTargetMode.inbox,
+    };
+    _captureTargetPreference = _captureTargetPreference.copyWith(
+      mode: normalizedMode,
+      fixedProjectId: normalizedMode == CaptureTargetMode.fixedProject
+          ? fixedProjectId
+          : null,
+      clearFixedProjectId: normalizedMode != CaptureTargetMode.fixedProject,
+      clearLastUsedProjectId: true,
+    );
+    _notifyListenersIfActive();
+    await _database.setCaptureTargetMode(normalizedMode);
+    await _database.setCaptureFixedProjectId(
+      normalizedMode == CaptureTargetMode.fixedProject ? fixedProjectId : null,
+    );
+    await _database.setCaptureLastUsedProjectId(null);
+  }
+
   Future<({int copiedCount, int skippedCount})> copyAssetsToPhoneStorage(
     Iterable<PhotoAsset> assets,
   ) async {
@@ -785,6 +850,27 @@ class JoblensStore extends ChangeNotifier {
     throw StateError('No project available');
   }
 
+  Project? _findProjectById(List<Project> currentProjects, int? projectId) {
+    if (projectId == null) {
+      return null;
+    }
+    for (final project in currentProjects) {
+      if (project.id == projectId) {
+        return project;
+      }
+    }
+    return null;
+  }
+
+  Project? _findProjectByName(List<Project> currentProjects, String name) {
+    for (final project in currentProjects) {
+      if (project.name == name) {
+        return project;
+      }
+    }
+    return null;
+  }
+
   Future<void> _hydrateLocalState({bool includeDiagnostics = true}) async {
     _assets = await _database.getAssets();
     _projects = await _database.getProjects();
@@ -794,6 +880,7 @@ class JoblensStore extends ChangeNotifier {
     _projectSortMode = await _database.getProjectSortMode();
     _appThemeMode = await _database.getAppThemeMode();
     _libraryImportMode = await _database.getLibraryImportMode();
+    _captureTargetPreference = await _database.getCaptureTargetPreference();
     if (includeDiagnostics) {
       _syncJobs = await _database.getSyncJobs();
       _syncLogs = await _database.getSyncLogs();
@@ -806,9 +893,7 @@ class JoblensStore extends ChangeNotifier {
     );
   }
 
-  Future<void> _scheduleBackgroundSyncAction(
-    Future<void> Function() action,
-  ) {
+  Future<void> _scheduleBackgroundSyncAction(Future<void> Function() action) {
     _pendingBackgroundSync = _pendingBackgroundSync.then((_) async {
       if (_isDisposed) {
         return;
@@ -1043,7 +1128,10 @@ class JoblensStore extends ChangeNotifier {
     _notifyListenersIfActive();
   }
 
-  Future<void> _recordForegroundError(Object error, StackTrace stackTrace) async {
+  Future<void> _recordForegroundError(
+    Object error,
+    StackTrace stackTrace,
+  ) async {
     await _handleError(error);
     if (!_requiresReauthentication(error)) {
       _lastError = error.toString();
@@ -1083,7 +1171,9 @@ class JoblensStore extends ChangeNotifier {
 
   void _removeAssetFromState(String assetId, int projectId) {
     final removed = _assets.any((item) => item.id == assetId);
-    _assets = _assets.where((item) => item.id != assetId).toList(growable: false);
+    _assets = _assets
+        .where((item) => item.id != assetId)
+        .toList(growable: false);
     final nextStatuses = Map<String, AssetSyncStatus>.from(_assetSyncStatuses);
     nextStatuses.remove(assetId);
     _assetSyncStatuses = nextStatuses;
@@ -1115,7 +1205,10 @@ class JoblensStore extends ChangeNotifier {
     };
     _projectCounts = <int, int>{
       ..._projectCounts,
-      current.projectId: ((_projectCounts[current.projectId] ?? 1) - 1).clamp(0, 1 << 30),
+      current.projectId: ((_projectCounts[current.projectId] ?? 1) - 1).clamp(
+        0,
+        1 << 30,
+      ),
       projectId: (_projectCounts[projectId] ?? 0) + 1,
     };
   }

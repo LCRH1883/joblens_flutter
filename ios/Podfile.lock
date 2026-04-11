@@ -6,16 +6,9 @@ PODS:
   - Flutter (1.0.0)
   - image_picker_ios (0.0.1):
     - Flutter
-  - package_info_plus (0.4.5):
-    - Flutter
   - photo_manager (3.9.0):
     - Flutter
     - FlutterMacOS
-  - Sentry/HybridSDK (8.58.0)
-  - sentry_flutter (9.16.0):
-    - Flutter
-    - FlutterMacOS
-    - Sentry/HybridSDK (= 8.58.0)
   - share_plus (0.0.1):
     - Flutter
   - shared_preferences_foundation (0.0.1):
@@ -32,17 +25,11 @@ DEPENDENCIES:
   - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
   - Flutter (from `Flutter`)
   - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
-  - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - photo_manager (from `.symlinks/plugins/photo_manager/darwin`)
-  - sentry_flutter (from `.symlinks/plugins/sentry_flutter/ios`)
   - share_plus (from `.symlinks/plugins/share_plus/ios`)
   - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
   - sqflite_darwin (from `.symlinks/plugins/sqflite_darwin/darwin`)
   - url_launcher_ios (from `.symlinks/plugins/url_launcher_ios/ios`)
-
-SPEC REPOS:
-  trunk:
-    - Sentry
 
 EXTERNAL SOURCES:
   app_links:
@@ -53,12 +40,8 @@ EXTERNAL SOURCES:
     :path: Flutter
   image_picker_ios:
     :path: ".symlinks/plugins/image_picker_ios/ios"
-  package_info_plus:
-    :path: ".symlinks/plugins/package_info_plus/ios"
   photo_manager:
     :path: ".symlinks/plugins/photo_manager/darwin"
-  sentry_flutter:
-    :path: ".symlinks/plugins/sentry_flutter/ios"
   share_plus:
     :path: ".symlinks/plugins/share_plus/ios"
   shared_preferences_foundation:
@@ -73,15 +56,12 @@ SPEC CHECKSUMS:
   camera_avfoundation: 968a9a5323c79a99c166ad9d7866bfd2047b5a9b
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   image_picker_ios: e0ece4aa2a75771a7de3fa735d26d90817041326
-  package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
   photo_manager: 25fd77df14f4f0ba5ef99e2c61814dde77e2bceb
-  Sentry: d587a8fe91ca13503ecd69a1905f3e8a0fcf61be
-  sentry_flutter: 31101687061fb85211ebab09ce6eb8db4e9ba74f
   share_plus: 50da8cb520a8f0f65671c6c6a99b3617ed10a58a
   shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
   sqflite_darwin: 20b2a3a3b70e43edae938624ce550a3cbf66a3d0
   url_launcher_ios: 7a95fa5b60cc718a708b8f2966718e93db0cef1b
 
-PODFILE CHECKSUM: f8c2dcdfb50bb67645580d28a6bf814fca30bdec
+PODFILE CHECKSUM: 8d86c7dbdb708284a39dfbd5ab74a4a11aa8cf9a
 
 COCOAPODS: 1.16.2

@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 
 import '../../app/joblens_store.dart';
 import '../../core/ui/edge_swipe_back.dart';
@@ -23,6 +24,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
   static const _cameraInitializationTimeout = Duration(seconds: 8);
 
   CameraController? _controller;
+  late final CameraSettingsRepository _settingsRepository;
   CameraSettings _settings = CameraSettings.defaults;
   List<double> _zoomStops = const [1.0];
   double _minZoom = 1.0;
@@ -39,11 +41,15 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _settingsRepository = ref.read(cameraSettingsRepositoryProvider);
     unawaited(_bootstrap());
   }
 
   Future<void> _bootstrap() async {
-    final settings = await ref.read(cameraSettingsRepositoryProvider).read();
+    if (!mounted) {
+      return;
+    }
+    final settings = await _settingsRepository.read();
     if (!mounted) {
       return;
     }
@@ -53,6 +59,9 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
   }
 
   Future<void> _initializeCamera({CameraLensDirection? preferredLens}) async {
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _isInitializing = true;
       _error = null;
@@ -92,7 +101,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
     try {
       await controller.initialize().timeout(_cameraInitializationTimeout);
       if (!_isForeground) {
-        await controller.dispose();
+        await _disposeControllerSafely(controller);
         return;
       }
       var minZoom = 1.0;
@@ -127,7 +136,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
       final zoomStops = _buildZoomStops(minZoom, maxZoom);
 
       if (!mounted) {
-        await controller.dispose();
+        await _disposeControllerSafely(controller);
         return;
       }
 
@@ -144,10 +153,10 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
         );
       });
 
-      await previous?.dispose();
+      await _disposeControllerSafely(previous);
       unawaited(_persistSettings());
     } catch (error) {
-      await controller.dispose();
+      await _disposeControllerSafely(controller);
       if (!mounted) {
         return;
       }
@@ -170,7 +179,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
         state == AppLifecycleState.detached) {
       _controller = null;
       if (controller != null) {
-        unawaited(controller.dispose());
+        unawaited(_disposeControllerSafely(controller));
       }
       return;
     }
@@ -220,7 +229,9 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_persistSettings());
-    _controller?.dispose();
+    final controller = _controller;
+    _controller = null;
+    unawaited(_disposeControllerSafely(controller));
     super.dispose();
   }
 
@@ -610,6 +621,9 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
   }
 
   void _queueIngest(File sourceFile) {
+    if (!mounted) {
+      return;
+    }
     final store = ref.read(joblensStoreProvider);
     _pendingIngest = _pendingIngest.then((_) async {
       try {
@@ -634,7 +648,38 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
   }
 
   Future<void> _persistSettings() {
-    return ref.read(cameraSettingsRepositoryProvider).write(_settings);
+    return _settingsRepository.write(_settings);
+  }
+
+  Future<void> _disposeControllerSafely(CameraController? controller) async {
+    if (controller == null) {
+      return;
+    }
+    try {
+      if (!controller.value.isInitialized) {
+        return;
+      }
+      await controller.dispose();
+    } on CameraException catch (error) {
+      if (_isIgnorableAndroidDisposeError(error.description)) {
+        debugPrint('Ignoring camera dispose race: ${error.description}');
+        return;
+      }
+      rethrow;
+    } on PlatformException catch (error) {
+      if (_isIgnorableAndroidDisposeError(error.message)) {
+        debugPrint('Ignoring camera dispose race: ${error.message}');
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  bool _isIgnorableAndroidDisposeError(String? message) {
+    if (message == null) {
+      return false;
+    }
+    return message.contains('releaseFlutterSurfaceTexture() cannot be called');
   }
 
   String _cameraErrorMessage(Object error) {

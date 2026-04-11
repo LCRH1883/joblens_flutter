@@ -1,7 +1,6 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'src/app/app.dart';
@@ -20,24 +19,6 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final config = await AppRuntimeConfiguration.load();
-  if (config.isSentryConfigured) {
-    await SentryFlutter.init(
-      (options) {
-        options.dsn = config.sentryDsn;
-        options.environment = config.sentryEnvironment.trim().isEmpty
-            ? 'development'
-            : config.sentryEnvironment.trim();
-        options.tracesSampleRate = 0.01;
-        options.enableAutoSessionTracking = false;
-        options.sendDefaultPii = false;
-      },
-      appRunner: () async {
-        await _runJoblensApp(config);
-      },
-    );
-    return;
-  }
-
   await _runJoblensApp(config);
 }
 

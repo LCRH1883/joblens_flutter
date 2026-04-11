@@ -37,6 +37,9 @@ class _SyncPageState extends ConsumerState<SyncPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) {
+      return;
+    }
     if (state == AppLifecycleState.resumed) {
       ref.read(joblensStoreProvider).refresh();
     }
@@ -324,6 +327,7 @@ class _SyncPageState extends ConsumerState<SyncPage>
   }
 
   Future<void> _configureNextcloud(BuildContext context) async {
+    final store = ref.read(joblensStoreProvider);
     final serverController = TextEditingController();
     final usernameController = TextEditingController();
     final appPasswordController = TextEditingController();
@@ -365,13 +369,11 @@ class _SyncPageState extends ConsumerState<SyncPage>
             ),
             FilledButton(
               onPressed: () async {
-                await ref
-                    .read(joblensStoreProvider)
-                    .connectNextcloud(
-                      serverUrl: serverController.text.trim(),
-                      username: usernameController.text.trim(),
-                      appPassword: appPasswordController.text,
-                    );
+                await store.connectNextcloud(
+                  serverUrl: serverController.text.trim(),
+                  username: usernameController.text.trim(),
+                  appPassword: appPasswordController.text,
+                );
                 if (context.mounted) {
                   Navigator.of(context).pop();
                 }

@@ -100,7 +100,9 @@ class CameraSettings {
   }
 
   static CameraSettings fromJson(Map<String, dynamic> json) {
-    final rapidCaptureMode = json['rapidCaptureMode'] == true;
+    final rapidCaptureMode = json.containsKey('rapidCaptureMode')
+        ? json['rapidCaptureMode'] == true
+        : CameraSettings.defaults.rapidCaptureMode;
     final flashMode = _flashModeFromWire(json['flashMode'] as String?);
     final lensDirection = _lensDirectionFromWire(
       json['lensDirection'] as String? ?? json['cameraName'] as String?,

@@ -15,7 +15,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.intagri.joblens_flutter"
+    namespace = "com.intagri.joblens"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -26,7 +26,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.intagri.joblens_flutter"
+        applicationId = "com.intagri.joblens"
         manifestPlaceholders["appAuthRedirectScheme"] = "joblens"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
@@ -66,4 +66,16 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    val cameraXVersion = "1.4.2"
+
+    implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.camera:camera-camera2:$cameraXVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraXVersion")
+    implementation("androidx.camera:camera-view:$cameraXVersion")
+    implementation("com.google.guava:guava:33.4.8-android")
+    implementation("com.google.android.material:material:1.12.0")
 }
