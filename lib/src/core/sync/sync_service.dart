@@ -1365,8 +1365,37 @@ class SyncService {
               fallbackLocalProjectId;
 
     final existingByRemote = await _db.getAssetByRemoteId(remoteAsset.assetId);
-    final existingByHash =
-        existingByRemote ?? await _db.getAssetByHash(remoteAsset.sha256);
+    final hashCandidate = existingByRemote == null
+        ? await _db.getAssetByHash(remoteAsset.sha256)
+        : null;
+    final existingByHash = existingByRemote ??
+        (hashCandidate == null
+            ? null
+            : (() {
+                final boundRemoteId = hashCandidate.remoteAssetId?.trim();
+                if (boundRemoteId == null || boundRemoteId.isEmpty) {
+                  return hashCandidate;
+                }
+                if (boundRemoteId == remoteAsset.assetId) {
+                  return hashCandidate;
+                }
+                return null;
+              })());
+
+    if (existingByRemote == null &&
+        hashCandidate != null &&
+        existingByHash == null) {
+      await _logInfo(
+        'remote_asset_hash_collision_preserved',
+        assetId: hashCandidate.id,
+        projectId: hashCandidate.projectId,
+        message:
+            'Skipped same-hash remote merge because local asset '
+            '${hashCandidate.id} is already bound to remote asset '
+            '${hashCandidate.remoteAssetId} while incoming remote asset is '
+            '${remoteAsset.assetId}.',
+      );
+    }
 
     if (existingByHash != null) {
       if (existingByHash.status == AssetStatus.deleted && !remoteAsset.deleted) {
