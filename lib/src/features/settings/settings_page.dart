@@ -615,13 +615,14 @@ class _SymbolHelpRow extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(
-          width: 72,
+        ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 72),
           child: Align(
             alignment: Alignment.topLeft,
             child: symbol,
           ),
         ),
+        const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

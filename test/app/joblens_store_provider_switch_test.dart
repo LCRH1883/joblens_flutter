@@ -85,6 +85,68 @@ void main() {
   );
 
   test(
+    'asset synced through the active provider shows synced without mirror rows',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_provider_active_status_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+      final store = JoblensStore(
+        database: database,
+        mediaStorage: mediaStorage,
+        syncService: _ProviderSwitchSyncService(database),
+        currentAuthUserIdProvider: () => 'test-user',
+      );
+      addTearDown(() async {
+        await store.waitForIdle();
+        store.dispose();
+        await database.close();
+      });
+
+      final projectId = await database.ensureDefaultProject();
+      await database.ensureProviderRows();
+      await database.updateProviderAccountStatus(
+        CloudProviderType.dropbox,
+        connectionStatus: ProviderConnectionStatus.ready,
+        displayName: 'Dropbox',
+        accountIdentifier: 'jane@example.com',
+        isActive: true,
+      );
+      await database.insertPendingAssetShell(
+        PhotoAsset(
+          id: 'asset-1',
+          localPath: '/tmp/asset-1.jpg',
+          thumbPath: '/tmp/asset-1-thumb.jpg',
+          createdAt: DateTime(2026, 4, 8),
+          importedAt: DateTime(2026, 4, 8),
+          projectId: projectId,
+          hash: 'a' * 64,
+          status: AssetStatus.active,
+          sourceType: AssetSourceType.imported,
+          cloudState: AssetCloudState.localAndCloud,
+          existsInPhoneStorage: true,
+          remoteAssetId: 'remote-asset-1',
+          remoteProvider: CloudProviderType.dropbox.key,
+          remoteFileId: 'provider-file-1',
+          uploadPath: 'Joblens/Inbox/asset-1.jpg',
+        ),
+      );
+
+      await store.initialize();
+
+      expect(store.assetSyncStatusFor('asset-1'), AssetSyncStatus.synced);
+    },
+  );
+
+  test(
     'provider connection backfill schedules project reconcile before sync kick',
     () async {
       final tempDir = await Directory.systemTemp.createTemp(

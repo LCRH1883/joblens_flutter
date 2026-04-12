@@ -1540,23 +1540,19 @@ class JoblensStore extends ChangeNotifier {
             ? AssetSyncStatus.local
             : AssetSyncStatus.cloudOnly;
     }
-    if (activeProvider != null && (remoteAssetId?.isNotEmpty ?? false)) {
-      return AssetSyncStatus.syncing;
-    }
-    if ((remoteAssetId?.isNotEmpty ?? false) &&
-        asset.localPath.trim().isNotEmpty &&
-        activeProvider != null &&
-        remoteProvider != null &&
-        remoteProvider.isNotEmpty &&
-        remoteProvider != activeProvider.providerType.key) {
-      return AssetSyncStatus.syncing;
-    }
-    if ((remoteAssetId?.isNotEmpty ?? false) &&
-        asset.localPath.trim().isNotEmpty) {
-      if (activeProvider == null) {
-        return AssetSyncStatus.synced;
+    if ((remoteAssetId?.isNotEmpty ?? false)) {
+      if (activeProvider != null) {
+        final activeProviderKey = activeProvider.providerType.key;
+        if (remoteProvider == activeProviderKey) {
+          return asset.localPath.trim().isNotEmpty
+              ? AssetSyncStatus.synced
+              : AssetSyncStatus.cloudOnly;
+        }
+        return AssetSyncStatus.syncing;
       }
-      return AssetSyncStatus.synced;
+      return asset.localPath.trim().isNotEmpty
+          ? AssetSyncStatus.synced
+          : AssetSyncStatus.cloudOnly;
     }
     return AssetSyncStatus.local;
   }
