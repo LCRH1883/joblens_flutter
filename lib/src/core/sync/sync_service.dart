@@ -87,7 +87,13 @@ class SyncService {
           () => _pullRemoteEvents(),
           fallback: false,
         );
-        if (pushedMetadata.value || advancedUploads.value || pulledEvents.value) {
+        await _runVoidLaneSafely(
+          'local_asset_reconcile_failed',
+          () => _reconcileCommittedAssetShadows(),
+        );
+        if (pushedMetadata.value ||
+            advancedUploads.value ||
+            pulledEvents.value) {
           _runAgainRequested = true;
         }
         if (pushedMetadata.succeeded &&
@@ -185,10 +191,10 @@ class SyncService {
       if (Platform.isAndroid) {
         final info = await _deviceInfo.androidInfo;
         final preferred = [
-          [info.manufacturer, info.model]
-              .where((part) => part.trim().isNotEmpty)
-              .join(' ')
-              .trim(),
+          [
+            info.manufacturer,
+            info.model,
+          ].where((part) => part.trim().isNotEmpty).join(' ').trim(),
           info.model,
           info.device,
           'Android device',
@@ -197,11 +203,7 @@ class SyncService {
       }
       if (Platform.isMacOS) {
         final info = await _deviceInfo.macOsInfo;
-        final preferred = [
-          info.computerName,
-          info.model,
-          'Mac',
-        ];
+        final preferred = [info.computerName, info.model, 'Mac'];
         return _pickDeviceName(preferred);
       }
     } catch (error) {
@@ -287,7 +289,9 @@ class SyncService {
 
   Future<void> _bootstrapFromBackend() async {
     await refreshProviderConnections();
-    final projects = await syncRemoteProjects(await _db.getProjects(includeDeleted: true));
+    final projects = await syncRemoteProjects(
+      await _db.getProjects(includeDeleted: true),
+    );
     await mergeRemoteAssets(projects);
     await _db.markBootstrapCompleted();
     await _logInfo(
@@ -318,7 +322,9 @@ class SyncService {
         }
         await _logError(
           'metadata_sync_failed',
-          assetId: record.entityType == SyncEntityType.asset ? record.entityId : null,
+          assetId: record.entityType == SyncEntityType.asset
+              ? record.entityId
+              : null,
           projectId: record.entityType == SyncEntityType.project
               ? int.tryParse(record.entityId)
               : null,
@@ -354,7 +360,8 @@ class SyncService {
     }
 
     if (project.deletedAt != null) {
-      if (project.remoteProjectId != null && project.remoteProjectId!.isNotEmpty) {
+      if (project.remoteProjectId != null &&
+          project.remoteProjectId!.isNotEmpty) {
         await archiveProject(project.remoteProjectId!);
       }
       await _db.markProjectSynced(
@@ -429,7 +436,9 @@ class SyncService {
       return false;
     }
 
-    await _forEachWithConcurrency(tasks, _maxParallelAssetOperations, (task) async {
+    await _forEachWithConcurrency(tasks, _maxParallelAssetOperations, (
+      task,
+    ) async {
       await _processBlobUploadTask(task);
     });
     return true;
@@ -569,7 +578,9 @@ class SyncService {
         after = event.id;
       }
       if (needsSnapshotRefresh) {
-        final projects = await syncRemoteProjects(await _db.getProjects(includeDeleted: true));
+        final projects = await syncRemoteProjects(
+          await _db.getProjects(includeDeleted: true),
+        );
         await mergeRemoteAssets(projects);
       }
 
@@ -609,6 +620,7 @@ class SyncService {
       case 'asset_moved':
       case 'asset_deleted':
       case 'asset_restored':
+      case 'asset_purge_requested':
       case 'asset_purged':
         return _applyRemoteAssetEvent(event);
       default:
@@ -636,15 +648,43 @@ class SyncService {
           null => ProviderConnectionStatus.disconnected.storageValue,
         },
       ),
-      connectionId: _payloadString(connectionPayload, ['connectionId', 'connection_id']),
-      connectedAt: _payloadDateTime(connectionPayload, ['connectedAt', 'connected_at']),
-      displayName: _payloadString(connectionPayload, ['displayName', 'display_name']),
-      accountIdentifier: _payloadString(connectionPayload, ['accountIdentifier', 'account_identifier']),
-      rootDisplayName: _payloadString(connectionPayload, ['rootDisplayName', 'root_display_name']),
-      rootFolderPath: _payloadString(connectionPayload, ['rootFolderPath', 'root_folder_path']),
+      connectionId: _payloadString(connectionPayload, [
+        'connectionId',
+        'connection_id',
+      ]),
+      connectedAt: _payloadDateTime(connectionPayload, [
+        'connectedAt',
+        'connected_at',
+      ]),
+      displayName: _payloadString(connectionPayload, [
+        'displayName',
+        'display_name',
+      ]),
+      accountIdentifier: _payloadString(connectionPayload, [
+        'accountIdentifier',
+        'account_identifier',
+      ]),
+      rootDisplayName: _payloadString(connectionPayload, [
+        'rootDisplayName',
+        'root_display_name',
+      ]),
+      rootFolderPath: _payloadString(connectionPayload, [
+        'rootFolderPath',
+        'root_folder_path',
+      ]),
       lastError: _payloadString(connectionPayload, ['lastError', 'last_error']),
-      isActive: _payloadBool(connectionPayload, ['isActive', 'is_active']) &&
+      isActive:
+          _payloadBool(connectionPayload, ['isActive', 'is_active']) &&
           !_payloadBool(connectionPayload, ['deleted']),
+      syncHealth:
+          _payloadString(connectionPayload, ['syncHealth', 'sync_health']) ??
+          'healthy',
+      openConflictCount:
+          _payloadInt(connectionPayload, [
+            'openConflictCount',
+            'open_conflict_count',
+          ]) ??
+          0,
     );
     return true;
   }
@@ -654,17 +694,23 @@ class SyncService {
     if (mirrorPayload.isEmpty) {
       return false;
     }
-    final remoteProjectId =
-        _payloadString(mirrorPayload, ['projectId', 'project_id'])?.trim();
-    final providerConnectionId =
-        _payloadString(mirrorPayload, ['providerConnectionId', 'provider_connection_id'])?.trim();
+    final remoteProjectId = _payloadString(mirrorPayload, [
+      'projectId',
+      'project_id',
+    ])?.trim();
+    final providerConnectionId = _payloadString(mirrorPayload, [
+      'providerConnectionId',
+      'provider_connection_id',
+    ])?.trim();
     if (remoteProjectId == null ||
         remoteProjectId.isEmpty ||
         providerConnectionId == null ||
         providerConnectionId.isEmpty) {
       return false;
     }
-    final localProjectId = await _db.getLocalProjectIdByRemoteId(remoteProjectId);
+    final localProjectId = await _db.getLocalProjectIdByRemoteId(
+      remoteProjectId,
+    );
     if (localProjectId == null) {
       return false;
     }
@@ -672,8 +718,14 @@ class SyncService {
       localProjectId: localProjectId,
       providerConnectionId: providerConnectionId,
       status: _payloadString(mirrorPayload, ['status']) ?? 'pending',
-      providerFolderId: _payloadString(mirrorPayload, ['providerFolderId', 'provider_folder_id']),
-      providerRev: _payloadString(mirrorPayload, ['providerRev', 'provider_rev']),
+      providerFolderId: _payloadString(mirrorPayload, [
+        'providerFolderId',
+        'provider_folder_id',
+      ]),
+      providerRev: _payloadString(mirrorPayload, [
+        'providerRev',
+        'provider_rev',
+      ]),
       lastError: _payloadString(mirrorPayload, ['lastError', 'last_error']),
     );
     return true;
@@ -684,10 +736,14 @@ class SyncService {
     if (mirrorPayload.isEmpty) {
       return false;
     }
-    final remoteAssetId =
-        _payloadString(mirrorPayload, ['assetId', 'asset_id'])?.trim();
-    final providerConnectionId =
-        _payloadString(mirrorPayload, ['providerConnectionId', 'provider_connection_id'])?.trim();
+    final remoteAssetId = _payloadString(mirrorPayload, [
+      'assetId',
+      'asset_id',
+    ])?.trim();
+    final providerConnectionId = _payloadString(mirrorPayload, [
+      'providerConnectionId',
+      'provider_connection_id',
+    ])?.trim();
     if (remoteAssetId == null ||
         remoteAssetId.isEmpty ||
         providerConnectionId == null ||
@@ -702,9 +758,15 @@ class SyncService {
       assetId: asset.id,
       providerConnectionId: providerConnectionId,
       status: _payloadString(mirrorPayload, ['status']) ?? 'pending',
-      providerFileId: _payloadString(mirrorPayload, ['providerFileId', 'provider_file_id']),
+      providerFileId: _payloadString(mirrorPayload, [
+        'providerFileId',
+        'provider_file_id',
+      ]),
       remotePath: _payloadString(mirrorPayload, ['remotePath', 'remote_path']),
-      providerRev: _payloadString(mirrorPayload, ['providerRev', 'provider_rev']),
+      providerRev: _payloadString(mirrorPayload, [
+        'providerRev',
+        'provider_rev',
+      ]),
       lastError: _payloadString(mirrorPayload, ['lastError', 'last_error']),
     );
     return true;
@@ -716,8 +778,10 @@ class SyncService {
       return false;
     }
 
-    final remoteProjectId =
-        _payloadString(projectPayload, ['projectId', 'id'])?.trim();
+    final remoteProjectId = _payloadString(projectPayload, [
+      'projectId',
+      'id',
+    ])?.trim();
     if (remoteProjectId == null || remoteProjectId.isEmpty) {
       return false;
     }
@@ -791,6 +855,30 @@ class SyncService {
       allowResurrection: event.eventType == 'asset_restored',
     );
     return true;
+  }
+
+  String _cloudStateForRemoteAsset(
+    BackendAssetRecord remoteAsset, {
+    required bool hasLocalPath,
+  }) {
+    if (remoteAsset.deleted) {
+      return AssetCloudState.deleted;
+    }
+    switch (remoteAsset.storageState?.trim()) {
+      case AssetCloudState.localOnly:
+        return hasLocalPath
+            ? AssetCloudState.localOnly
+            : AssetCloudState.cloudOnly;
+      case AssetCloudState.cloudOnly:
+        return AssetCloudState.cloudOnly;
+      case AssetCloudState.localAndCloud:
+        return hasLocalPath
+            ? AssetCloudState.localAndCloud
+            : AssetCloudState.cloudOnly;
+    }
+    return hasLocalPath
+        ? AssetCloudState.localAndCloud
+        : AssetCloudState.cloudOnly;
   }
 
   String? _payloadString(Map<String, Object?> payload, List<String> keys) {
@@ -915,7 +1003,9 @@ class SyncService {
       );
     }
     final uploads = await _db.getAllBlobUploadTasks();
-    for (final task in uploads.where((item) => item.state == BlobUploadState.failed)) {
+    for (final task in uploads.where(
+      (item) => item.state == BlobUploadState.failed,
+    )) {
       await _db.upsertBlobUploadTask(
         assetId: task.assetId,
         uploadGeneration: task.uploadGeneration,
@@ -937,7 +1027,8 @@ class SyncService {
         connectionStatus: ProviderConnectionStatus.fromStorage(
           switch (connection.status) {
             'connected' => ProviderConnectionStatus.ready.storageValue,
-            'expired' => ProviderConnectionStatus.reconnectRequired.storageValue,
+            'expired' =>
+              ProviderConnectionStatus.reconnectRequired.storageValue,
             _ => connection.status,
           },
         ),
@@ -949,6 +1040,8 @@ class SyncService {
         rootFolderPath: connection.rootFolderPath,
         lastError: connection.lastError,
         isActive: connection.isActive,
+        syncHealth: connection.syncHealth,
+        openConflictCount: connection.openConflictCount,
       );
     }
   }
@@ -991,7 +1084,8 @@ class SyncService {
       connectionStatus: ProviderConnectionStatus.fromStorage(
         result.connectionStatus ??
             switch (result.status) {
-              'completed' => ProviderConnectionStatus.connectedBootstrapping.storageValue,
+              'completed' =>
+                ProviderConnectionStatus.connectedBootstrapping.storageValue,
               _ => ProviderConnectionStatus.failed.storageValue,
             },
       ),
@@ -1003,6 +1097,8 @@ class SyncService {
       rootFolderPath: result.rootFolderPath,
       lastError: result.lastError,
       isActive: result.status == 'completed',
+      syncHealth: 'healthy',
+      openConflictCount: 0,
     );
     return result;
   }
@@ -1045,6 +1141,8 @@ class SyncService {
       rootFolderPath: null,
       lastError: null,
       isActive: false,
+      syncHealth: 'healthy',
+      openConflictCount: 0,
     );
   }
 
@@ -1067,7 +1165,9 @@ class SyncService {
 
   Future<int> reconcileProjects(Iterable<Project> projects) async {
     final syncableProjects = projects
-        .where((project) => (project.remoteProjectId?.trim().isNotEmpty ?? false))
+        .where(
+          (project) => (project.remoteProjectId?.trim().isNotEmpty ?? false),
+        )
         .toList(growable: false);
     if (syncableProjects.isEmpty) {
       return 0;
@@ -1137,7 +1237,9 @@ class SyncService {
       if (existingLocalProjectId != null) {
         await _db.upsertRemoteProjectSnapshot(
           remoteProjectId: remoteProjectId,
-          name: remoteProject.name.trim().isEmpty ? 'Inbox' : remoteProject.name.trim(),
+          name: remoteProject.name.trim().isEmpty
+              ? 'Inbox'
+              : remoteProject.name.trim(),
           remoteRev: remoteProject.revision,
           deleted: remoteProject.deleted,
         );
@@ -1321,10 +1423,7 @@ class SyncService {
       return;
     }
 
-    await client.deleteAsset(
-      remoteAssetId,
-      expectedRevision: asset.remoteRev,
-    );
+    await client.deleteAsset(remoteAssetId, expectedRevision: asset.remoteRev);
     await _logInfo(
       'remote_delete_requested',
       assetId: asset.id,
@@ -1338,7 +1437,53 @@ class SyncService {
   Future<void> restoreAsset(PhotoAsset asset) async {
     final client = _backendApiClient;
     final remoteAssetId = asset.remoteAssetId?.trim();
-    if (client == null || remoteAssetId == null || remoteAssetId.isEmpty) {
+    if (client == null) {
+      await _db.restoreAsset(asset.id);
+      return;
+    }
+
+    if (remoteAssetId == null || remoteAssetId.isEmpty) {
+      final remoteMatch = await _findRemoteRestoreCandidate(asset);
+      if (remoteMatch != null) {
+        final resolved = remoteMatch.deleted
+            ? await client.restoreAsset(
+                remoteMatch.assetId,
+                expectedRevision: remoteMatch.revision,
+              )
+            : remoteMatch;
+        await _mergeRemoteAsset(
+          resolved,
+          fallbackLocalProjectId: asset.projectId,
+          allowResurrection: true,
+        );
+        final canonical = await _db.getAssetByRemoteId(resolved.assetId);
+        if (canonical != null &&
+            canonical.localPath.trim().isEmpty &&
+            asset.localPath.trim().isNotEmpty &&
+            await File(asset.localPath).exists()) {
+          await _db.updateAssetLocalMedia(
+            assetId: canonical.id,
+            localPath: asset.localPath,
+            thumbPath: asset.thumbPath,
+            hash: asset.hash,
+            cloudState: AssetCloudState.localOnly,
+            existsInPhoneStorage: asset.existsInPhoneStorage,
+          );
+        }
+        if (canonical != null && canonical.id != asset.id) {
+          await _db.purgeAsset(asset.id);
+        }
+        await _logInfo(
+          'remote_restore_shadow_resolved',
+          assetId: asset.id,
+          projectId: asset.projectId,
+          message:
+              'Resolved restore against canonical remote asset '
+              '${remoteMatch.assetId}.',
+        );
+        return;
+      }
+
       await _db.restoreAsset(asset.id);
       return;
     }
@@ -1360,6 +1505,56 @@ class SyncService {
     );
   }
 
+  Future<BackendAssetRecord?> _findRemoteRestoreCandidate(
+    PhotoAsset asset,
+  ) async {
+    final client = _backendApiClient;
+    if (client == null) {
+      return null;
+    }
+    final hash = asset.hash.trim();
+    if (hash.length != 64) {
+      return null;
+    }
+    final project = await _db.getProjectById(asset.projectId);
+    final remoteProjectId = project?.remoteProjectId?.trim();
+    if (remoteProjectId == null || remoteProjectId.isEmpty) {
+      return null;
+    }
+
+    final matches = <BackendAssetRecord>[];
+    String? cursor;
+    do {
+      final response = await client.listAssets(
+        ListAssetsRequest(
+          projectId: remoteProjectId,
+          includeDeleted: true,
+          cursor: cursor,
+          limit: 200,
+        ),
+      );
+      matches.addAll(
+        response.assets.where((candidate) => candidate.sha256 == hash),
+      );
+      cursor = response.nextCursor;
+    } while (cursor != null && cursor.isNotEmpty && matches.length <= 1);
+
+    if (matches.length != 1) {
+      if (matches.length > 1) {
+        await _logInfo(
+          'remote_restore_candidate_ambiguous',
+          assetId: asset.id,
+          projectId: asset.projectId,
+          message:
+              'Skipped remote restore reconciliation because ${matches.length} '
+              'remote assets matched the same hash in this project.',
+        );
+      }
+      return null;
+    }
+    return matches.single;
+  }
+
   Future<void> purgeAsset(PhotoAsset asset) async {
     final client = _backendApiClient;
     final remoteAssetId = asset.remoteAssetId?.trim();
@@ -1368,17 +1563,19 @@ class SyncService {
       return;
     }
 
-    await client.purgeAsset(
-      remoteAssetId,
-      expectedRevision: asset.remoteRev,
-    );
-    await _db.purgeAsset(asset.id);
-    await _logInfo(
-      'remote_purge_completed',
-      assetId: asset.id,
-      projectId: asset.projectId,
-      message: 'Permanently deleted asset from Trash.',
-    );
+    await _db.markAssetPurgeRequested(asset.id);
+    try {
+      await client.purgeAsset(remoteAssetId, expectedRevision: asset.remoteRev);
+      await _logInfo(
+        'remote_purge_requested',
+        assetId: asset.id,
+        projectId: asset.projectId,
+        message: 'Queued permanent delete for the trashed asset.',
+      );
+    } catch (_) {
+      await _db.clearAssetPurgeRequested(asset.id);
+      rethrow;
+    }
   }
 
   Future<void> flushPendingRemoteDeletes() async {
@@ -1462,57 +1659,62 @@ class SyncService {
     }
     _isRepairingRemoteProjection = true;
     try {
-    final remoteLinkedAssets = await _db.getRemoteLinkedAssets(includeDeleted: true);
-    if (remoteLinkedAssets.isEmpty) {
-      return;
-    }
-
-    final preservedLocalMedia = <String, PhotoAsset>{};
-    for (final asset in remoteLinkedAssets) {
-      final remoteAssetId = asset.remoteAssetId?.trim();
-      if (remoteAssetId == null ||
-          remoteAssetId.isEmpty ||
-          asset.localPath.trim().isEmpty) {
-        continue;
-      }
-      final existing = preservedLocalMedia[remoteAssetId];
-      if (existing == null || existing.localPath.trim().isEmpty) {
-        preservedLocalMedia[remoteAssetId] = asset;
-      }
-    }
-
-    await _db.purgeAssetsByIds(remoteLinkedAssets.map((asset) => asset.id));
-    await _logInfo(
-      'remote_projection_repair_started',
-      message:
-          'Rebuilding remote asset projection for ${remoteLinkedAssets.length} local rows.',
-    );
-    await mergeRemoteAssets(projects);
-
-    for (final entry in preservedLocalMedia.entries) {
-      final rebuilt = await _db.getAssetByRemoteId(entry.key);
-      final preserved = entry.value;
-      if (rebuilt == null || rebuilt.localPath.trim().isNotEmpty) {
-        continue;
-      }
-      if (!await File(preserved.localPath).exists()) {
-        continue;
-      }
-      await _db.updateAssetLocalMedia(
-        assetId: rebuilt.id,
-        localPath: preserved.localPath,
-        thumbPath: preserved.thumbPath,
-        hash: preserved.hash,
-        cloudState: rebuilt.status == AssetStatus.deleted
-            ? AssetCloudState.deleted
-            : AssetCloudState.localAndCloud,
+      final remoteLinkedAssets = await _db.getRemoteLinkedAssets(
+        includeDeleted: true,
       );
-    }
+      if (remoteLinkedAssets.isEmpty) {
+        return;
+      }
 
-    await _logInfo(
-      'remote_projection_repair_completed',
-      message: 'Remote asset projection repair completed.',
-    );
+      final preservedLocalMedia = <String, PhotoAsset>{};
+      for (final asset in remoteLinkedAssets) {
+        final remoteAssetId = asset.remoteAssetId?.trim();
+        if (remoteAssetId == null ||
+            remoteAssetId.isEmpty ||
+            asset.localPath.trim().isEmpty) {
+          continue;
+        }
+        final existing = preservedLocalMedia[remoteAssetId];
+        if (existing == null || existing.localPath.trim().isEmpty) {
+          preservedLocalMedia[remoteAssetId] = asset;
+        }
+      }
+
+      await _db.purgeAssetsByIds(remoteLinkedAssets.map((asset) => asset.id));
+      await _logInfo(
+        'remote_projection_repair_started',
+        message:
+            'Rebuilding remote asset projection for ${remoteLinkedAssets.length} local rows.',
+      );
+      await mergeRemoteAssets(projects);
+
+      for (final entry in preservedLocalMedia.entries) {
+        final rebuilt = await _db.getAssetByRemoteId(entry.key);
+        final preserved = entry.value;
+        if (rebuilt == null || rebuilt.localPath.trim().isNotEmpty) {
+          continue;
+        }
+        if (!await File(preserved.localPath).exists()) {
+          continue;
+        }
+        await _db.updateAssetLocalMedia(
+          assetId: rebuilt.id,
+          localPath: preserved.localPath,
+          thumbPath: preserved.thumbPath,
+          hash: preserved.hash,
+          cloudState: rebuilt.status == AssetStatus.deleted
+              ? AssetCloudState.deleted
+              : AssetCloudState.localAndCloud,
+          existsInPhoneStorage: preserved.existsInPhoneStorage,
+        );
+      }
+
+      await _reconcileCommittedAssetShadows();
+
+      await _logInfo(
+        'remote_projection_repair_completed',
+        message: 'Remote asset projection repair completed.',
+      );
     } finally {
       _isRepairingRemoteProjection = false;
     }
@@ -1528,7 +1730,9 @@ class SyncService {
         : await _db.getLocalProjectIdByRemoteId(remoteAsset.projectId!) ??
               fallbackLocalProjectId;
 
-    final matchingRemoteAssets = await _db.getAssetsByRemoteId(remoteAsset.assetId);
+    final matchingRemoteAssets = await _db.getAssetsByRemoteId(
+      remoteAsset.assetId,
+    );
     if (matchingRemoteAssets.length > 1) {
       await _logError(
         'remote_asset_duplicate_remote_id',
@@ -1538,14 +1742,17 @@ class SyncService {
             'Detected ${matchingRemoteAssets.length} local rows for remote asset '
             '${remoteAsset.assetId}. Triggering projection repair.',
       );
-      await _repairRemoteProjection(await _db.getProjects(includeDeleted: true));
+      await _repairRemoteProjection(
+        await _db.getProjects(includeDeleted: true),
+      );
       final repairedAssets = await _db.getAssetsByRemoteId(remoteAsset.assetId);
       if (repairedAssets.length > 1) {
         return;
       }
     }
-    final existingByRemote =
-        (await _db.getAssetsByRemoteId(remoteAsset.assetId)).firstOrNull;
+    final existingByRemote = (await _db.getAssetsByRemoteId(
+      remoteAsset.assetId,
+    )).firstOrNull;
 
     if (existingByRemote != null) {
       if (existingByRemote.status == AssetStatus.deleted &&
@@ -1569,11 +1776,10 @@ class SyncService {
         return;
       }
 
-      final cloudState = remoteAsset.deleted
-          ? AssetCloudState.deleted
-          : existingByRemote.localPath.isEmpty
-          ? AssetCloudState.cloudOnly
-          : AssetCloudState.localAndCloud;
+      final cloudState = _cloudStateForRemoteAsset(
+        remoteAsset,
+        hasLocalPath: existingByRemote.localPath.isNotEmpty,
+      );
       await _db.applyRemoteAssetSnapshot(
         localAssetId: existingByRemote.id,
         projectId: localProjectId,
@@ -1588,11 +1794,21 @@ class SyncService {
         remotePath: remoteAsset.remotePath,
         softDeletedAt: remoteAsset.softDeletedAt,
         hardDeleteDueAt: remoteAsset.hardDeleteDueAt,
+        purgeRequestedAt: remoteAsset.purgeRequestedAt,
+        cloudState: cloudState,
         deleted: remoteAsset.deleted,
       );
-      if (!remoteAsset.deleted && existingByRemote.localPath.isEmpty) {
+      await _reconcileCommittedAssetShadow(
+        remoteAssetId: remoteAsset.assetId,
+        sha256: remoteAsset.sha256,
+        localProjectId: localProjectId,
+      );
+      final reconciledAsset = await _db.getAssetByRemoteId(remoteAsset.assetId);
+      if (!remoteAsset.deleted &&
+          (reconciledAsset?.localPath.trim().isEmpty ??
+              existingByRemote.localPath.isEmpty)) {
         await _downloadRemoteAssetLocally(
-          existingByRemote.copyWith(
+          (reconciledAsset ?? existingByRemote).copyWith(
             projectId: localProjectId,
             cloudState: cloudState,
             remoteAssetId: remoteAsset.assetId,
@@ -1642,7 +1858,14 @@ class SyncService {
       remotePath: remoteAsset.remotePath,
       softDeletedAt: remoteAsset.softDeletedAt,
       hardDeleteDueAt: remoteAsset.hardDeleteDueAt,
+      purgeRequestedAt: remoteAsset.purgeRequestedAt,
+      cloudState: _cloudStateForRemoteAsset(remoteAsset, hasLocalPath: false),
       deleted: remoteAsset.deleted,
+    );
+    await _reconcileCommittedAssetShadow(
+      remoteAssetId: remoteAsset.assetId,
+      sha256: remoteAsset.sha256,
+      localProjectId: localProjectId,
     );
     if (!remoteAsset.deleted) {
       final localAsset = await _db.getAssetByRemoteId(remoteAsset.assetId);
@@ -1650,6 +1873,92 @@ class SyncService {
         await _downloadRemoteAssetLocally(localAsset, remoteAsset: remoteAsset);
       }
     }
+  }
+
+  Future<void> _reconcileCommittedAssetShadows() async {
+    final remoteLinkedAssets = await _db.getRemoteLinkedAssets(
+      includeDeleted: false,
+    );
+    for (final asset in remoteLinkedAssets) {
+      final remoteAssetId = asset.remoteAssetId?.trim();
+      if (remoteAssetId == null || remoteAssetId.isEmpty) {
+        continue;
+      }
+      if (asset.status == AssetStatus.deleted || asset.deletedAt != null) {
+        continue;
+      }
+      if (asset.hash.length != 64) {
+        continue;
+      }
+      await _reconcileCommittedAssetShadow(
+        remoteAssetId: remoteAssetId,
+        sha256: asset.hash,
+        localProjectId: asset.projectId,
+      );
+    }
+  }
+
+  Future<void> _reconcileCommittedAssetShadow({
+    required String remoteAssetId,
+    required String sha256,
+    required int localProjectId,
+  }) async {
+    final canonical = await _db.getAssetByRemoteId(remoteAssetId);
+    if (canonical == null ||
+        canonical.status == AssetStatus.deleted ||
+        canonical.deletedAt != null) {
+      return;
+    }
+
+    final duplicates = (await _db.getAssetsByHashValue(sha256))
+        .where((asset) {
+          if (asset.id == canonical.id) {
+            return false;
+          }
+          if (asset.projectId != localProjectId) {
+            return false;
+          }
+          if (asset.status == AssetStatus.deleted || asset.deletedAt != null) {
+            return false;
+          }
+          final candidateRemoteId = asset.remoteAssetId?.trim() ?? '';
+          return candidateRemoteId.isEmpty;
+        })
+        .toList(growable: false);
+    if (duplicates.isEmpty) {
+      return;
+    }
+
+    var preservedMedia = false;
+    if (canonical.localPath.trim().isEmpty) {
+      final localMediaSource = duplicates.firstWhere(
+        (asset) => asset.localPath.trim().isNotEmpty,
+        orElse: () => canonical,
+      );
+      if (localMediaSource.id != canonical.id &&
+          localMediaSource.localPath.trim().isNotEmpty) {
+        await _db.updateAssetLocalMedia(
+          assetId: canonical.id,
+          localPath: localMediaSource.localPath,
+          thumbPath: localMediaSource.thumbPath,
+          hash: localMediaSource.hash,
+          cloudState: AssetCloudState.localAndCloud,
+          existsInPhoneStorage: localMediaSource.existsInPhoneStorage,
+        );
+        preservedMedia = true;
+      }
+    }
+
+    await _db.purgeAssetsByIds(duplicates.map((asset) => asset.id));
+    await _logInfo(
+      'remote_asset_shadow_reconciled',
+      assetId: canonical.id,
+      projectId: canonical.projectId,
+      message:
+          'Removed ${duplicates.length} stale local upload '
+          'shadow${duplicates.length == 1 ? '' : 's'} for remote asset '
+          '$remoteAssetId.${preservedMedia ? ' Preserved local media.' : ''}',
+    );
   }
 
   Future<void> _downloadRemoteAssetLocally(

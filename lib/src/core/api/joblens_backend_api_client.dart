@@ -294,17 +294,16 @@ class JoblensBackendApiClient {
     required String projectId,
     int? expectedRevision,
   }) async {
+    final body = <String, Object?>{
+      'projectId': projectId,
+    };
+    if (expectedRevision != null) {
+      body['expectedRevision'] = expectedRevision;
+    }
     final map = await _authorizedJsonRequest(
       method: 'POST',
       path: '/assets/$assetId/move',
-      body: {
-        'projectId': projectId,
-        ...?expectedRevision == null
-            ? null
-            : {
-                'expectedRevision': expectedRevision,
-              },
-      },
+      body: body,
     );
     return MoveAssetResponse.fromMap(map);
   }

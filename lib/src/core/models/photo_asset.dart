@@ -11,6 +11,7 @@ enum AssetIngestState { pending, ready, failed }
 enum AssetSyncStatus { local, syncing, synced, failed, cloudOnly }
 
 class AssetCloudState {
+  static const localOnly = 'local_only';
   static const localAndCloud = 'local_and_cloud';
   static const cloudOnly = 'cloud_only';
   static const deleted = 'deleted';
@@ -31,6 +32,7 @@ class PhotoAsset {
     required this.existsInPhoneStorage,
     this.deletedAt,
     this.hardDeleteDueAt,
+    this.purgeRequestedAt,
     this.remoteRev,
     this.localSeq = 0,
     this.dirtyFields = const [],
@@ -57,6 +59,7 @@ class PhotoAsset {
   final bool existsInPhoneStorage;
   final DateTime? deletedAt;
   final DateTime? hardDeleteDueAt;
+  final DateTime? purgeRequestedAt;
   final int? remoteRev;
   final int localSeq;
   final List<String> dirtyFields;
@@ -81,6 +84,7 @@ class PhotoAsset {
     bool? existsInPhoneStorage,
     DateTime? deletedAt,
     DateTime? hardDeleteDueAt,
+    DateTime? purgeRequestedAt,
     int? remoteRev,
     int? localSeq,
     List<String>? dirtyFields,
@@ -107,6 +111,7 @@ class PhotoAsset {
       existsInPhoneStorage: existsInPhoneStorage ?? this.existsInPhoneStorage,
       deletedAt: deletedAt ?? this.deletedAt,
       hardDeleteDueAt: hardDeleteDueAt ?? this.hardDeleteDueAt,
+      purgeRequestedAt: purgeRequestedAt ?? this.purgeRequestedAt,
       remoteRev: remoteRev ?? this.remoteRev,
       localSeq: localSeq ?? this.localSeq,
       dirtyFields: dirtyFields ?? this.dirtyFields,
@@ -141,6 +146,7 @@ class PhotoAsset {
       'exists_in_phone_storage': existsInPhoneStorage ? 1 : 0,
       'deleted_at': deletedAt?.toIso8601String(),
       'hard_delete_due_at': hardDeleteDueAt?.toIso8601String(),
+      'purge_requested_at': purgeRequestedAt?.toIso8601String(),
       'remote_rev': remoteRev,
       'local_seq': localSeq,
       'dirty_fields': jsonEncode(dirtyFields),
@@ -171,6 +177,9 @@ class PhotoAsset {
       hardDeleteDueAt: (map['hard_delete_due_at'] as String?) == null
           ? null
           : DateTime.parse(map['hard_delete_due_at']! as String),
+      purgeRequestedAt: (map['purge_requested_at'] as String?) == null
+          ? null
+          : DateTime.parse(map['purge_requested_at']! as String),
       remoteRev: map['remote_rev'] as int?,
       localSeq: (map['local_seq'] as int?) ?? 0,
       dirtyFields: ((jsonDecode((map['dirty_fields'] as String?) ?? '[]')

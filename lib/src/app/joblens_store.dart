@@ -1564,6 +1564,11 @@ class JoblensStore extends ChangeNotifier {
             ? AssetSyncStatus.local
             : AssetSyncStatus.cloudOnly;
     }
+    if (asset.cloudState == AssetCloudState.localOnly) {
+      return asset.localPath.trim().isNotEmpty
+          ? AssetSyncStatus.local
+          : AssetSyncStatus.cloudOnly;
+    }
     if ((remoteAssetId?.isNotEmpty ?? false)) {
       if (activeProvider != null) {
         final activeProviderKey = activeProvider.providerType.key;

@@ -122,6 +122,7 @@ void main() {
     expect(assetColumnNames, contains('cloud_state'));
     expect(assetColumnNames, contains('last_sync_error_code'));
     expect(assetColumnNames, contains('hard_delete_due_at'));
+    expect(assetColumnNames, contains('purge_requested_at'));
 
     final row = await db.query(
       'photo_assets',

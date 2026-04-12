@@ -173,7 +173,10 @@ class _SyncPageState extends ConsumerState<SyncPage>
             if (canSyncWithCloud)
               for (final providerAccount in store.providers)
                 () {
-                  final isLocked = _isProviderLocked(providerAccount, lockedProvider);
+                  final isLocked = _isProviderLocked(
+                    providerAccount,
+                    lockedProvider,
+                  );
                   final isFutureIntegration = _isFutureIntegration(
                     providerAccount.providerType,
                   );
@@ -221,10 +224,10 @@ class _SyncPageState extends ConsumerState<SyncPage>
                 onTap: !canSyncWithCloud
                     ? null
                     : () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => const DevicesPage(),
-                          ),
+                        MaterialPageRoute<void>(
+                          builder: (_) => const DevicesPage(),
                         ),
+                      ),
               ),
             ),
           ],
@@ -264,9 +267,9 @@ class _SyncPageState extends ConsumerState<SyncPage>
           children: [
             Text(
               'Connect ${providerAccount.providerType.label}',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 10),
             Text(
@@ -448,7 +451,6 @@ class _SyncPageState extends ConsumerState<SyncPage>
       ),
     );
   }
-
 }
 
 class _SyncStatusCard extends StatelessWidget {
@@ -468,6 +470,23 @@ class _SyncStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final provider = selectedProviderAccount;
+    final providerStatusText = provider == null
+        ? 'No cloud provider connected'
+        : provider.isExpired
+        ? '${provider.providerType.label} needs attention'
+        : provider.syncHealth == 'failed'
+        ? '${provider.providerType.label} failed'
+        : provider.syncHealth == 'degraded'
+        ? '${provider.providerType.label} needs attention'
+        : '${provider.providerType.label} connected';
+    final providerStatusDetail = provider == null
+        ? null
+        : provider.openConflictCount > 0
+        ? '${provider.openConflictCount} provider conflict${provider.openConflictCount == 1 ? '' : 's'} require review.'
+        : (provider.lastError?.trim().isNotEmpty ?? false)
+        ? provider.lastError!.trim()
+        : null;
     return Card(
       child: InkWell(
         onTap: onTap,
@@ -484,13 +503,20 @@ class _SyncStatusCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          selectedProviderAccount == null
-                              ? 'No cloud provider connected'
-                              : '${selectedProviderAccount!.providerType.label} ${selectedProviderAccount!.isExpired ? 'needs attention' : 'connected'}',
+                          providerStatusText,
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
-                        if (selectedProviderAccount?.connectedAccountLabel case final account?)
+                        if (providerStatusDetail != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              providerStatusDetail,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        if (selectedProviderAccount?.connectedAccountLabel
+                            case final account?)
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
                             child: Text(
@@ -659,8 +685,7 @@ class _SyncActivityPage extends ConsumerWidget {
         return;
       }
       final message = switch (result.status) {
-        ShareResultStatus.success =>
-          'Sync log shared successfully.',
+        ShareResultStatus.success => 'Sync log shared successfully.',
         ShareResultStatus.dismissed =>
           'Share sheet closed. You can export again any time.',
         _ => 'Sync log ready to share or save from the share sheet.',
@@ -734,10 +759,16 @@ class _ProviderConnectionCard extends StatelessWidget {
       fontWeight: FontWeight.w700,
       letterSpacing: -0.2,
     );
+    final hasConflicts = providerAccount.openConflictCount > 0;
     final statusText = isFutureIntegration
         ? 'Future integration'
         : switch (providerAccount.connectionStatus) {
-            ProviderConnectionStatus.ready => 'Connected',
+            ProviderConnectionStatus.ready =>
+              providerAccount.syncHealth == 'failed'
+                  ? 'Sync failed'
+                  : providerAccount.syncHealth == 'degraded'
+                  ? 'Needs attention'
+                  : 'Connected',
             ProviderConnectionStatus.connectedBootstrapping =>
               'Preparing library',
             ProviderConnectionStatus.connecting => 'Connecting',
@@ -757,9 +788,7 @@ class _ProviderConnectionCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              _ProviderLogoCircle(
-                provider: providerAccount.providerType,
-              ),
+              _ProviderLogoCircle(provider: providerAccount.providerType),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -779,6 +808,15 @@ class _ProviderConnectionCard extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+                    if (!isFutureIntegration && hasConflicts)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          '${providerAccount.openConflictCount} provider conflict${providerAccount.openConflictCount == 1 ? '' : 's'} require review.',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ),
                     if (isFutureIntegration)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
@@ -801,9 +839,19 @@ class _ProviderConnectionCard extends StatelessWidget {
                         padding: const EdgeInsets.only(top: 4),
                         child: Text(
                           rootPath,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ),
+                    if (!isFutureIntegration &&
+                        !hasConflicts &&
+                        (providerAccount.lastError?.trim().isNotEmpty ?? false))
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          providerAccount.lastError!.trim(),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
                         ),
                       ),
                   ],
@@ -836,7 +884,9 @@ class _ProviderConnectionCard extends StatelessWidget {
                   child: FilledButton(
                     onPressed: canReconnect ? onConnect : null,
                     style: FilledButton.styleFrom(
-                      backgroundColor: isExpired ? scheme.error : effectiveAccent,
+                      backgroundColor: isExpired
+                          ? scheme.error
+                          : effectiveAccent,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
@@ -855,7 +905,9 @@ class _ProviderConnectionCard extends StatelessWidget {
                   child: OutlinedButton(
                     onPressed: onDisconnect,
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: isExpired ? scheme.error : effectiveAccent,
+                      foregroundColor: isExpired
+                          ? scheme.error
+                          : effectiveAccent,
                       side: BorderSide(
                         color: isExpired ? scheme.error : effectiveAccent,
                       ),
@@ -898,9 +950,7 @@ class _ProviderConnectionCard extends StatelessWidget {
 }
 
 class _ProviderLogoCircle extends StatelessWidget {
-  const _ProviderLogoCircle({
-    required this.provider,
-  });
+  const _ProviderLogoCircle({required this.provider});
 
   final CloudProviderType provider;
 
@@ -923,9 +973,7 @@ class _ProviderLogoCircle extends StatelessWidget {
         child: SizedBox(
           width: 30,
           height: 30,
-          child: CustomPaint(
-            painter: _ProviderLogoPainter(provider),
-          ),
+          child: CustomPaint(painter: _ProviderLogoPainter(provider)),
         ),
       ),
     );
@@ -1079,11 +1127,26 @@ class _ProviderLogoPainter extends CustomPainter {
 
     final w = size.width * 0.24;
     final h = size.height * 0.20;
-    canvas.drawPath(diamond(size.width * 0.34, size.height * 0.34, w, h), paint);
-    canvas.drawPath(diamond(size.width * 0.66, size.height * 0.34, w, h), paint);
-    canvas.drawPath(diamond(size.width * 0.34, size.height * 0.58, w, h), paint);
-    canvas.drawPath(diamond(size.width * 0.66, size.height * 0.58, w, h), paint);
-    canvas.drawPath(diamond(size.width * 0.50, size.height * 0.78, w * 0.9, h * 0.75), paint);
+    canvas.drawPath(
+      diamond(size.width * 0.34, size.height * 0.34, w, h),
+      paint,
+    );
+    canvas.drawPath(
+      diamond(size.width * 0.66, size.height * 0.34, w, h),
+      paint,
+    );
+    canvas.drawPath(
+      diamond(size.width * 0.34, size.height * 0.58, w, h),
+      paint,
+    );
+    canvas.drawPath(
+      diamond(size.width * 0.66, size.height * 0.58, w, h),
+      paint,
+    );
+    canvas.drawPath(
+      diamond(size.width * 0.50, size.height * 0.78, w * 0.9, h * 0.75),
+      paint,
+    );
   }
 
   void _paintNextcloud(Canvas canvas, Size size) {

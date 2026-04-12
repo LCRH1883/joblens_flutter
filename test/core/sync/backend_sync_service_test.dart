@@ -171,47 +171,49 @@ void main() {
       final harness = await _createHarness();
       addTearDown(harness.dispose);
 
-      final fakeClient = _FakeBackendApiClient(
-        bulkCheckResponse: BulkCheckAssetsResponse(
-          projectId: 'remote-project-1',
-          duplicateCount: 0,
-          missingCount: 1,
-          results: [
-            BulkCheckResult(
-              deviceAssetId: 'asset-local',
-              sha256: 'a' * 64,
-              status: 'missing',
-              assetId: null,
-            ),
-          ],
-        ),
-        prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
-          'status': 'upload_required',
-          'provider': 'onedrive',
-          'uploadSessionId': 'session-onedrive-1',
-          'remotePath':
-              'electrical/e45a4a020087_a47eb091-1fcc-41bc-82d6-fc60bcf06e85.jpg',
-          'upload': {
-            'strategy': 'chunked_put',
-            'url': 'https://upload.example/onedrive-session',
-            'method': 'PUT',
-            'headers': const {},
-          },
-        }),
-        commitResponse: CommitAssetResponse.fromMap({
-          'assetId': 'asset-remote-2',
-          'duplicate': false,
-          'committed': true,
-          'provider': 'onedrive',
-          'remoteFileId': 'onedrive-item-42',
-          'remotePath':
-              'electrical/e45a4a020087_a47eb091-1fcc-41bc-82d6-fc60bcf06e85.jpg',
-        }),
-        projectId: 'remote-project-1',
-      )..uploadResult = const UploadInstructionResult(
-          remoteFileId: 'onedrive-item-42',
-          rawResponse: {'id': 'onedrive-item-42'},
-        );
+      final fakeClient =
+          _FakeBackendApiClient(
+              bulkCheckResponse: BulkCheckAssetsResponse(
+                projectId: 'remote-project-1',
+                duplicateCount: 0,
+                missingCount: 1,
+                results: [
+                  BulkCheckResult(
+                    deviceAssetId: 'asset-local',
+                    sha256: 'a' * 64,
+                    status: 'missing',
+                    assetId: null,
+                  ),
+                ],
+              ),
+              prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
+                'status': 'upload_required',
+                'provider': 'onedrive',
+                'uploadSessionId': 'session-onedrive-1',
+                'remotePath':
+                    'electrical/e45a4a020087_a47eb091-1fcc-41bc-82d6-fc60bcf06e85.jpg',
+                'upload': {
+                  'strategy': 'chunked_put',
+                  'url': 'https://upload.example/onedrive-session',
+                  'method': 'PUT',
+                  'headers': const {},
+                },
+              }),
+              commitResponse: CommitAssetResponse.fromMap({
+                'assetId': 'asset-remote-2',
+                'duplicate': false,
+                'committed': true,
+                'provider': 'onedrive',
+                'remoteFileId': 'onedrive-item-42',
+                'remotePath':
+                    'electrical/e45a4a020087_a47eb091-1fcc-41bc-82d6-fc60bcf06e85.jpg',
+              }),
+              projectId: 'remote-project-1',
+            )
+            ..uploadResult = const UploadInstructionResult(
+              remoteFileId: 'onedrive-item-42',
+              rawResponse: {'id': 'onedrive-item-42'},
+            );
       final syncService = SyncService(
         harness.database,
         backendApiClient: fakeClient,
@@ -228,7 +230,10 @@ void main() {
       await harness.database.markBootstrapCompleted();
       await syncService.kick(forceBootstrap: false);
 
-      expect(fakeClient.lastCommitRequest?.provider, CloudProviderType.oneDrive);
+      expect(
+        fakeClient.lastCommitRequest?.provider,
+        CloudProviderType.oneDrive,
+      );
       expect(fakeClient.lastCommitRequest?.remoteFileId, 'onedrive-item-42');
       expect(
         fakeClient.lastCommitRequest?.uploadSessionId,
@@ -329,110 +334,116 @@ void main() {
     expect(uploads, isEmpty);
   });
 
-  test('active provider backfills existing local-only asset into upload lane', () async {
-    final harness = await _createHarness();
-    addTearDown(harness.dispose);
+  test(
+    'active provider backfills existing local-only asset into upload lane',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
 
-    final fakeClient = _FakeBackendApiClient(
-      bulkCheckResponse: BulkCheckAssetsResponse(
+      final fakeClient = _FakeBackendApiClient(
+        bulkCheckResponse: BulkCheckAssetsResponse(
+          projectId: 'remote-project-1',
+          duplicateCount: 0,
+          missingCount: 1,
+          results: [
+            BulkCheckResult(
+              deviceAssetId: 'asset-local',
+              sha256: 'a' * 64,
+              status: 'missing',
+              assetId: null,
+            ),
+          ],
+        ),
+        prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
+          'status': 'upload_required',
+          'provider': 'dropbox',
+          'uploadSessionId': 'session-existing-local',
+          'remotePath': 'Joblens/Library/existing.jpg',
+          'remoteFileId': 'provider-file-existing',
+          'upload': {
+            'strategy': 'single_put',
+            'url': 'https://upload.example/file',
+            'method': 'PUT',
+            'headers': {'x-upload-token': 'abc'},
+          },
+        }),
+        commitResponse: CommitAssetResponse.fromMap({
+          'assetId': 'asset-remote-existing',
+          'duplicate': false,
+          'committed': true,
+          'provider': 'dropbox',
+          'remoteFileId': 'provider-file-existing',
+          'remotePath': 'Joblens/Library/existing.jpg',
+        }),
         projectId: 'remote-project-1',
-        duplicateCount: 0,
-        missingCount: 1,
-        results: [
-          BulkCheckResult(
-            deviceAssetId: 'asset-local',
-            sha256: 'a' * 64,
-            status: 'missing',
-            assetId: null,
-          ),
-        ],
-      ),
-      prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
-        'status': 'upload_required',
-        'provider': 'dropbox',
-        'uploadSessionId': 'session-existing-local',
-        'remotePath': 'Joblens/Library/existing.jpg',
-        'remoteFileId': 'provider-file-existing',
-        'upload': {
-          'strategy': 'single_put',
-          'url': 'https://upload.example/file',
-          'method': 'PUT',
-          'headers': {'x-upload-token': 'abc'},
-        },
-      }),
-      commitResponse: CommitAssetResponse.fromMap({
-        'assetId': 'asset-remote-existing',
-        'duplicate': false,
-        'committed': true,
-        'provider': 'dropbox',
-        'remoteFileId': 'provider-file-existing',
-        'remotePath': 'Joblens/Library/existing.jpg',
-      }),
-      projectId: 'remote-project-1',
-    );
-    final syncService = SyncService(
-      harness.database,
-      backendApiClient: fakeClient,
-      mediaStorage: harness.mediaStorage,
-    );
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
 
-    final project = await harness.createProject('Library');
-    await harness.database.markProjectSynced(
-      project.id,
-      remoteProjectId: 'remote-project-1',
-      remoteRev: 1,
-    );
-    await harness.database.updateProviderAccountStatus(
-      CloudProviderType.dropbox,
-      connectionStatus: ProviderConnectionStatus.ready,
-      displayName: 'Dropbox',
-      accountIdentifier: 'jane@example.com',
-      isActive: true,
-    );
-    final asset = await harness.ingestAsset(projectId: project.id, seed: 42);
-    await harness.database.deleteBlobUploadsForAsset(asset.id);
+      final project = await harness.createProject('Library');
+      await harness.database.markProjectSynced(
+        project.id,
+        remoteProjectId: 'remote-project-1',
+        remoteRev: 1,
+      );
+      await harness.database.updateProviderAccountStatus(
+        CloudProviderType.dropbox,
+        connectionStatus: ProviderConnectionStatus.ready,
+        displayName: 'Dropbox',
+        accountIdentifier: 'jane@example.com',
+        isActive: true,
+      );
+      final asset = await harness.ingestAsset(projectId: project.id, seed: 42);
+      await harness.database.deleteBlobUploadsForAsset(asset.id);
 
-    expect(await harness.database.getAllBlobUploadTasks(), isEmpty);
+      expect(await harness.database.getAllBlobUploadTasks(), isEmpty);
 
-    await harness.database.markBootstrapCompleted();
-    await syncService.kick(forceBootstrap: false);
+      await harness.database.markBootstrapCompleted();
+      await syncService.kick(forceBootstrap: false);
 
-    final updated = await harness.database.getAssetById(asset.id);
-    final uploads = await harness.database.getAllBlobUploadTasks();
-    expect(fakeClient.uploadCalls, 1);
-    expect(updated?.remoteAssetId, 'asset-remote-existing');
-    expect(updated?.remoteProvider, CloudProviderType.dropbox.key);
-    expect(updated?.remoteFileId, 'provider-file-existing');
-    expect(uploads, isEmpty);
-  });
+      final updated = await harness.database.getAssetById(asset.id);
+      final uploads = await harness.database.getAllBlobUploadTasks();
+      expect(fakeClient.uploadCalls, 1);
+      expect(updated?.remoteAssetId, 'asset-remote-existing');
+      expect(updated?.remoteProvider, CloudProviderType.dropbox.key);
+      expect(updated?.remoteFileId, 'provider-file-existing');
+      expect(uploads, isEmpty);
+    },
+  );
 
-  test('sync startup backfills existing local-only project into backend sync', () async {
-    final harness = await _createHarness();
-    addTearDown(harness.dispose);
+  test(
+    'sync startup backfills existing local-only project into backend sync',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
 
-    final fakeClient = _FakeBackendApiClient(
-      projectId: 'remote-existing-project',
-      listProjectsResponse: const ListProjectsResponse(projects: []),
-    );
-    final syncService = SyncService(
-      harness.database,
-      backendApiClient: fakeClient,
-      mediaStorage: harness.mediaStorage,
-    );
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-existing-project',
+        listProjectsResponse: const ListProjectsResponse(projects: []),
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
 
-    final project = await harness.createProject('Existing Local Project');
-    await harness.database.completeEntitySync(
-      SyncEntityType.project,
-      project.id.toString(),
-    );
-    await harness.database.markBootstrapCompleted();
+      final project = await harness.createProject('Existing Local Project');
+      await harness.database.completeEntitySync(
+        SyncEntityType.project,
+        project.id.toString(),
+      );
+      await harness.database.markBootstrapCompleted();
 
-    await syncService.kick(forceBootstrap: false);
+      await syncService.kick(forceBootstrap: false);
 
-    final updated = await harness.database.getProjectById(project.id);
-    expect(updated?.remoteProjectId, 'remote-existing-project');
-    expect(updated?.remoteRev, 1);
-  });
+      final updated = await harness.database.getProjectById(project.id);
+      expect(updated?.remoteProjectId, 'remote-existing-project');
+      expect(updated?.remoteRev, 1);
+    },
+  );
 
   test('bootstrap failure does not block pending uploads', () async {
     final harness = await _createHarness();
@@ -497,44 +508,52 @@ void main() {
     expect(updated?.remoteAssetId, 'asset-remote-bootstrap-fail');
   });
 
-  test('refreshProviderConnections persists identity and expired state', () async {
-    final harness = await _createHarness();
-    addTearDown(harness.dispose);
+  test(
+    'refreshProviderConnections persists identity and expired state',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
 
-    final fakeClient = _FakeBackendApiClient(
-      projectId: 'remote-project-1',
-      providerConnectionsResponse: ProviderConnectionsResponse(
-        connections: [
-          ProviderConnectionSummary(
-            provider: CloudProviderType.dropbox,
-            status: 'expired',
-            connectedAt: DateTime.parse('2026-04-08T20:00:00.000Z'),
-            lastError: 'token expired',
-            displayName: 'Jane Dropbox',
-            accountIdentifier: 'jane@example.com',
-          ),
-        ],
-      ),
-    );
-    final syncService = SyncService(
-      harness.database,
-      backendApiClient: fakeClient,
-    );
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-project-1',
+        providerConnectionsResponse: ProviderConnectionsResponse(
+          connections: [
+            ProviderConnectionSummary(
+              provider: CloudProviderType.dropbox,
+              status: 'expired',
+              connectedAt: DateTime.parse('2026-04-08T20:00:00.000Z'),
+              lastError: 'token expired',
+              displayName: 'Jane Dropbox',
+              accountIdentifier: 'jane@example.com',
+              syncHealth: 'degraded',
+              openConflictCount: 2,
+            ),
+          ],
+        ),
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+      );
 
-    await syncService.refreshProviderConnections();
+      await syncService.refreshProviderConnections();
 
-    final provider = (await harness.database.getProviderAccounts()).singleWhere(
-      (account) => account.providerType == CloudProviderType.dropbox,
-    );
-    expect(provider.tokenState, ProviderTokenState.expired);
-    expect(provider.displayName, 'Jane Dropbox');
-    expect(provider.accountIdentifier, 'jane@example.com');
-    expect(provider.connectedAccountLabel, 'Jane Dropbox • jane@example.com');
-    expect(
-      provider.connectedAt?.toUtc().toIso8601String(),
-      '2026-04-08T20:00:00.000Z',
-    );
-  });
+      final provider = (await harness.database.getProviderAccounts())
+          .singleWhere(
+            (account) => account.providerType == CloudProviderType.dropbox,
+          );
+      expect(provider.tokenState, ProviderTokenState.expired);
+      expect(provider.displayName, 'Jane Dropbox');
+      expect(provider.accountIdentifier, 'jane@example.com');
+      expect(provider.connectedAccountLabel, 'Jane Dropbox • jane@example.com');
+      expect(provider.syncHealth, 'degraded');
+      expect(provider.openConflictCount, 2);
+      expect(
+        provider.connectedAt?.toUtc().toIso8601String(),
+        '2026-04-08T20:00:00.000Z',
+      );
+    },
+  );
 
   test('reconcileProjects only requests synced projects', () async {
     final harness = await _createHarness();
@@ -566,10 +585,10 @@ void main() {
     expect(localOnly.remoteProjectId, isNull);
     expect(scheduled, 2);
     expect(fakeClient.reconcileCalls, 2);
-    expect(
-      fakeClient.reconciledProjectIds,
-      ['remote-project-a', 'remote-project-b'],
-    );
+    expect(fakeClient.reconciledProjectIds, [
+      'remote-project-a',
+      'remote-project-b',
+    ]);
   });
 
   test(
@@ -955,297 +974,484 @@ void main() {
     },
   );
 
-  test('sync events apply project and asset snapshots without full list refresh', () async {
+  test(
+    'sync events apply project and asset snapshots without full list refresh',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-library',
+        syncEventsResponses: [
+          SyncEventsResponse(
+            events: [
+              BackendSyncEvent(
+                id: 1,
+                projectId: 'remote-library',
+                eventType: 'project_created',
+                entityType: 'project',
+                entityId: 'remote-library',
+                payload: const {
+                  'project': {
+                    'id': 'remote-library',
+                    'projectId': 'remote-library',
+                    'name': 'Library',
+                    'revision': 2,
+                    'deleted': false,
+                    'createdAt': '2026-01-01T00:00:00.000Z',
+                    'updatedAt': '2026-01-01T00:00:00.000Z',
+                  },
+                },
+                createdAt: DateTime(2026, 1, 1),
+              ),
+              BackendSyncEvent(
+                id: 2,
+                projectId: 'remote-library',
+                eventType: 'asset_committed',
+                entityType: 'asset',
+                entityId: 'asset-remote-1',
+                payload: const {
+                  'asset': {
+                    'id': 'asset-remote-1',
+                    'assetId': 'asset-remote-1',
+                    'projectId': 'remote-library',
+                    'sha256':
+                        'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                    'mediaType': 'photo',
+                    'filename': 'cloud.jpg',
+                    'provider': 'google_drive',
+                    'remoteFileId': 'provider-file-1',
+                    'remotePath': 'Joblens/Library/cloud.jpg',
+                    'revision': 4,
+                    'deleted': false,
+                    'createdAt': '2026-01-02T00:00:00.000Z',
+                    'updatedAt': '2026-01-02T00:00:00.000Z',
+                  },
+                },
+                createdAt: DateTime(2026, 1, 2),
+              ),
+            ],
+            nextAfter: 2,
+            hasMore: false,
+          ),
+        ],
+        downloadBytes: List<int>.generate(256, (index) => index % 255),
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
+
+      await harness.database.setBackendDeviceId('device-backend-1');
+      await harness.database.markBootstrapCompleted();
+
+      await syncService.kick();
+
+      expect(fakeClient.listProjectsCalls, 0);
+      expect(fakeClient.listAssetsCalls, 0);
+
+      final projects = await harness.database.getProjects();
+      final library = projects.firstWhere(
+        (project) => project.name == 'Library',
+      );
+      final assets = await harness.database.getAssets(projectId: library.id);
+
+      expect(library.remoteProjectId, 'remote-library');
+      expect(library.remoteRev, 2);
+      expect(assets, hasLength(1));
+      expect(assets.single.remoteAssetId, 'asset-remote-1');
+      expect(assets.single.remoteRev, 4);
+      expect(assets.single.localPath, isNotEmpty);
+    },
+  );
+
+  test(
+    'sync events merge remote project into same-name local project',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-electrical',
+        syncEventsResponses: [
+          SyncEventsResponse(
+            events: [
+              BackendSyncEvent(
+                id: 1,
+                projectId: 'remote-electrical',
+                eventType: 'project_created',
+                entityType: 'project',
+                entityId: 'remote-electrical',
+                payload: const {
+                  'project': {
+                    'id': 'remote-electrical',
+                    'projectId': 'remote-electrical',
+                    'name': 'electrical',
+                    'revision': 1,
+                    'deleted': false,
+                    'createdAt': '2026-04-09T00:00:00.000Z',
+                    'updatedAt': '2026-04-09T00:00:00.000Z',
+                  },
+                },
+                createdAt: DateTime(2026, 4, 9),
+              ),
+            ],
+            nextAfter: 1,
+            hasMore: false,
+          ),
+        ],
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
+
+      final localProjectId = await harness.database.createProject('electrical');
+      await harness.database.completeEntitySync(
+        SyncEntityType.project,
+        localProjectId.toString(),
+      );
+      await harness.database.markBootstrapCompleted();
+
+      await syncService.kick(forceBootstrap: false);
+
+      final projects = await harness.database.getProjects(includeDeleted: true);
+      expect(
+        projects.where((project) => project.name == 'electrical'),
+        hasLength(1),
+      );
+      final project = projects.singleWhere((item) => item.id == localProjectId);
+      expect(project.remoteProjectId, 'remote-electrical');
+      expect(project.remoteRev, 1);
+    },
+  );
+
+  test(
+    'mergeRemoteAssets does not resurrect a locally deleted asset',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-library',
+        listAssetsResponses: {
+          'remote-library': ListAssetsResponse(
+            assets: [
+              BackendAssetRecord(
+                assetId: 'asset-remote-1',
+                sha256: 'c' * 64,
+                projectId: 'remote-library',
+                filename: 'cloud.jpg',
+                createdAt: DateTime(2026, 1, 2),
+                provider: CloudProviderType.googleDrive,
+                remoteFileId: 'provider-file-1',
+                remotePath: 'Joblens/Library/cloud.jpg',
+                deleted: false,
+              ),
+            ],
+            nextCursor: null,
+          ),
+        },
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
+
+      final project = await harness.createProject('Library');
+      await harness.database.updateProjectRemoteId(
+        project.id,
+        'remote-library',
+      );
+      final asset = await harness.ingestAsset(projectId: project.id, seed: 88);
+      await harness.database.updateAssetCloudMetadata(
+        assetId: asset.id,
+        remoteAssetId: 'asset-remote-1',
+        remoteProvider: CloudProviderType.googleDrive.key,
+        remoteFileId: 'provider-file-1',
+        uploadPath: 'Joblens/Library/cloud.jpg',
+        cloudState: AssetCloudState.localAndCloud,
+        lastSyncErrorCode: null,
+      );
+      await harness.database.softDeleteAsset(asset.id);
+
+      final syncedProject = await harness.database.getProjectById(project.id);
+      await syncService.mergeRemoteAssets([syncedProject!]);
+
+      final updated = await harness.database.getAssetById(asset.id);
+      expect(updated?.status, AssetStatus.deleted);
+      expect(updated?.cloudState, AssetCloudState.deleted);
+    },
+  );
+
+  test(
+    'mergeRemoteAssets does not bind unrelated same-hash local assets',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-library',
+        listAssetsResponses: {
+          'remote-library': ListAssetsResponse(
+            assets: [
+              BackendAssetRecord(
+                assetId: 'asset-remote-1',
+                sha256: 'd' * 64,
+                projectId: 'remote-library',
+                filename: 'cloud.jpg',
+                createdAt: DateTime(2026, 1, 2),
+                provider: CloudProviderType.googleDrive,
+                remoteFileId: 'provider-file-1',
+                remotePath: 'Joblens/Library/cloud.jpg',
+                revision: 3,
+              ),
+            ],
+            nextCursor: null,
+          ),
+        },
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
+
+      final project = await harness.createProject('Library');
+      await harness.database.updateProjectRemoteId(
+        project.id,
+        'remote-library',
+      );
+      final asset = await harness.ingestAsset(
+        projectId: project.id,
+        seed: 99,
+        hashOverride: 'd' * 64,
+      );
+      final matchedBeforeMerge = await harness.database.getAssetByHash(
+        'd' * 64,
+      );
+      expect(matchedBeforeMerge?.id, asset.id);
+      await harness.database.completeBlobUpload(
+        asset.id,
+        asset.uploadGeneration,
+      );
+
+      final syncedProject = await harness.database.getProjectById(project.id);
+      await syncService.mergeRemoteAssets([syncedProject!]);
+
+      final blobTasks = await harness.database.getAllBlobUploadTasks();
+      expect(blobTasks.where((task) => task.assetId == asset.id), isEmpty);
+
+      final updatedLocal = await harness.database.getAssetById(asset.id);
+      expect(updatedLocal?.remoteAssetId, isNull);
+
+      final remoteShadow = await harness.database.getAssetByRemoteId(
+        'asset-remote-1',
+      );
+      expect(remoteShadow, isNotNull);
+      expect(remoteShadow?.id, 'remote:asset-remote-1');
+      expect(remoteShadow?.remoteRev, 3);
+    },
+  );
+
+  test('sync kick reconciles stale same-project upload shadows', () async {
     final harness = await _createHarness();
     addTearDown(harness.dispose);
 
-    final fakeClient = _FakeBackendApiClient(
-      projectId: 'remote-library',
-      syncEventsResponses: [
-        SyncEventsResponse(
-          events: [
-            BackendSyncEvent(
-              id: 1,
-              projectId: 'remote-library',
-              eventType: 'project_created',
-              entityType: 'project',
-              entityId: 'remote-library',
-              payload: const {
-                'project': {
-                  'id': 'remote-library',
-                  'projectId': 'remote-library',
-                  'name': 'Library',
-                  'revision': 2,
-                  'deleted': false,
-                  'createdAt': '2026-01-01T00:00:00.000Z',
-                  'updatedAt': '2026-01-01T00:00:00.000Z',
-                },
-              },
-              createdAt: DateTime(2026, 1, 1),
-            ),
-            BackendSyncEvent(
-              id: 2,
-              projectId: 'remote-library',
-              eventType: 'asset_committed',
-              entityType: 'asset',
-              entityId: 'asset-remote-1',
-              payload: const {
-                'asset': {
-                  'id': 'asset-remote-1',
-                  'assetId': 'asset-remote-1',
-                  'projectId': 'remote-library',
-                  'sha256':
-                      'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
-                  'mediaType': 'photo',
-                  'filename': 'cloud.jpg',
-                  'provider': 'google_drive',
-                  'remoteFileId': 'provider-file-1',
-                  'remotePath': 'Joblens/Library/cloud.jpg',
-                  'revision': 4,
-                  'deleted': false,
-                  'createdAt': '2026-01-02T00:00:00.000Z',
-                  'updatedAt': '2026-01-02T00:00:00.000Z',
-                },
-              },
-              createdAt: DateTime(2026, 1, 2),
-            ),
-          ],
-          nextAfter: 2,
-          hasMore: false,
-        ),
-      ],
-      downloadBytes: List<int>.generate(256, (index) => index % 255),
-    );
+    final fakeClient = _FakeBackendApiClient(projectId: 'remote-library');
     final syncService = SyncService(
       harness.database,
       backendApiClient: fakeClient,
       mediaStorage: harness.mediaStorage,
     );
 
-    await harness.database.setBackendDeviceId('device-backend-1');
-    await harness.database.markBootstrapCompleted();
-
-    await syncService.kick();
-
-    expect(fakeClient.listProjectsCalls, 0);
-    expect(fakeClient.listAssetsCalls, 0);
-
-    final projects = await harness.database.getProjects();
-    final library = projects.firstWhere((project) => project.name == 'Library');
-    final assets = await harness.database.getAssets(projectId: library.id);
-
-    expect(library.remoteProjectId, 'remote-library');
-    expect(library.remoteRev, 2);
-    expect(assets, hasLength(1));
-    expect(assets.single.remoteAssetId, 'asset-remote-1');
-    expect(assets.single.remoteRev, 4);
-    expect(assets.single.localPath, isNotEmpty);
-  });
-
-  test('sync events merge remote project into same-name local project', () async {
-    final harness = await _createHarness();
-    addTearDown(harness.dispose);
-
-    final fakeClient = _FakeBackendApiClient(
-      projectId: 'remote-electrical',
-      syncEventsResponses: [
-        SyncEventsResponse(
-          events: [
-            BackendSyncEvent(
-              id: 1,
-              projectId: 'remote-electrical',
-              eventType: 'project_created',
-              entityType: 'project',
-              entityId: 'remote-electrical',
-              payload: const {
-                'project': {
-                  'id': 'remote-electrical',
-                  'projectId': 'remote-electrical',
-                  'name': 'electrical',
-                  'revision': 1,
-                  'deleted': false,
-                  'createdAt': '2026-04-09T00:00:00.000Z',
-                  'updatedAt': '2026-04-09T00:00:00.000Z',
-                },
-              },
-              createdAt: DateTime(2026, 4, 9),
-            ),
-          ],
-          nextAfter: 1,
-          hasMore: false,
-        ),
-      ],
+    final project = await harness.createProject('Library');
+    await harness.database.updateProjectRemoteId(project.id, 'remote-library');
+    final shadow = await harness.ingestAsset(
+      projectId: project.id,
+      seed: 111,
+      hashOverride: 'e' * 64,
     );
-    final syncService = SyncService(
-      harness.database,
-      backendApiClient: fakeClient,
-      mediaStorage: harness.mediaStorage,
+    await harness.database.updateAssetCloudMetadata(
+      assetId: shadow.id,
+      uploadSessionId: 'upl-shadow-1',
+      cloudState: AssetCloudState.localAndCloud,
+      lastSyncErrorCode: null,
     );
-
-    final localProjectId = await harness.database.createProject('electrical');
-    await harness.database.completeEntitySync(
-      SyncEntityType.project,
-      localProjectId.toString(),
+    await harness.database.applyRemoteAssetSnapshot(
+      localAssetId: 'remote:asset-remote-1',
+      projectId: project.id,
+      remoteAssetId: 'asset-remote-1',
+      sha256: 'e' * 64,
+      createdAt: DateTime(2026, 1, 2),
+      remoteRev: 1,
+      filename: 'cloud.jpg',
+      remoteProvider: CloudProviderType.googleDrive.key,
+      remoteFileId: 'provider-file-1',
+      remotePath: 'Joblens/Library/cloud.jpg',
+      deleted: false,
     );
     await harness.database.markBootstrapCompleted();
 
     await syncService.kick(forceBootstrap: false);
 
-    final projects = await harness.database.getProjects(includeDeleted: true);
-    expect(
-      projects.where((project) => project.name == 'electrical'),
-      hasLength(1),
-    );
-    final project = projects.singleWhere((item) => item.id == localProjectId);
-    expect(project.remoteProjectId, 'remote-electrical');
-    expect(project.remoteRev, 1);
+    final assets = await harness.database.getAssetsByHashValue('e' * 64);
+    expect(assets, hasLength(1));
+    expect(assets.single.remoteAssetId, 'asset-remote-1');
+    expect(assets.single.localPath.trim(), isNotEmpty);
+    expect(assets.single.id, isNot(shadow.id));
+
+    final projectCounts = await harness.database.getProjectCounts();
+    expect(projectCounts[project.id], 1);
   });
 
-  test('mergeRemoteAssets does not resurrect a locally deleted asset', () async {
-    final harness = await _createHarness();
-    addTearDown(harness.dispose);
+  test(
+    'restore resolves unlinked deleted shadow to canonical remote asset',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
 
-    final fakeClient = _FakeBackendApiClient(
-      projectId: 'remote-library',
-      listAssetsResponses: {
-        'remote-library': ListAssetsResponse(
-          assets: [
-            BackendAssetRecord(
-              assetId: 'asset-remote-1',
-              sha256: 'c' * 64,
-              projectId: 'remote-library',
-              filename: 'cloud.jpg',
-              createdAt: DateTime(2026, 1, 2),
-              provider: CloudProviderType.googleDrive,
-              remoteFileId: 'provider-file-1',
-              remotePath: 'Joblens/Library/cloud.jpg',
-              deleted: false,
-            ),
-          ],
-          nextCursor: null,
-        ),
-      },
-    );
-    final syncService = SyncService(
-      harness.database,
-      backendApiClient: fakeClient,
-      mediaStorage: harness.mediaStorage,
-    );
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-library',
+        listAssetsResponses: {
+          'remote-library': ListAssetsResponse(
+            assets: [
+              BackendAssetRecord(
+                assetId: 'asset-remote-restore-1',
+                sha256: 'f' * 64,
+                projectId: 'remote-library',
+                filename: 'cloud.jpg',
+                createdAt: DateTime(2026, 1, 2),
+                provider: CloudProviderType.googleDrive,
+                remoteFileId: 'provider-file-restore-1',
+                remotePath: 'Joblens/Library/cloud.jpg',
+                revision: 4,
+                deleted: false,
+              ),
+            ],
+            nextCursor: null,
+          ),
+        },
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
 
-    final project = await harness.createProject('Library');
-    await harness.database.updateProjectRemoteId(project.id, 'remote-library');
-    final asset = await harness.ingestAsset(projectId: project.id, seed: 88);
-    await harness.database.updateAssetCloudMetadata(
-      assetId: asset.id,
-      remoteAssetId: 'asset-remote-1',
-      remoteProvider: CloudProviderType.googleDrive.key,
-      remoteFileId: 'provider-file-1',
-      uploadPath: 'Joblens/Library/cloud.jpg',
-      cloudState: AssetCloudState.localAndCloud,
-      lastSyncErrorCode: null,
-    );
-    await harness.database.softDeleteAsset(asset.id);
+      final project = await harness.createProject('Library');
+      await harness.database.updateProjectRemoteId(
+        project.id,
+        'remote-library',
+      );
+      final shadow = await harness.ingestAsset(
+        projectId: project.id,
+        seed: 112,
+        hashOverride: 'f' * 64,
+      );
+      await harness.database.softDeleteAsset(shadow.id);
 
-    final syncedProject = await harness.database.getProjectById(project.id);
-    await syncService.mergeRemoteAssets([syncedProject!]);
+      final deletedBefore = await harness.database.getDeletedAssets();
+      expect(deletedBefore.map((asset) => asset.id), contains(shadow.id));
 
-    final updated = await harness.database.getAssetById(asset.id);
-    expect(updated?.status, AssetStatus.deleted);
-    expect(updated?.cloudState, AssetCloudState.deleted);
-  });
+      await syncService.restoreAsset(deletedBefore.single);
 
-  test('mergeRemoteAssets does not bind unrelated same-hash local assets', () async {
-    final harness = await _createHarness();
-    addTearDown(harness.dispose);
+      final restored = await harness.database.getAssetByRemoteId(
+        'asset-remote-restore-1',
+      );
+      expect(restored, isNotNull);
+      expect(restored?.status, AssetStatus.active);
+      expect(restored?.deletedAt, isNull);
+      expect(restored?.cloudState, AssetCloudState.localOnly);
+      expect(restored?.localPath.trim(), isNotEmpty);
 
-    final fakeClient = _FakeBackendApiClient(
-      projectId: 'remote-library',
-      listAssetsResponses: {
-        'remote-library': ListAssetsResponse(
-          assets: [
-            BackendAssetRecord(
-              assetId: 'asset-remote-1',
-              sha256: 'd' * 64,
-              projectId: 'remote-library',
-              filename: 'cloud.jpg',
-              createdAt: DateTime(2026, 1, 2),
-              provider: CloudProviderType.googleDrive,
-              remoteFileId: 'provider-file-1',
-              remotePath: 'Joblens/Library/cloud.jpg',
-              revision: 3,
-            ),
-          ],
-          nextCursor: null,
-        ),
-      },
-    );
-    final syncService = SyncService(
-      harness.database,
-      backendApiClient: fakeClient,
-      mediaStorage: harness.mediaStorage,
-    );
+      final shadowAfter = await harness.database.getAssetById(shadow.id);
+      expect(shadowAfter, isNull);
+    },
+  );
 
-    final project = await harness.createProject('Library');
-    await harness.database.updateProjectRemoteId(project.id, 'remote-library');
-    final asset = await harness.ingestAsset(
-      projectId: project.id,
-      seed: 99,
-      hashOverride: 'd' * 64,
-    );
-    final matchedBeforeMerge = await harness.database.getAssetByHash('d' * 64);
-    expect(matchedBeforeMerge?.id, asset.id);
-    await harness.database.completeBlobUpload(asset.id, asset.uploadGeneration);
+  test(
+    'flushPendingRemoteDeletes retries backend delete for local deletions',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
 
-    final syncedProject = await harness.database.getProjectById(project.id);
-    await syncService.mergeRemoteAssets([syncedProject!]);
+      final fakeClient = _FakeBackendApiClient(projectId: 'remote-library');
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
 
-    final blobTasks = await harness.database.getAllBlobUploadTasks();
-    expect(blobTasks.where((task) => task.assetId == asset.id), isEmpty);
+      final project = await harness.createProject('Library');
+      final asset = await harness.ingestAsset(projectId: project.id, seed: 89);
+      await harness.database.updateAssetCloudMetadata(
+        assetId: asset.id,
+        remoteAssetId: 'asset-remote-delete',
+        remoteProvider: CloudProviderType.googleDrive.key,
+        remoteFileId: 'provider-file-delete',
+        uploadPath: 'Joblens/Library/delete.jpg',
+        cloudState: AssetCloudState.localAndCloud,
+        lastSyncErrorCode: null,
+      );
+      await harness.database.softDeleteAsset(asset.id);
 
-    final updatedLocal = await harness.database.getAssetById(asset.id);
-    expect(updatedLocal?.remoteAssetId, isNull);
+      await syncService.flushPendingRemoteDeletes();
 
-    final remoteShadow = await harness.database.getAssetByRemoteId('asset-remote-1');
-    expect(remoteShadow, isNotNull);
-    expect(remoteShadow?.id, 'remote:asset-remote-1');
-    expect(remoteShadow?.remoteRev, 3);
-  });
+      final updated = await harness.database.getAssetById(asset.id);
+      expect(fakeClient.deleteCalls, 1);
+      expect(fakeClient.deletedAssetIds, contains('asset-remote-delete'));
+      expect(updated?.status, AssetStatus.deleted);
+      expect(updated?.cloudState, AssetCloudState.deleted);
+      expect(updated?.lastSyncErrorCode, isNull);
+    },
+  );
 
-  test('flushPendingRemoteDeletes retries backend delete for local deletions', () async {
-    final harness = await _createHarness();
-    addTearDown(harness.dispose);
+  test(
+    'purgeAsset hides trashed asset immediately while backend purge runs',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
 
-    final fakeClient = _FakeBackendApiClient(
-      projectId: 'remote-library',
-    );
-    final syncService = SyncService(
-      harness.database,
-      backendApiClient: fakeClient,
-      mediaStorage: harness.mediaStorage,
-    );
+      final fakeClient = _FakeBackendApiClient(projectId: 'remote-library');
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
 
-    final project = await harness.createProject('Library');
-    final asset = await harness.ingestAsset(projectId: project.id, seed: 89);
-    await harness.database.updateAssetCloudMetadata(
-      assetId: asset.id,
-      remoteAssetId: 'asset-remote-delete',
-      remoteProvider: CloudProviderType.googleDrive.key,
-      remoteFileId: 'provider-file-delete',
-      uploadPath: 'Joblens/Library/delete.jpg',
-      cloudState: AssetCloudState.localAndCloud,
-      lastSyncErrorCode: null,
-    );
-    await harness.database.softDeleteAsset(asset.id);
+      final project = await harness.createProject('Library');
+      final asset = await harness.ingestAsset(projectId: project.id, seed: 144);
+      await harness.database.updateAssetCloudMetadata(
+        assetId: asset.id,
+        remoteAssetId: 'asset-remote-purge',
+        remoteProvider: CloudProviderType.googleDrive.key,
+        remoteFileId: 'provider-file-purge',
+        uploadPath: 'Joblens/Library/purge.jpg',
+        cloudState: AssetCloudState.deleted,
+        lastSyncErrorCode: null,
+      );
+      await harness.database.softDeleteAsset(asset.id);
 
-    await syncService.flushPendingRemoteDeletes();
+      final deletedBefore = await harness.database.getDeletedAssets();
+      expect(deletedBefore.map((item) => item.id), contains(asset.id));
 
-    final updated = await harness.database.getAssetById(asset.id);
-    expect(fakeClient.deleteCalls, 1);
-    expect(fakeClient.deletedAssetIds, contains('asset-remote-delete'));
-    expect(updated?.status, AssetStatus.deleted);
-    expect(updated?.cloudState, AssetCloudState.deleted);
-    expect(updated?.lastSyncErrorCode, isNull);
-  });
+      await syncService.purgeAsset(deletedBefore.single);
+
+      final deletedAfter = await harness.database.getDeletedAssets();
+      expect(deletedAfter.map((item) => item.id), isNot(contains(asset.id)));
+
+      final updated = await harness.database.getAssetById(asset.id);
+      expect(updated, isNotNull);
+      expect(updated?.purgeRequestedAt, isNotNull);
+      expect(updated?.status, AssetStatus.deleted);
+      expect(fakeClient.purgeCalls, 1);
+      expect(fakeClient.purgedAssetIds, contains('asset-remote-purge'));
+    },
+  );
 }
 
 class _Harness {
@@ -1357,6 +1563,8 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   int moveCalls = 0;
   int bulkCheckCalls = 0;
   int deleteCalls = 0;
+  int purgeCalls = 0;
+  int restoreCalls = 0;
   int listProjectsCalls = 0;
   int listAssetsCalls = 0;
   int syncEventsCalls = 0;
@@ -1369,6 +1577,8 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   bool lastUpdatedDeviceMarkedSyncAt = false;
   CommitAssetRequest? lastCommitRequest;
   final List<String> deletedAssetIds = <String>[];
+  final List<String> purgedAssetIds = <String>[];
+  final List<String> restoredAssetIds = <String>[];
   final List<String> reconciledProjectIds = <String>[];
 
   @override
@@ -1404,13 +1614,21 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   }) async {
     syncEventsCalls += 1;
     if (syncEventsResponses.isEmpty) {
-      return SyncEventsResponse(events: const [], nextAfter: after, hasMore: false);
+      return SyncEventsResponse(
+        events: const [],
+        nextAfter: after,
+        hasMore: false,
+      );
     }
     final index = syncEventsCalls - 1;
     if (index < syncEventsResponses.length) {
       return syncEventsResponses[index];
     }
-    return SyncEventsResponse(events: const [], nextAfter: after, hasMore: false);
+    return SyncEventsResponse(
+      events: const [],
+      nextAfter: after,
+      hasMore: false,
+    );
   }
 
   @override
@@ -1546,6 +1764,40 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   Future<void> deleteAsset(String assetId, {int? expectedRevision}) async {
     deleteCalls += 1;
     deletedAssetIds.add(assetId);
+  }
+
+  @override
+  Future<void> purgeAsset(String assetId, {int? expectedRevision}) async {
+    purgeCalls += 1;
+    purgedAssetIds.add(assetId);
+  }
+
+  @override
+  Future<BackendAssetRecord> restoreAsset(
+    String assetId, {
+    int? expectedRevision,
+  }) async {
+    restoreCalls += 1;
+    restoredAssetIds.add(assetId);
+    final match = listAssetsResponses.values
+        .expand((response) => response.assets)
+        .firstWhere((asset) => asset.assetId == assetId);
+    return BackendAssetRecord(
+      assetId: match.assetId,
+      sha256: match.sha256,
+      projectId: match.projectId,
+      filename: match.filename,
+      createdAt: match.createdAt,
+      takenAt: match.takenAt,
+      revision: match.revision,
+      provider: match.provider,
+      remoteFileId: match.remoteFileId,
+      remotePath: match.remotePath,
+      storageState: AssetCloudState.localOnly,
+      deleted: false,
+      softDeletedAt: null,
+      hardDeleteDueAt: null,
+    );
   }
 }
 

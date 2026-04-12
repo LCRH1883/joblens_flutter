@@ -23,7 +23,7 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 12;
+  static const _schemaVersion = 14;
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -103,6 +103,19 @@ class AppDatabase {
             'ALTER TABLE photo_assets ADD COLUMN hard_delete_due_at TEXT',
           );
         }
+        if (oldVersion < 13) {
+          await db.execute(
+            'ALTER TABLE photo_assets ADD COLUMN purge_requested_at TEXT',
+          );
+        }
+        if (oldVersion < 14) {
+          await db.execute(
+            "ALTER TABLE provider_accounts ADD COLUMN sync_health TEXT NOT NULL DEFAULT 'healthy'",
+          );
+          await db.execute(
+            'ALTER TABLE provider_accounts ADD COLUMN open_conflict_count INTEGER NOT NULL DEFAULT 0',
+          );
+        }
       },
     );
 
@@ -157,6 +170,7 @@ class AppDatabase {
         last_sync_error_code TEXT,
         deleted_at TEXT,
         hard_delete_due_at TEXT,
+        purge_requested_at TEXT,
         remote_rev INTEGER,
         local_seq INTEGER NOT NULL DEFAULT 0,
         dirty_fields TEXT NOT NULL DEFAULT '[]',
@@ -178,7 +192,9 @@ class AppDatabase {
         root_display_name TEXT,
         root_folder_path TEXT,
         last_error TEXT,
-        is_active INTEGER NOT NULL DEFAULT 0
+        is_active INTEGER NOT NULL DEFAULT 0,
+        sync_health TEXT NOT NULL DEFAULT 'healthy',
+        open_conflict_count INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -288,6 +304,12 @@ class AppDatabase {
     await _ensureColumn(
       db,
       tableName: 'photo_assets',
+      columnName: 'purge_requested_at',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
       columnName: 'remote_rev',
       columnSql: 'INTEGER',
     );
@@ -356,6 +378,18 @@ class AppDatabase {
       db,
       tableName: 'provider_accounts',
       columnName: 'is_active',
+      columnSql: 'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'provider_accounts',
+      columnName: 'sync_health',
+      columnSql: "TEXT NOT NULL DEFAULT 'healthy'",
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'provider_accounts',
+      columnName: 'open_conflict_count',
       columnSql: 'INTEGER NOT NULL DEFAULT 0',
     );
 
@@ -527,6 +561,7 @@ class AppDatabase {
         last_sync_error_code TEXT,
         deleted_at TEXT,
         hard_delete_due_at TEXT,
+        purge_requested_at TEXT,
         remote_rev INTEGER,
         local_seq INTEGER NOT NULL DEFAULT 0,
         dirty_fields TEXT NOT NULL DEFAULT '[]',
@@ -550,7 +585,9 @@ class AppDatabase {
         root_display_name TEXT,
         root_folder_path TEXT,
         last_error TEXT,
-        is_active INTEGER NOT NULL DEFAULT 0
+        is_active INTEGER NOT NULL DEFAULT 0,
+        sync_health TEXT NOT NULL DEFAULT 'healthy',
+        open_conflict_count INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -1321,6 +1358,8 @@ class AppDatabase {
     String? remotePath,
     required String sha256,
     required DateTime createdAt,
+    DateTime? purgeRequestedAt,
+    String? cloudState,
     bool deleted = false,
   }) async {
     final now = DateTime.now();
@@ -1340,12 +1379,13 @@ class AppDatabase {
       'remote_file_id': remoteFileId,
       'upload_session_id': null,
       'upload_path': remotePath,
-      'cloud_state': deleted
-          ? AssetCloudState.deleted
-          : AssetCloudState.cloudOnly,
+      'cloud_state':
+          cloudState ??
+          (deleted ? AssetCloudState.deleted : AssetCloudState.cloudOnly),
       'exists_in_phone_storage': 0,
       'deleted_at': deleted ? createdAt.toIso8601String() : null,
       'hard_delete_due_at': null,
+      'purge_requested_at': purgeRequestedAt?.toIso8601String(),
       'remote_rev': null,
       'local_seq': 0,
       'dirty_fields': '[]',
@@ -1368,6 +1408,8 @@ class AppDatabase {
     String? remotePath,
     DateTime? softDeletedAt,
     DateTime? hardDeleteDueAt,
+    DateTime? purgeRequestedAt,
+    String? cloudState,
     bool deleted = false,
   }) async {
     final existing = await getAssetById(localAssetId);
@@ -1381,11 +1423,17 @@ class AppDatabase {
         remotePath: remotePath ?? filename,
         sha256: sha256,
         createdAt: createdAt,
+        purgeRequestedAt: purgeRequestedAt,
+        cloudState: cloudState,
         deleted: deleted,
       );
       await _db.update(
         'photo_assets',
-        {'remote_rev': remoteRev, 'dirty_fields': '[]'},
+        {
+          'remote_rev': remoteRev,
+          'dirty_fields': '[]',
+          'purge_requested_at': purgeRequestedAt?.toIso8601String(),
+        },
         where: 'id = ?',
         whereArgs: [localAssetId],
       );
@@ -1400,16 +1448,21 @@ class AppDatabase {
         'remote_provider': remoteProvider,
         'remote_file_id': remoteFileId,
         'upload_path': remotePath,
-        'cloud_state': deleted
-            ? AssetCloudState.deleted
-            : existing.localPath.isEmpty
-            ? AssetCloudState.cloudOnly
-            : AssetCloudState.localAndCloud,
+        'cloud_state':
+            cloudState ??
+            (deleted
+                ? AssetCloudState.deleted
+                : existing.localPath.isEmpty
+                ? AssetCloudState.cloudOnly
+                : AssetCloudState.localAndCloud),
         'status': deleted ? AssetStatus.deleted.name : AssetStatus.active.name,
         'deleted_at': deleted
             ? (softDeletedAt ?? DateTime.now()).toIso8601String()
             : null,
-        'hard_delete_due_at': deleted ? hardDeleteDueAt?.toIso8601String() : null,
+        'hard_delete_due_at': deleted
+            ? hardDeleteDueAt?.toIso8601String()
+            : null,
+        'purge_requested_at': purgeRequestedAt?.toIso8601String(),
         'remote_rev': remoteRev,
         'dirty_fields': '[]',
         'last_sync_error_code': null,
@@ -1448,7 +1501,7 @@ class AppDatabase {
   Future<List<PhotoAsset>> getDeletedAssets() async {
     final rows = await _db.query(
       'photo_assets',
-      where: 'status = ?',
+      where: 'status = ? AND purge_requested_at IS NULL',
       whereArgs: [AssetStatus.deleted.name],
       orderBy: 'deleted_at DESC, created_at DESC',
     );
@@ -1494,9 +1547,10 @@ class AppDatabase {
           'status': AssetStatus.active.name,
           'deleted_at': null,
           'hard_delete_due_at': null,
+          'purge_requested_at': null,
           'cloud_state': localPath.trim().isEmpty
               ? AssetCloudState.cloudOnly
-              : AssetCloudState.localAndCloud,
+              : AssetCloudState.localOnly,
           'last_sync_error_code': null,
           'dirty_fields': '[]',
         },
@@ -1506,12 +1560,31 @@ class AppDatabase {
     });
   }
 
+  Future<void> markAssetPurgeRequested(
+    String assetId, {
+    DateTime? requestedAt,
+  }) async {
+    await _db.update(
+      'photo_assets',
+      {'purge_requested_at': (requestedAt ?? DateTime.now()).toIso8601String()},
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
+  Future<void> clearAssetPurgeRequested(String assetId) async {
+    await _db.update(
+      'photo_assets',
+      {'purge_requested_at': null},
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
   Future<List<PhotoAsset>> getRemoteLinkedAssets({
     bool includeDeleted = true,
   }) async {
-    final whereParts = <String>[
-      "TRIM(COALESCE(remote_asset_id, '')) != ''",
-    ];
+    final whereParts = <String>["TRIM(COALESCE(remote_asset_id, '')) != ''"];
     final whereArgs = <Object?>[];
     if (!includeDeleted) {
       whereParts.add('status = ?');
@@ -1529,15 +1602,13 @@ class AppDatabase {
   Future<List<AssetIntegrityIssue>> scanAssetIntegrityIssues() async {
     final issues = <AssetIntegrityIssue>[];
 
-    final duplicateRemoteIdRows = await _db.rawQuery(
-      '''
+    final duplicateRemoteIdRows = await _db.rawQuery('''
       SELECT remote_asset_id, COUNT(*) AS cnt
       FROM photo_assets
       WHERE TRIM(COALESCE(remote_asset_id, '')) != ''
       GROUP BY remote_asset_id
       HAVING COUNT(*) > 1
-      ''',
-    );
+      ''');
     for (final row in duplicateRemoteIdRows) {
       issues.add(
         AssetIntegrityIssue(
@@ -1698,6 +1769,18 @@ class AppDatabase {
   }
 
   Future<void> ensureProviderRows() async {
+    await _ensureColumn(
+      _db,
+      tableName: 'provider_accounts',
+      columnName: 'sync_health',
+      columnSql: "TEXT NOT NULL DEFAULT 'healthy'",
+    );
+    await _ensureColumn(
+      _db,
+      tableName: 'provider_accounts',
+      columnName: 'open_conflict_count',
+      columnSql: 'INTEGER NOT NULL DEFAULT 0',
+    );
     for (final provider in CloudProviderTypeX.userConfigurableProviders) {
       await _db.insert('provider_accounts', {
         'id': _uuid.v4(),
@@ -1712,6 +1795,8 @@ class AppDatabase {
         'root_folder_path': null,
         'last_error': null,
         'is_active': 0,
+        'sync_health': 'healthy',
+        'open_conflict_count': 0,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
       await _db.update(
         'provider_accounts',
@@ -1726,6 +1811,8 @@ class AppDatabase {
           'root_folder_path': null,
           'last_error': null,
           'is_active': 0,
+          'sync_health': 'healthy',
+          'open_conflict_count': 0,
         },
         where: 'provider_type = ? AND connection_status = ?',
         whereArgs: [
@@ -2610,16 +2697,21 @@ class AppDatabase {
     required String thumbPath,
     required String hash,
     String? cloudState,
+    bool? existsInPhoneStorage,
   }) async {
+    final values = <String, Object?>{
+      'local_path': localPath,
+      'thumb_path': thumbPath,
+      'hash': hash,
+      'cloud_state': cloudState,
+      'ingest_state': AssetIngestState.ready.name,
+    };
+    if (existsInPhoneStorage != null) {
+      values['exists_in_phone_storage'] = existsInPhoneStorage ? 1 : 0;
+    }
     await _db.update(
       'photo_assets',
-      {
-        'local_path': localPath,
-        'thumb_path': thumbPath,
-        'hash': hash,
-        'cloud_state': cloudState,
-        'ingest_state': AssetIngestState.ready.name,
-      },
+      values,
       where: 'id = ?',
       whereArgs: [assetId],
     );
@@ -2754,6 +2846,8 @@ class AppDatabase {
     String? rootFolderPath,
     String? lastError,
     bool isActive = false,
+    String syncHealth = 'healthy',
+    int openConflictCount = 0,
   }) async {
     final tokenState = switch (connectionStatus) {
       ProviderConnectionStatus.ready => ProviderTokenState.connected,
@@ -2785,6 +2879,10 @@ class AppDatabase {
             ? lastError!.trim()
             : null,
         'is_active': isActive ? 1 : 0,
+        'sync_health': syncHealth.trim().isNotEmpty
+            ? syncHealth.trim()
+            : 'healthy',
+        'open_conflict_count': openConflictCount < 0 ? 0 : openConflictCount,
       },
       where: 'provider_type = ?',
       whereArgs: [provider.key],

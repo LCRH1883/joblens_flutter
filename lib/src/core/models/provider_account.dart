@@ -38,6 +38,8 @@ class ProviderAccount {
     this.rootFolderPath,
     this.lastError,
     this.isActive = false,
+    this.syncHealth = 'healthy',
+    this.openConflictCount = 0,
   });
 
   final String id;
@@ -51,6 +53,8 @@ class ProviderAccount {
   final String? rootFolderPath;
   final String? lastError;
   final bool isActive;
+  final String syncHealth;
+  final int openConflictCount;
 
   ProviderTokenState get tokenState => switch (connectionStatus) {
     ProviderConnectionStatus.ready => ProviderTokenState.connected,
@@ -113,6 +117,8 @@ class ProviderAccount {
       'root_folder_path': rootFolderPath,
       'last_error': lastError,
       'is_active': isActive ? 1 : 0,
+      'sync_health': syncHealth,
+      'open_conflict_count': openConflictCount,
     };
   }
 
@@ -143,6 +149,10 @@ class ProviderAccount {
       rootFolderPath: map['root_folder_path'] as String?,
       lastError: map['last_error'] as String?,
       isActive: ((map['is_active'] as int?) ?? 0) == 1,
+      syncHealth: (map['sync_health'] as String?)?.trim().isNotEmpty == true
+          ? (map['sync_health'] as String).trim()
+          : 'healthy',
+      openConflictCount: (map['open_conflict_count'] as int?) ?? 0,
     );
   }
 }

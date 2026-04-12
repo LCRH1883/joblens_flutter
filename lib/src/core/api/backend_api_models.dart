@@ -13,6 +13,8 @@ class ProviderConnectionSummary {
     this.rootDisplayName,
     this.rootFolderPath,
     this.isActive = false,
+    this.syncHealth = 'healthy',
+    this.openConflictCount = 0,
   });
 
   final CloudProviderType provider;
@@ -26,6 +28,8 @@ class ProviderConnectionSummary {
   final String? rootDisplayName;
   final String? rootFolderPath;
   final bool isActive;
+  final String syncHealth;
+  final int openConflictCount;
 
   bool get isConnected => status == 'ready' || status == 'connected';
   bool get isExpired => status == 'expired' || status == 'reconnect_required';
@@ -42,13 +46,9 @@ class ProviderConnectionSummary {
       connectedAt: _asNullableDateTime(
         map['connectedAt'] ?? map['connected_at'],
       ),
-      lastSyncAt: _asNullableDateTime(
-        map['lastSyncAt'] ?? map['last_sync_at'],
-      ),
+      lastSyncAt: _asNullableDateTime(map['lastSyncAt'] ?? map['last_sync_at']),
       lastError: _asNullableString(map['lastError'] ?? map['last_error']),
-      displayName: _asNullableString(
-        map['displayName'] ?? map['display_name'],
-      ),
+      displayName: _asNullableString(map['displayName'] ?? map['display_name']),
       accountIdentifier: _asNullableString(
         map['accountIdentifier'] ?? map['account_identifier'],
       ),
@@ -59,6 +59,12 @@ class ProviderConnectionSummary {
         map['rootFolderPath'] ?? map['root_folder_path'],
       ),
       isActive: _asBool(map['isActive'] ?? map['is_active']),
+      syncHealth:
+          _asNullableString(map['syncHealth'] ?? map['sync_health']) ??
+          'healthy',
+      openConflictCount: _asInt(
+        map['openConflictCount'] ?? map['open_conflict_count'],
+      ),
     );
   }
 }
@@ -92,7 +98,10 @@ class BeginProviderConnectionResponse {
   factory BeginProviderConnectionResponse.fromMap(Map<String, dynamic> map) {
     return BeginProviderConnectionResponse(
       authorizationUrl: _asString(
-        map['launchUrl'] ?? map['authorizationUrl'] ?? map['authUrl'] ?? map['url'],
+        map['launchUrl'] ??
+            map['authorizationUrl'] ??
+            map['authUrl'] ??
+            map['url'],
       ),
       sessionId: _asNullableString(map['sessionId'] ?? map['state']),
       expiresAt: _asNullableDateTime(map['expiresAt'] ?? map['expires_at']),
@@ -134,30 +143,44 @@ class ProviderAuthSessionResult {
   bool get isCompleted => status == 'completed';
 
   factory ProviderAuthSessionResult.fromMap(Map<String, dynamic> map) {
-    final bootstrapCounts = _asMap(map['bootstrapCounts'] ?? map['bootstrap_counts']);
+    final bootstrapCounts = _asMap(
+      map['bootstrapCounts'] ?? map['bootstrap_counts'],
+    );
     return ProviderAuthSessionResult(
       sessionId: _asString(map['sessionId'] ?? map['sid'] ?? map['state']),
       status: _asString(map['status'], fallback: 'failed'),
-      provider: CloudProviderTypeX.fromKey(
-        _asString(map['provider']),
-      ),
+      provider: CloudProviderTypeX.fromKey(_asString(map['provider'])),
       intent: _asNullableString(map['intent']),
-      connectionId: _asNullableString(map['connectionId'] ?? map['connection_id']),
-      connectionStatus: _asNullableString(map['connectionStatus'] ?? map['connection_status']),
+      connectionId: _asNullableString(
+        map['connectionId'] ?? map['connection_id'],
+      ),
+      connectionStatus: _asNullableString(
+        map['connectionStatus'] ?? map['connection_status'],
+      ),
       providerAccountEmail: _asNullableString(
-        map['providerAccountEmail'] ?? map['provider_account_email'] ?? map['accountIdentifier'] ?? map['account_identifier'],
+        map['providerAccountEmail'] ??
+            map['provider_account_email'] ??
+            map['accountIdentifier'] ??
+            map['account_identifier'],
       ),
       displayName: _asNullableString(map['displayName'] ?? map['display_name']),
-      rootDisplayName: _asNullableString(map['rootDisplayName'] ?? map['root_display_name']),
-      rootFolderPath: _asNullableString(map['rootFolderPath'] ?? map['root_folder_path']),
+      rootDisplayName: _asNullableString(
+        map['rootDisplayName'] ?? map['root_display_name'],
+      ),
+      rootFolderPath: _asNullableString(
+        map['rootFolderPath'] ?? map['root_folder_path'],
+      ),
       lastError: _asNullableString(map['lastError'] ?? map['last_error']),
-      projectsPending: _asNullableInt(
-            bootstrapCounts['projectsPending'] ?? bootstrapCounts['projects_pending'],
+      projectsPending:
+          _asNullableInt(
+            bootstrapCounts['projectsPending'] ??
+                bootstrapCounts['projects_pending'],
           ) ??
           0,
       assetsPending:
           _asNullableInt(
-            bootstrapCounts['assetsPending'] ?? bootstrapCounts['assets_pending'],
+            bootstrapCounts['assetsPending'] ??
+                bootstrapCounts['assets_pending'],
           ) ??
           0,
     );
@@ -209,9 +232,7 @@ class ApproxLocation {
     return ApproxLocation(
       city: _asNullableString(map['city']),
       region: _asNullableString(map['region']),
-      countryCode: _asNullableString(
-        map['countryCode'] ?? map['country_code'],
-      ),
+      countryCode: _asNullableString(map['countryCode'] ?? map['country_code']),
       display: _asNullableString(map['display']),
     );
   }
@@ -252,16 +273,12 @@ class SignedInDevice {
       platform: _asString(map['platform'], fallback: 'unknown'),
       osVersion: _asNullableString(map['osVersion'] ?? map['os_version']),
       appVersion: _asNullableString(map['appVersion'] ?? map['app_version']),
-      approxLocation: location.isEmpty ? null : ApproxLocation.fromMap(location),
-      signedInAt: _asNullableDateTime(
-        map['signedInAt'] ?? map['signed_in_at'],
-      ),
-      lastSeenAt: _asNullableDateTime(
-        map['lastSeenAt'] ?? map['last_seen_at'],
-      ),
-      lastSyncAt: _asNullableDateTime(
-        map['lastSyncAt'] ?? map['last_sync_at'],
-      ),
+      approxLocation: location.isEmpty
+          ? null
+          : ApproxLocation.fromMap(location),
+      signedInAt: _asNullableDateTime(map['signedInAt'] ?? map['signed_in_at']),
+      lastSeenAt: _asNullableDateTime(map['lastSeenAt'] ?? map['last_seen_at']),
+      lastSyncAt: _asNullableDateTime(map['lastSyncAt'] ?? map['last_sync_at']),
       isCurrent: _asBool(map['isCurrent'] ?? map['is_current']),
       canSignOut: _asBool(map['canSignOut'] ?? map['can_sign_out']),
     );
@@ -276,9 +293,9 @@ class SignedInDevicesResponse {
   factory SignedInDevicesResponse.fromMap(Map<String, dynamic> map) {
     final raw = _asList(map['devices']);
     return SignedInDevicesResponse(
-      devices: _asMapList(raw)
-          .map(SignedInDevice.fromMap)
-          .toList(growable: false),
+      devices: _asMapList(
+        raw,
+      ).map(SignedInDevice.fromMap).toList(growable: false),
     );
   }
 }
@@ -373,8 +390,7 @@ class RemoteProjectRecord {
       projectId: _asString(map['projectId'] ?? map['id']),
       name: _asString(map['name']),
       revision:
-          _asNullableInt(map['revision']) ??
-          _asNullableInt(map['remote_rev']),
+          _asNullableInt(map['revision']) ?? _asNullableInt(map['remote_rev']),
       deleted:
           _asBool(map['deleted']) ||
           _asNullableString(map['status']) == 'deleted',
@@ -819,10 +835,12 @@ class BackendAssetRecord {
     this.provider,
     this.remoteFileId,
     this.remotePath,
+    this.storageState,
     this.revision,
     this.deleted = false,
     this.softDeletedAt,
     this.hardDeleteDueAt,
+    this.purgeRequestedAt,
   });
 
   final String assetId;
@@ -838,10 +856,12 @@ class BackendAssetRecord {
   final CloudProviderType? provider;
   final String? remoteFileId;
   final String? remotePath;
+  final String? storageState;
   final int? revision;
   final bool deleted;
   final DateTime? softDeletedAt;
   final DateTime? hardDeleteDueAt;
+  final DateTime? purgeRequestedAt;
 
   factory BackendAssetRecord.fromMap(Map<String, dynamic> map) {
     final id = _asNullableString(map['id']) ?? _asString(map['assetId']);
@@ -882,9 +902,11 @@ class BackendAssetRecord {
       remotePath: _asNullableString(
         map['remotePath'] ?? map['providerPath'] ?? map['path'],
       ),
+      storageState:
+          _asNullableString(map['storageState']) ??
+          _asNullableString(map['storage_state']),
       revision:
-          _asNullableInt(map['revision']) ??
-          _asNullableInt(map['remote_rev']),
+          _asNullableInt(map['revision']) ?? _asNullableInt(map['remote_rev']),
       deleted:
           _asBool(map['deleted']) ||
           _asNullableString(map['status']) == 'deleted',
@@ -894,6 +916,9 @@ class BackendAssetRecord {
       hardDeleteDueAt:
           _asNullableDateTime(map['hardDeleteDueAt']) ??
           _asNullableDateTime(map['hard_delete_due_at']),
+      purgeRequestedAt:
+          _asNullableDateTime(map['purgeRequestedAt']) ??
+          _asNullableDateTime(map['purge_requested_at']),
     );
   }
 }

@@ -272,6 +272,44 @@ void main() {
     });
   });
 
+  test('move asset omits expectedRevision when null', () async {
+    late Uri requestUri;
+    late String requestMethod;
+    late Map<String, dynamic> requestBody;
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        requestUri = request.url;
+        requestMethod = request.method;
+        requestBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({
+            'assetId': 'asset-1',
+            'projectId': 'project-2',
+            'revision': 7,
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final response = await client.moveAssetToProject(
+      assetId: 'asset-1',
+      projectId: 'project-2',
+    );
+
+    expect(requestMethod, 'POST');
+    expect(requestUri.path, '/functions/v1/api/v1/assets/asset-1/move');
+    expect(requestBody, {
+      'projectId': 'project-2',
+    });
+    expect(response.assetId, 'asset-1');
+    expect(response.projectId, 'project-2');
+    expect(response.revision, 7);
+  });
+
   test('returns remote file id from final chunked upload response', () async {
     final requests = <http.Request>[];
     final client = JoblensBackendApiClient(
