@@ -6,6 +6,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:joblens_flutter/src/app/joblens_store.dart';
+import 'package:joblens_flutter/src/core/api/api_exception.dart';
 import 'package:joblens_flutter/src/core/api/backend_api_models.dart';
 import 'package:joblens_flutter/src/core/db/app_database.dart';
 import 'package:joblens_flutter/src/core/models/cloud_provider.dart';
@@ -202,6 +203,94 @@ void main() {
       store.forcedSignOutMessage,
       'You were signed out from another device.',
     );
+  });
+
+  test('missing device session triggers one re-registration attempt', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'joblens_device_session_missing_test_',
+    );
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    final dbPath = p.join(tempDir.path, 'joblens.db');
+    final database = await AppDatabase.open(databasePath: dbPath);
+    final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+    final syncService = _ProviderSwitchSyncService(database)
+      ..listDevicesError = const ApiException(
+        code: 'device_session_missing',
+        message: 'Register this device session before continuing.',
+        statusCode: 401,
+      );
+    final store = JoblensStore(
+      database: database,
+      mediaStorage: mediaStorage,
+      syncService: syncService,
+      currentAuthUserIdProvider: () => 'test-user',
+    );
+    addTearDown(() async {
+      await store.waitForIdle();
+      store.dispose();
+      await database.close();
+    });
+
+    await store.initialize();
+    await store.refresh();
+    syncService.registerDeviceCalls = 0;
+
+    await store.refreshSignedInDevices();
+
+    expect(syncService.registerDeviceCalls, 1);
+    expect(store.reauthenticationRequestCount, 0);
+  });
+
+  test('failed re-registration keeps user signed in and surfaces warning', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'joblens_device_session_missing_failure_test_',
+    );
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    final dbPath = p.join(tempDir.path, 'joblens.db');
+    final database = await AppDatabase.open(databasePath: dbPath);
+    final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+    final syncService = _ProviderSwitchSyncService(database)
+      ..listDevicesError = const ApiException(
+        code: 'device_session_missing',
+        message: 'Register this device session before continuing.',
+        statusCode: 401,
+      )
+      ..registerDeviceError = const ApiException(
+        code: 'device_register_failed',
+        message: 'backend down',
+        statusCode: 500,
+      );
+    final store = JoblensStore(
+      database: database,
+      mediaStorage: mediaStorage,
+      syncService: syncService,
+      currentAuthUserIdProvider: () => 'test-user',
+    );
+    addTearDown(() async {
+      await store.waitForIdle();
+      store.dispose();
+      await database.close();
+    });
+
+    await store.initialize();
+    await store.refresh();
+    syncService.registerDeviceCalls = 0;
+
+    await store.refreshSignedInDevices();
+
+    expect(syncService.registerDeviceCalls, 1);
+    expect(store.reauthenticationRequestCount, 0);
+    expect(store.lastError, contains('backend down'));
   });
 
   test('auth sync registers current device and refreshes signed-in devices', () async {
@@ -415,6 +504,8 @@ class _ProviderSwitchSyncService extends SyncService {
   String? lastSignedOutDeviceId;
   List<String> lastReconciledProjectIds = const [];
   Object? signOutDeviceError;
+  Object? registerDeviceError;
+  Object? listDevicesError;
   SessionStatusResponse sessionStatus = const SessionStatusResponse(
     status: 'active',
   );
@@ -451,6 +542,10 @@ class _ProviderSwitchSyncService extends SyncService {
   @override
   Future<RegisterDeviceResponse> registerCurrentDevice() async {
     registerDeviceCalls += 1;
+    final error = registerDeviceError;
+    if (error != null) {
+      throw error;
+    }
     return const RegisterDeviceResponse(
       deviceId: 'device-1',
       isCurrent: true,
@@ -464,6 +559,10 @@ class _ProviderSwitchSyncService extends SyncService {
   @override
   Future<SignedInDevicesResponse> listSignedInDevices() async {
     listDevicesCalls += 1;
+    final error = listDevicesError;
+    if (error != null) {
+      throw error;
+    }
     return devicesResponse;
   }
 

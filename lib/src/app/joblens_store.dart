@@ -66,6 +66,7 @@ class JoblensStore extends ChangeNotifier {
   int _reauthenticationRequestCount = 0;
   int _forcedSignOutNoticeCount = 0;
   String? _forcedSignOutMessage;
+  bool _isRecoveringMissingDeviceSession = false;
   Future<void> _pendingBackgroundSync = Future.value();
   Future<void> _pendingLocalIngest = Future.value();
   ProjectSortMode _projectSortMode = ProjectSortMode.name;
@@ -145,15 +146,18 @@ class JoblensStore extends ChangeNotifier {
     }
   }
 
-  Future<void> registerCurrentDeviceSession({
+  Future<bool> registerCurrentDeviceSession({
     bool refreshDevicesAfterRegister = false,
   }) async {
     final authUserId = _currentAuthUserIdProvider?.call();
     if (authUserId == null || authUserId.trim().isEmpty) {
-      return;
+      return false;
     }
+    var registered = false;
     try {
       await _syncService.registerCurrentDevice();
+      registered = true;
+      _lastError = null;
       if (refreshDevicesAfterRegister) {
         final response = await _syncService.listSignedInDevices();
         final devices = response.devices.toList(growable: false)
@@ -177,6 +181,7 @@ class JoblensStore extends ChangeNotifier {
       }
     }
     _notifyListenersIfActive();
+    return registered;
   }
 
   Future<void> checkCurrentSessionStatus() async {
@@ -1165,6 +1170,9 @@ class JoblensStore extends ChangeNotifier {
       await _forceLocalSignOut('You were signed out from another device.');
       return;
     }
+    if (await _recoverMissingDeviceSession(error)) {
+      return;
+    }
     if (!_requiresReauthentication(error)) {
       return;
     }
@@ -1199,6 +1207,29 @@ class JoblensStore extends ChangeNotifier {
     }
     return error.code == 'device_session_revoked' ||
         error.code == 'auth_session_invalid';
+  }
+
+  bool _requiresDeviceSessionRegistration(Object error) {
+    if (error is! ApiException) {
+      return false;
+    }
+    return error.code == 'device_session_missing';
+  }
+
+  Future<bool> _recoverMissingDeviceSession(Object error) async {
+    if (!_requiresDeviceSessionRegistration(error)) {
+      return false;
+    }
+    if (_isRecoveringMissingDeviceSession) {
+      return true;
+    }
+    _isRecoveringMissingDeviceSession = true;
+    try {
+      await registerCurrentDeviceSession();
+      return true;
+    } finally {
+      _isRecoveringMissingDeviceSession = false;
+    }
   }
 
   Future<void> _forceLocalSignOut(String message) async {
