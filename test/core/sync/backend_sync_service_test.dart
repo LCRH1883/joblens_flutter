@@ -77,6 +77,26 @@ void main() {
     },
   );
 
+  test('successful sync pass updates backend device heartbeat', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final fakeClient = _FakeBackendApiClient(projectId: 'remote-project-1');
+    final syncService = SyncService(
+      harness.database,
+      backendApiClient: fakeClient,
+      mediaStorage: harness.mediaStorage,
+    );
+
+    await harness.database.markBootstrapCompleted();
+    await syncService.kick(forceBootstrap: false);
+
+    expect(fakeClient.updateDeviceActivityCalls, greaterThanOrEqualTo(1));
+    expect(fakeClient.lastUpdatedDeviceId, 'device-backend-1');
+    expect(fakeClient.lastUpdatedDeviceLastSyncEventId, 0);
+    expect(fakeClient.lastUpdatedDeviceMarkedSyncAt, isTrue);
+  });
+
   test('missing asset path prepares upload, uploads, and commits', () async {
     final harness = await _createHarness();
     addTearDown(harness.dispose);
@@ -1265,7 +1285,11 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   int listAssetsCalls = 0;
   int syncEventsCalls = 0;
   int reconcileCalls = 0;
+  int updateDeviceActivityCalls = 0;
   List<int> lastUploadedBytes = const [];
+  String? lastUpdatedDeviceId;
+  int? lastUpdatedDeviceLastSyncEventId;
+  bool lastUpdatedDeviceMarkedSyncAt = false;
   final List<String> deletedAssetIds = <String>[];
   final List<String> reconciledProjectIds = <String>[];
 
@@ -1316,6 +1340,18 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
     required String deviceId,
     required int upToEventId,
   }) async {}
+
+  @override
+  Future<void> updateDeviceActivity({
+    required String deviceId,
+    int? lastSyncEventId,
+    bool markSyncAt = false,
+  }) async {
+    updateDeviceActivityCalls += 1;
+    lastUpdatedDeviceId = deviceId;
+    lastUpdatedDeviceLastSyncEventId = lastSyncEventId;
+    lastUpdatedDeviceMarkedSyncAt = markSyncAt;
+  }
 
   @override
   Future<ListProjectsResponse> listProjects() async {

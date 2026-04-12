@@ -70,15 +70,28 @@ class SyncService {
           'local_sync_backfill_failed',
           () => _backfillLocalSyncState(),
         );
-        final pushedMetadata = await _pushMetadata();
-        final advancedUploads = await _advanceBlobUploads();
+        final pushedMetadata = await _runLaneSafely<bool>(
+          'metadata_sync_failed',
+          () => _pushMetadata(),
+          fallback: false,
+        );
+        final advancedUploads = await _runLaneSafely<bool>(
+          'blob_upload_sync_failed',
+          () => _advanceBlobUploads(),
+          fallback: false,
+        );
         final pulledEvents = await _runLaneSafely<bool>(
           'remote_event_pull_failed',
           () => _pullRemoteEvents(),
           fallback: false,
         );
-        if (pushedMetadata || advancedUploads || pulledEvents) {
+        if (pushedMetadata.value || advancedUploads.value || pulledEvents.value) {
           _runAgainRequested = true;
+        }
+        if (pushedMetadata.succeeded &&
+            advancedUploads.succeeded &&
+            pulledEvents.succeeded) {
+          await _recordSuccessfulSyncPass();
         }
       } while (_runAgainRequested);
     } finally {
@@ -86,17 +99,17 @@ class SyncService {
     }
   }
 
-  Future<T> _runLaneSafely<T>(
+  Future<_LaneResult<T>> _runLaneSafely<T>(
     String event,
     Future<T> Function() action, {
     required T fallback,
   }) async {
     try {
-      return await action();
+      return _LaneResult(value: await action(), succeeded: true);
     } catch (error) {
       final mapped = _mapSyncError(error);
       await _logError(event, message: mapped.message);
-      return fallback;
+      return _LaneResult(value: fallback, succeeded: false);
     }
   }
 
@@ -110,6 +123,22 @@ class SyncService {
       final mapped = _mapSyncError(error);
       await _logError(event, message: mapped.message);
     }
+  }
+
+  Future<void> _recordSuccessfulSyncPass() async {
+    final client = _backendApiClient;
+    if (client == null) {
+      return;
+    }
+    final backendDeviceId = await _db.getBackendDeviceId();
+    if (backendDeviceId == null || backendDeviceId.trim().isEmpty) {
+      return;
+    }
+    await client.updateDeviceActivity(
+      deviceId: backendDeviceId,
+      lastSyncEventId: await _db.getLastSyncEventId(),
+      markSyncAt: true,
+    );
   }
 
   Future<void> _ensureDeviceRegistration() async {
@@ -1833,6 +1862,13 @@ class SyncService {
       debugPrint('Joblens sync ERROR [$event] ${assetId ?? '-'} $message');
     }
   }
+}
+
+class _LaneResult<T> {
+  const _LaneResult({required this.value, required this.succeeded});
+
+  final T value;
+  final bool succeeded;
 }
 
 class _PendingAssetContext {

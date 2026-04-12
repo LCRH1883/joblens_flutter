@@ -144,6 +144,21 @@ class JoblensBackendApiClient {
     );
   }
 
+  Future<void> updateDeviceActivity({
+    required String deviceId,
+    int? lastSyncEventId,
+    bool markSyncAt = false,
+  }) async {
+    await _authorizedJsonRequest(
+      method: 'PATCH',
+      path: '/devices/$deviceId',
+      body: {
+        'lastSyncEventId': lastSyncEventId,
+        if (markSyncAt) 'markSyncAt': true,
+      },
+    );
+  }
+
   Future<SessionStatusResponse> getSessionStatus() async {
     final map = await _authorizedJsonRequest(
       method: 'GET',

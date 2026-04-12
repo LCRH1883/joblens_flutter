@@ -239,6 +239,39 @@ void main() {
     expect(response.reason, 'remote_user_signout');
   });
 
+  test('updates device activity with sync heartbeat fields', () async {
+    late Uri requestUri;
+    late String requestMethod;
+    late Map<String, dynamic> requestBody;
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        requestUri = request.url;
+        requestMethod = request.method;
+        requestBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+          jsonEncode({'device': {'id': 'device-1'}}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    await client.updateDeviceActivity(
+      deviceId: 'device-1',
+      lastSyncEventId: 42,
+      markSyncAt: true,
+    );
+
+    expect(requestMethod, 'PATCH');
+    expect(requestUri.path, '/functions/v1/api/v1/devices/device-1');
+    expect(requestBody, {
+      'lastSyncEventId': 42,
+      'markSyncAt': true,
+    });
+  });
+
   test('maps uploaded_object_not_found backend error', () async {
     final client = JoblensBackendApiClient(
       baseUrl: 'https://example.supabase.co/functions/v1/api/v1',
