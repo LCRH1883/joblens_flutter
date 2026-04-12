@@ -242,7 +242,7 @@ void main() {
 
     await store.refreshSignedInDevices();
 
-    expect(syncService.registerDeviceCalls, 1);
+    expect(syncService.registerDeviceCalls, 2);
     expect(store.reauthenticationRequestCount, 0);
   });
 
@@ -288,7 +288,7 @@ void main() {
 
     await store.refreshSignedInDevices();
 
-    expect(syncService.registerDeviceCalls, 1);
+    expect(syncService.registerDeviceCalls, 2);
     expect(store.reauthenticationRequestCount, 0);
     expect(store.lastError, contains('backend down'));
   });
