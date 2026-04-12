@@ -23,7 +23,7 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 11;
+  static const _schemaVersion = 12;
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -98,6 +98,11 @@ class AppDatabase {
             'CREATE INDEX IF NOT EXISTS idx_asset_provider_mirrors_connection ON asset_provider_mirrors(provider_connection_id, status, updated_at)',
           );
         }
+        if (oldVersion < 12) {
+          await db.execute(
+            'ALTER TABLE photo_assets ADD COLUMN hard_delete_due_at TEXT',
+          );
+        }
       },
     );
 
@@ -151,6 +156,7 @@ class AppDatabase {
         exists_in_phone_storage INTEGER NOT NULL DEFAULT 0,
         last_sync_error_code TEXT,
         deleted_at TEXT,
+        hard_delete_due_at TEXT,
         remote_rev INTEGER,
         local_seq INTEGER NOT NULL DEFAULT 0,
         dirty_fields TEXT NOT NULL DEFAULT '[]',
@@ -271,6 +277,12 @@ class AppDatabase {
       db,
       tableName: 'photo_assets',
       columnName: 'deleted_at',
+      columnSql: 'TEXT',
+    );
+    await _ensureColumn(
+      db,
+      tableName: 'photo_assets',
+      columnName: 'hard_delete_due_at',
       columnSql: 'TEXT',
     );
     await _ensureColumn(
@@ -514,6 +526,7 @@ class AppDatabase {
         exists_in_phone_storage INTEGER NOT NULL DEFAULT 0,
         last_sync_error_code TEXT,
         deleted_at TEXT,
+        hard_delete_due_at TEXT,
         remote_rev INTEGER,
         local_seq INTEGER NOT NULL DEFAULT 0,
         dirty_fields TEXT NOT NULL DEFAULT '[]',
@@ -1332,6 +1345,7 @@ class AppDatabase {
           : AssetCloudState.cloudOnly,
       'exists_in_phone_storage': 0,
       'deleted_at': deleted ? createdAt.toIso8601String() : null,
+      'hard_delete_due_at': null,
       'remote_rev': null,
       'local_seq': 0,
       'dirty_fields': '[]',
@@ -1352,6 +1366,8 @@ class AppDatabase {
     String? remoteProvider,
     String? remoteFileId,
     String? remotePath,
+    DateTime? softDeletedAt,
+    DateTime? hardDeleteDueAt,
     bool deleted = false,
   }) async {
     final existing = await getAssetById(localAssetId);
@@ -1390,7 +1406,10 @@ class AppDatabase {
             ? AssetCloudState.cloudOnly
             : AssetCloudState.localAndCloud,
         'status': deleted ? AssetStatus.deleted.name : AssetStatus.active.name,
-        'deleted_at': deleted ? DateTime.now().toIso8601String() : null,
+        'deleted_at': deleted
+            ? (softDeletedAt ?? DateTime.now()).toIso8601String()
+            : null,
+        'hard_delete_due_at': deleted ? hardDeleteDueAt?.toIso8601String() : null,
         'remote_rev': remoteRev,
         'dirty_fields': '[]',
         'last_sync_error_code': null,
@@ -1424,6 +1443,153 @@ class AppDatabase {
     );
 
     return rows.map(PhotoAsset.fromMap).toList();
+  }
+
+  Future<List<PhotoAsset>> getDeletedAssets() async {
+    final rows = await _db.query(
+      'photo_assets',
+      where: 'status = ?',
+      whereArgs: [AssetStatus.deleted.name],
+      orderBy: 'deleted_at DESC, created_at DESC',
+    );
+    return rows.map(PhotoAsset.fromMap).toList(growable: false);
+  }
+
+  Future<List<PhotoAsset>> getAssetsByRemoteId(String remoteAssetId) async {
+    final rows = await _db.query(
+      'photo_assets',
+      where: 'remote_asset_id = ?',
+      whereArgs: [remoteAssetId],
+      orderBy: 'created_at DESC',
+    );
+    return rows.map(PhotoAsset.fromMap).toList(growable: false);
+  }
+
+  Future<List<PhotoAsset>> getAssetsByHashValue(String hash) async {
+    final rows = await _db.query(
+      'photo_assets',
+      where: 'hash = ?',
+      whereArgs: [hash],
+      orderBy: 'created_at DESC',
+    );
+    return rows.map(PhotoAsset.fromMap).toList(growable: false);
+  }
+
+  Future<void> restoreAsset(String assetId) async {
+    await _db.transaction((txn) async {
+      final rows = await txn.query(
+        'photo_assets',
+        columns: ['local_path'],
+        where: 'id = ?',
+        whereArgs: [assetId],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        return;
+      }
+      final localPath = (rows.first['local_path'] as String?) ?? '';
+      await txn.update(
+        'photo_assets',
+        {
+          'status': AssetStatus.active.name,
+          'deleted_at': null,
+          'hard_delete_due_at': null,
+          'cloud_state': localPath.trim().isEmpty
+              ? AssetCloudState.cloudOnly
+              : AssetCloudState.localAndCloud,
+          'last_sync_error_code': null,
+          'dirty_fields': '[]',
+        },
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+    });
+  }
+
+  Future<List<PhotoAsset>> getRemoteLinkedAssets({
+    bool includeDeleted = true,
+  }) async {
+    final whereParts = <String>[
+      "TRIM(COALESCE(remote_asset_id, '')) != ''",
+    ];
+    final whereArgs = <Object?>[];
+    if (!includeDeleted) {
+      whereParts.add('status = ?');
+      whereArgs.add(AssetStatus.active.name);
+    }
+    final rows = await _db.query(
+      'photo_assets',
+      where: whereParts.join(' AND '),
+      whereArgs: whereArgs.isEmpty ? null : whereArgs,
+      orderBy: 'created_at DESC',
+    );
+    return rows.map(PhotoAsset.fromMap).toList(growable: false);
+  }
+
+  Future<List<AssetIntegrityIssue>> scanAssetIntegrityIssues() async {
+    final issues = <AssetIntegrityIssue>[];
+
+    final duplicateRemoteIdRows = await _db.rawQuery(
+      '''
+      SELECT remote_asset_id, COUNT(*) AS cnt
+      FROM photo_assets
+      WHERE TRIM(COALESCE(remote_asset_id, '')) != ''
+      GROUP BY remote_asset_id
+      HAVING COUNT(*) > 1
+      ''',
+    );
+    for (final row in duplicateRemoteIdRows) {
+      issues.add(
+        AssetIntegrityIssue(
+          kind: AssetIntegrityIssueKind.duplicateRemoteAssetId,
+          value: row['remote_asset_id']! as String,
+          count: (row['cnt'] as int?) ?? 0,
+        ),
+      );
+    }
+
+    final duplicateHashRows = await _db.rawQuery(
+      '''
+      SELECT hash, COUNT(*) AS cnt
+      FROM photo_assets
+      WHERE status != ?
+        AND LENGTH(hash) = 64
+        AND TRIM(COALESCE(remote_asset_id, '')) != ''
+      GROUP BY hash
+      HAVING COUNT(*) > 1
+      ''',
+      [AssetStatus.deleted.name],
+    );
+    for (final row in duplicateHashRows) {
+      issues.add(
+        AssetIntegrityIssue(
+          kind: AssetIntegrityIssueKind.duplicateRemoteHash,
+          value: row['hash']! as String,
+          count: (row['cnt'] as int?) ?? 0,
+        ),
+      );
+    }
+
+    final inconsistentDeletedRows = await _db.rawQuery(
+      '''
+      SELECT id
+      FROM photo_assets
+      WHERE (status = ? AND deleted_at IS NULL)
+         OR (status = ? AND deleted_at IS NOT NULL)
+      ''',
+      [AssetStatus.deleted.name, AssetStatus.active.name],
+    );
+    for (final row in inconsistentDeletedRows) {
+      issues.add(
+        AssetIntegrityIssue(
+          kind: AssetIntegrityIssueKind.inconsistentDeletedState,
+          value: row['id']! as String,
+          count: 1,
+        ),
+      );
+    }
+
+    return issues;
   }
 
   Future<List<PhotoAsset>> getDeletedAssetsPendingRemoteDelete() async {
@@ -2538,6 +2704,36 @@ class AppDatabase {
     });
   }
 
+  Future<void> purgeAssetsByIds(Iterable<String> assetIds) async {
+    final ids = assetIds.toSet().toList(growable: false);
+    if (ids.isEmpty) {
+      return;
+    }
+    await _db.transaction((txn) async {
+      final placeholders = List.filled(ids.length, '?').join(', ');
+      await txn.delete(
+        'blob_upload',
+        where: 'asset_id IN ($placeholders)',
+        whereArgs: ids,
+      );
+      await txn.delete(
+        'asset_provider_mirrors',
+        where: 'asset_id IN ($placeholders)',
+        whereArgs: ids,
+      );
+      await txn.delete(
+        'entity_sync',
+        where: 'entity_type = ? AND entity_id IN ($placeholders)',
+        whereArgs: [SyncEntityType.asset.name, ...ids],
+      );
+      await txn.delete(
+        'photo_assets',
+        where: 'id IN ($placeholders)',
+        whereArgs: ids,
+      );
+    });
+  }
+
   Future<void> updateAssetSyncError(String assetId, String? errorCode) async {
     await _db.update(
       'photo_assets',
@@ -2827,6 +3023,24 @@ class AppDatabase {
     jobs.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return jobs;
   }
+}
+
+enum AssetIntegrityIssueKind {
+  duplicateRemoteAssetId,
+  duplicateRemoteHash,
+  inconsistentDeletedState,
+}
+
+class AssetIntegrityIssue {
+  const AssetIntegrityIssue({
+    required this.kind,
+    required this.value,
+    required this.count,
+  });
+
+  final AssetIntegrityIssueKind kind;
+  final String value;
+  final int count;
 }
 
 String rebaseMediaPath(String originalPath, String currentMediaRootPath) {

@@ -1154,7 +1154,7 @@ void main() {
     expect(updated?.cloudState, AssetCloudState.deleted);
   });
 
-  test('mergeRemoteAssets does not enqueue blob uploads for existing local assets', () async {
+  test('mergeRemoteAssets does not bind unrelated same-hash local assets', () async {
     final harness = await _createHarness();
     addTearDown(harness.dispose);
 
@@ -1202,9 +1202,13 @@ void main() {
     final blobTasks = await harness.database.getAllBlobUploadTasks();
     expect(blobTasks.where((task) => task.assetId == asset.id), isEmpty);
 
-    final updated = await harness.database.getAssetById(asset.id);
-    expect(updated?.remoteAssetId, 'asset-remote-1');
-    expect(updated?.remoteRev, 3);
+    final updatedLocal = await harness.database.getAssetById(asset.id);
+    expect(updatedLocal?.remoteAssetId, isNull);
+
+    final remoteShadow = await harness.database.getAssetByRemoteId('asset-remote-1');
+    expect(remoteShadow, isNotNull);
+    expect(remoteShadow?.id, 'remote:asset-remote-1');
+    expect(remoteShadow?.remoteRev, 3);
   });
 
   test('flushPendingRemoteDeletes retries backend delete for local deletions', () async {

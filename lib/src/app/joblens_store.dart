@@ -78,6 +78,7 @@ class JoblensStore extends ChangeNotifier {
   bool _hasStoredAppLaunchDestination = false;
 
   List<PhotoAsset> _assets = const [];
+  List<PhotoAsset> _deletedAssets = const [];
   Map<String, AssetSyncStatus> _assetSyncStatuses = const {};
   List<Project> _projects = const [];
   Map<int, int> _projectCounts = const {};
@@ -93,6 +94,7 @@ class JoblensStore extends ChangeNotifier {
   int get forcedSignOutNoticeCount => _forcedSignOutNoticeCount;
   String? get forcedSignOutMessage => _forcedSignOutMessage;
   List<PhotoAsset> get assets => _assets;
+  List<PhotoAsset> get deletedAssets => _deletedAssets;
   AssetSyncStatus assetSyncStatusFor(String assetId) =>
       _assetSyncStatuses[assetId] ?? AssetSyncStatus.local;
   List<Project> get projects => _sortProjects(_projects, _projectSortMode);
@@ -607,15 +609,10 @@ class JoblensStore extends ChangeNotifier {
   Future<void> softDeleteAsset(String assetId) async {
     _lastError = null;
     try {
-      final asset = await _database.getAssetById(assetId);
       await _database.softDeleteAsset(assetId);
-      if (asset != null) {
-        _removeAssetFromState(asset.id, asset.projectId);
-      }
+      await _hydrateLocalState(includeDiagnostics: false);
       _notifyListenersIfActive();
-      if (asset != null) {
-        unawaited(_kickSync());
-      }
+      unawaited(_kickSync());
     } catch (error, stackTrace) {
       await _recordForegroundError(error, stackTrace);
     }
@@ -629,17 +626,43 @@ class JoblensStore extends ChangeNotifier {
 
     _lastError = null;
     try {
-      final assets = await _database.getAssetsByIds(uniqueIds);
       for (final assetId in uniqueIds) {
         await _database.softDeleteAsset(assetId);
       }
-      for (final asset in assets) {
-        _removeAssetFromState(asset.id, asset.projectId);
-      }
+      await _hydrateLocalState(includeDiagnostics: false);
       _notifyListenersIfActive();
-      if (assets.isNotEmpty) {
-        unawaited(_kickSync());
+      unawaited(_kickSync());
+    } catch (error, stackTrace) {
+      await _recordForegroundError(error, stackTrace);
+    }
+  }
+
+  Future<void> restoreAsset(String assetId) async {
+    _lastError = null;
+    try {
+      final asset = await _database.getAssetById(assetId);
+      if (asset == null) {
+        return;
       }
+      await _syncService.restoreAsset(asset);
+      await _hydrateLocalState(includeDiagnostics: false);
+      _notifyListenersIfActive();
+      unawaited(_kickSync());
+    } catch (error, stackTrace) {
+      await _recordForegroundError(error, stackTrace);
+    }
+  }
+
+  Future<void> purgeAssetPermanently(String assetId) async {
+    _lastError = null;
+    try {
+      final asset = await _database.getAssetById(assetId);
+      if (asset == null) {
+        return;
+      }
+      await _syncService.purgeAsset(asset);
+      await _hydrateLocalState(includeDiagnostics: false);
+      _notifyListenersIfActive();
     } catch (error, stackTrace) {
       await _recordForegroundError(error, stackTrace);
     }
@@ -1039,6 +1062,7 @@ class JoblensStore extends ChangeNotifier {
 
   Future<void> _hydrateLocalState({bool includeDiagnostics = true}) async {
     _assets = await _database.getAssets();
+    _deletedAssets = await _database.getDeletedAssets();
     _projects = await _database.getProjects();
     _projectCounts = await _database.getProjectCounts();
     _providers = await _database.getProviderAccounts();

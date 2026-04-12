@@ -30,6 +30,7 @@ class PhotoAsset {
     required this.cloudState,
     required this.existsInPhoneStorage,
     this.deletedAt,
+    this.hardDeleteDueAt,
     this.remoteRev,
     this.localSeq = 0,
     this.dirtyFields = const [],
@@ -55,6 +56,7 @@ class PhotoAsset {
   final String cloudState;
   final bool existsInPhoneStorage;
   final DateTime? deletedAt;
+  final DateTime? hardDeleteDueAt;
   final int? remoteRev;
   final int localSeq;
   final List<String> dirtyFields;
@@ -78,6 +80,7 @@ class PhotoAsset {
     String? cloudState,
     bool? existsInPhoneStorage,
     DateTime? deletedAt,
+    DateTime? hardDeleteDueAt,
     int? remoteRev,
     int? localSeq,
     List<String>? dirtyFields,
@@ -103,6 +106,7 @@ class PhotoAsset {
       cloudState: cloudState ?? this.cloudState,
       existsInPhoneStorage: existsInPhoneStorage ?? this.existsInPhoneStorage,
       deletedAt: deletedAt ?? this.deletedAt,
+      hardDeleteDueAt: hardDeleteDueAt ?? this.hardDeleteDueAt,
       remoteRev: remoteRev ?? this.remoteRev,
       localSeq: localSeq ?? this.localSeq,
       dirtyFields: dirtyFields ?? this.dirtyFields,
@@ -136,6 +140,7 @@ class PhotoAsset {
       'cloud_state': cloudState,
       'exists_in_phone_storage': existsInPhoneStorage ? 1 : 0,
       'deleted_at': deletedAt?.toIso8601String(),
+      'hard_delete_due_at': hardDeleteDueAt?.toIso8601String(),
       'remote_rev': remoteRev,
       'local_seq': localSeq,
       'dirty_fields': jsonEncode(dirtyFields),
@@ -163,6 +168,9 @@ class PhotoAsset {
       deletedAt: (map['deleted_at'] as String?) == null
           ? null
           : DateTime.parse(map['deleted_at']! as String),
+      hardDeleteDueAt: (map['hard_delete_due_at'] as String?) == null
+          ? null
+          : DateTime.parse(map['hard_delete_due_at']! as String),
       remoteRev: map['remote_rev'] as int?,
       localSeq: (map['local_seq'] as int?) ?? 0,
       dirtyFields: ((jsonDecode((map['dirty_fields'] as String?) ?? '[]')

@@ -821,6 +821,8 @@ class BackendAssetRecord {
     this.remotePath,
     this.revision,
     this.deleted = false,
+    this.softDeletedAt,
+    this.hardDeleteDueAt,
   });
 
   final String assetId;
@@ -838,6 +840,8 @@ class BackendAssetRecord {
   final String? remotePath;
   final int? revision;
   final bool deleted;
+  final DateTime? softDeletedAt;
+  final DateTime? hardDeleteDueAt;
 
   factory BackendAssetRecord.fromMap(Map<String, dynamic> map) {
     final id = _asNullableString(map['id']) ?? _asString(map['assetId']);
@@ -884,6 +888,12 @@ class BackendAssetRecord {
       deleted:
           _asBool(map['deleted']) ||
           _asNullableString(map['status']) == 'deleted',
+      softDeletedAt:
+          _asNullableDateTime(map['softDeletedAt']) ??
+          _asNullableDateTime(map['soft_deleted_at']),
+      hardDeleteDueAt:
+          _asNullableDateTime(map['hardDeleteDueAt']) ??
+          _asNullableDateTime(map['hard_delete_due_at']),
     );
   }
 }

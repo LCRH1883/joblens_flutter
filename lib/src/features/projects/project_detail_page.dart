@@ -371,9 +371,9 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text('Delete ${selectedIds.length} photo(s)?'),
+          title: Text('Move ${selectedIds.length} photo(s) to Trash?'),
           content: const Text(
-            'This removes the selected photos from Joblens library.',
+            'The selected photos will move to Trash and stay there for 30 days before permanent removal.',
           ),
           actions: [
             TextButton(
@@ -382,7 +382,7 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Delete'),
+              child: const Text('Move to Trash'),
             ),
           ],
         );

@@ -9,6 +9,7 @@ import '../../core/models/photo_asset.dart';
 import '../../core/ui/asset_sync_badge.dart';
 import '../auth/auth_page.dart';
 import '../auth/auth_state.dart';
+import 'trash_page.dart';
 import 'storage_page.dart';
 import '../sync/sync_page.dart';
 
@@ -46,6 +47,19 @@ class SettingsPage extends ConsumerWidget {
               title: const Text('Storage'),
               trailing: const Icon(Icons.chevron_right_rounded),
               onTap: () => _openStoragePage(context),
+            ),
+          ),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.delete_outline_rounded),
+              title: const Text('Trash'),
+              subtitle: Text(
+                store.deletedAssets.isEmpty
+                    ? 'Deleted photos stay here for 30 days.'
+                    : '${store.deletedAssets.length} deleted photo(s)',
+              ),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _openTrashPage(context),
             ),
           ),
           Card(
@@ -101,6 +115,12 @@ class SettingsPage extends ConsumerWidget {
     return Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const StoragePage()));
+  }
+
+  static Future<void> _openTrashPage(BuildContext context) {
+    return Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const TrashPage()));
   }
 
   static Future<void> _openAppearancePage(BuildContext context) {

@@ -321,6 +321,41 @@ class JoblensBackendApiClient {
     );
   }
 
+  Future<BackendAssetRecord> restoreAsset(
+    String assetId, {
+    int? expectedRevision,
+  }) async {
+    final map = await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/assets/$assetId/restore',
+      body: expectedRevision == null
+          ? null
+          : {
+              'expectedRevision': expectedRevision,
+            },
+    );
+    return BackendAssetRecord.fromMap(
+      map['asset'] is Map<String, dynamic>
+          ? map['asset'] as Map<String, dynamic>
+          : map,
+    );
+  }
+
+  Future<void> purgeAsset(
+    String assetId, {
+    int? expectedRevision,
+  }) async {
+    await _authorizedJsonRequest(
+      method: 'POST',
+      path: '/assets/$assetId/purge',
+      body: expectedRevision == null
+          ? null
+          : {
+              'expectedRevision': expectedRevision,
+            },
+    );
+  }
+
   Future<ListAssetsResponse> listAssets(ListAssetsRequest request) async {
     final map = await _authorizedJsonRequest(
       method: 'GET',
