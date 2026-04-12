@@ -272,6 +272,44 @@ void main() {
     });
   });
 
+  test('returns remote file id from final chunked upload response', () async {
+    final requests = <http.Request>[];
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      httpClient: MockClient((request) async {
+        requests.add(request);
+        return http.Response(
+          jsonEncode({
+            'id': 'onedrive-item-42',
+            'name': 'photo.jpg',
+          }),
+          201,
+          headers: {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    final result = await client.uploadWithInstruction(
+      instruction: DirectUploadInstruction(
+        strategy: 'chunked_put',
+        url: 'https://upload.example/onedrive-session',
+        method: 'PUT',
+        headers: const {},
+        fields: const {},
+        fileFieldName: 'file',
+        chunkSizeBytes: 1024,
+      ),
+      bytes: Uint8List.fromList(List<int>.generate(256, (i) => i)),
+      contentType: 'image/jpeg',
+      filename: 'photo.jpg',
+    );
+
+    expect(requests, hasLength(1));
+    expect(result.remoteFileId, 'onedrive-item-42');
+    expect(result.rawResponse?['id'], 'onedrive-item-42');
+  });
+
   test('maps uploaded_object_not_found backend error', () async {
     final client = JoblensBackendApiClient(
       baseUrl: 'https://example.supabase.co/functions/v1/api/v1',

@@ -597,6 +597,13 @@ class DirectUploadInstruction {
   }
 }
 
+class UploadInstructionResult {
+  const UploadInstructionResult({this.remoteFileId, this.rawResponse});
+
+  final String? remoteFileId;
+  final Map<String, dynamic>? rawResponse;
+}
+
 class CommitAssetRequest {
   const CommitAssetRequest({
     required this.projectId,

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -1661,12 +1662,48 @@ class SyncService {
         message: 'Upload instructions received from backend.',
       );
 
-      await client.uploadWithInstruction(
+      if (prepared.provider == CloudProviderType.oneDrive) {
+        await _logInfo(
+          'onedrive_upload_session_created',
+          assetId: context.asset.id,
+          projectId: context.asset.projectId,
+          message:
+              'OneDrive upload session ready '
+              '(uploadSessionId=${prepared.uploadSessionId ?? '-'}, '
+              'remotePath=$remotePath).',
+        );
+      }
+
+      final uploadResult = await client.uploadWithInstruction(
         instruction: instruction,
         bytes: bytes,
         contentType: mimeType,
         filename: filename,
       );
+      final committedRemoteFileId =
+          uploadResult.remoteFileId ?? prepared.remoteFileId;
+
+      if (prepared.provider == CloudProviderType.oneDrive) {
+        await _logInfo(
+          'onedrive_upload_completed',
+          assetId: context.asset.id,
+          projectId: context.asset.projectId,
+          message:
+              'OneDrive upload completed '
+              '(remoteFileId=${committedRemoteFileId ?? '-'}, '
+              'response=${uploadResult.rawResponse == null ? '{}' : jsonEncode(uploadResult.rawResponse)}).',
+        );
+        await _logInfo(
+          'onedrive_commit_payload',
+          assetId: context.asset.id,
+          projectId: context.asset.projectId,
+          message:
+              'Committing OneDrive asset with '
+              'uploadSessionId=${prepared.uploadSessionId ?? '-'}, '
+              'remoteFileId=${committedRemoteFileId ?? '-'}, '
+              'remotePath=$remotePath.',
+        );
+      }
 
       try {
         final commit = await client.commitAsset(
@@ -1682,7 +1719,7 @@ class SyncService {
             deviceAssetId: context.asset.id,
             uploadSessionId: prepared.uploadSessionId,
             provider: prepared.provider,
-            remoteFileId: prepared.remoteFileId,
+            remoteFileId: committedRemoteFileId,
             remotePath: remotePath,
             expectedRevision: context.asset.remoteRev,
           ),

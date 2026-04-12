@@ -174,12 +174,17 @@ class _SyncPageState extends ConsumerState<SyncPage>
               for (final providerAccount in store.providers)
                 () {
                   final isLocked = _isProviderLocked(providerAccount, lockedProvider);
+                  final isFutureIntegration = _isFutureIntegration(
+                    providerAccount.providerType,
+                  );
                   final canStartConnect =
                       !store.isBusy &&
                       _connectingProvider != providerAccount.providerType &&
-                      !isLocked;
+                      !isLocked &&
+                      !isFutureIntegration;
                   return _ProviderConnectionCard(
                     providerAccount: providerAccount,
+                    isFutureIntegration: isFutureIntegration,
                     isOpening:
                         _connectingProvider == providerAccount.providerType,
                     canConnect: canStartConnect,
@@ -531,6 +536,11 @@ class _SyncStatusCard extends StatelessWidget {
   }
 }
 
+bool _isFutureIntegration(CloudProviderType provider) {
+  return provider == CloudProviderType.box ||
+      provider == CloudProviderType.nextcloud;
+}
+
 class _CountChip extends StatelessWidget {
   const _CountChip({
     required this.label,
@@ -695,6 +705,7 @@ Rect? _sharePositionOrigin(BuildContext context) {
 class _ProviderConnectionCard extends StatelessWidget {
   const _ProviderConnectionCard({
     required this.providerAccount,
+    required this.isFutureIntegration,
     required this.isOpening,
     required this.canConnect,
     required this.onConnect,
@@ -702,6 +713,7 @@ class _ProviderConnectionCard extends StatelessWidget {
   });
 
   final ProviderAccount providerAccount;
+  final bool isFutureIntegration;
   final bool isOpening;
   final bool canConnect;
   final VoidCallback? onConnect;
@@ -715,129 +727,170 @@ class _ProviderConnectionCard extends StatelessWidget {
     final isExpired = providerAccount.isExpired;
     final canReconnect = canConnect && hasActiveConnection;
     final canShowConnect = canConnect && !hasActiveConnection;
+    final effectiveAccent = isFutureIntegration ? scheme.outline : accent;
+    final accountLabel = providerAccount.connectedAccountLabel;
+    final rootPath = providerAccount.rootFolderPath;
     final titleStyle = Theme.of(context).textTheme.titleMedium?.copyWith(
       fontWeight: FontWeight.w700,
       letterSpacing: -0.2,
     );
-    final statusText = switch (providerAccount.connectionStatus) {
-      ProviderConnectionStatus.ready => 'Connected',
-      ProviderConnectionStatus.connectedBootstrapping => 'Preparing library',
-      ProviderConnectionStatus.connecting => 'Connecting',
-      ProviderConnectionStatus.switchInProgress => 'Switching provider',
-      ProviderConnectionStatus.reconnectRequired => 'Needs attention',
-      ProviderConnectionStatus.failed => 'Connection failed',
-      ProviderConnectionStatus.disconnected => 'Not connected',
-    };
+    final statusText = isFutureIntegration
+        ? 'Future integration'
+        : switch (providerAccount.connectionStatus) {
+            ProviderConnectionStatus.ready => 'Connected',
+            ProviderConnectionStatus.connectedBootstrapping =>
+              'Preparing library',
+            ProviderConnectionStatus.connecting => 'Connecting',
+            ProviderConnectionStatus.switchInProgress => 'Switching provider',
+            ProviderConnectionStatus.reconnectRequired => 'Needs attention',
+            ProviderConnectionStatus.failed => 'Connection failed',
+            ProviderConnectionStatus.disconnected => 'Not connected',
+          };
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.all(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _ProviderLogoCircle(
-              provider: providerAccount.providerType,
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(providerAccount.providerType.label, style: titleStyle),
-                  const SizedBox(height: 3),
-                  Text(
-                    statusText,
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: isExpired ? scheme.error : accent,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  if (providerAccount.connectedAccountLabel case final accountLabel?)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        accountLabel,
-                        style: Theme.of(context).textTheme.bodySmall,
+        child: Opacity(
+          opacity: isFutureIntegration ? 0.55 : 1,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _ProviderLogoCircle(
+                provider: providerAccount.providerType,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(providerAccount.providerType.label, style: titleStyle),
+                    const SizedBox(height: 3),
+                    Text(
+                      statusText,
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: isFutureIntegration
+                            ? scheme.onSurfaceVariant
+                            : isExpired
+                            ? scheme.error
+                            : effectiveAccent,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                  if (providerAccount.rootFolderPath case final rootPath?)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        rootPath,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: scheme.onSurfaceVariant,
-                            ),
+                    if (isFutureIntegration)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Coming later. Not available to connect yet.',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ),
+                    if (!isFutureIntegration && accountLabel != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          accountLabel,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    if (!isFutureIntegration && rootPath != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          rootPath,
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (isFutureIntegration)
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minWidth: 110),
+                  child: FilledButton(
+                    onPressed: null,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: scheme.surfaceContainerHighest,
+                      foregroundColor: scheme.onSurfaceVariant,
+                      disabledBackgroundColor: scheme.surfaceContainerHighest,
+                      disabledForegroundColor: scheme.onSurfaceVariant,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
                       ),
                     ),
-                ],
-              ),
-            ),
-            if (hasActiveConnection) ...[
-              ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: 110),
-                child: FilledButton(
-                  onPressed: canReconnect ? onConnect : null,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: isExpired ? scheme.error : accent,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
+                    child: const Text('Soon'),
                   ),
-                  child: Text(isOpening ? 'Opening...' : 'Reconnect'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: 110),
-                child: OutlinedButton(
-                  onPressed: onDisconnect,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: isExpired ? scheme.error : accent,
-                    side: BorderSide(
-                      color: isExpired ? scheme.error : accent,
+                )
+              else if (hasActiveConnection) ...[
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minWidth: 110),
+                  child: FilledButton(
+                    onPressed: canReconnect ? onConnect : null,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: isExpired ? scheme.error : effectiveAccent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                     ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                  ),
-                  child: const Text('Disconnect'),
-                ),
-              ),
-            ] else
-              ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: 110),
-                child: FilledButton(
-                  onPressed: canShowConnect ? onConnect : null,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: accent,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                  ),
-                  child: Text(
-                    isOpening ? 'Opening...' : 'Connect',
+                    child: Text(isOpening ? 'Opening...' : 'Reconnect'),
                   ),
                 ),
-              ),
-          ],
+                const SizedBox(width: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minWidth: 110),
+                  child: OutlinedButton(
+                    onPressed: onDisconnect,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: isExpired ? scheme.error : effectiveAccent,
+                      side: BorderSide(
+                        color: isExpired ? scheme.error : effectiveAccent,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                    ),
+                    child: const Text('Disconnect'),
+                  ),
+                ),
+              ] else
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minWidth: 110),
+                  child: FilledButton(
+                    onPressed: canShowConnect ? onConnect : null,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: effectiveAccent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                    ),
+                    child: Text(isOpening ? 'Opening...' : 'Connect'),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

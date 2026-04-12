@@ -165,6 +165,78 @@ void main() {
     expect(jobs, isEmpty);
   });
 
+  test(
+    'onedrive upload uses final upload response remoteFileId in commit payload',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        bulkCheckResponse: BulkCheckAssetsResponse(
+          projectId: 'remote-project-1',
+          duplicateCount: 0,
+          missingCount: 1,
+          results: [
+            BulkCheckResult(
+              deviceAssetId: 'asset-local',
+              sha256: 'a' * 64,
+              status: 'missing',
+              assetId: null,
+            ),
+          ],
+        ),
+        prepareUploadResponse: PrepareAssetUploadResponse.fromMap({
+          'status': 'upload_required',
+          'provider': 'onedrive',
+          'uploadSessionId': 'session-onedrive-1',
+          'remotePath':
+              'electrical/e45a4a020087_a47eb091-1fcc-41bc-82d6-fc60bcf06e85.jpg',
+          'upload': {
+            'strategy': 'chunked_put',
+            'url': 'https://upload.example/onedrive-session',
+            'method': 'PUT',
+            'headers': const {},
+          },
+        }),
+        commitResponse: CommitAssetResponse.fromMap({
+          'assetId': 'asset-remote-2',
+          'duplicate': false,
+          'committed': true,
+          'provider': 'onedrive',
+          'remoteFileId': 'onedrive-item-42',
+          'remotePath':
+              'electrical/e45a4a020087_a47eb091-1fcc-41bc-82d6-fc60bcf06e85.jpg',
+        }),
+        projectId: 'remote-project-1',
+      )..uploadResult = const UploadInstructionResult(
+          remoteFileId: 'onedrive-item-42',
+          rawResponse: {'id': 'onedrive-item-42'},
+        );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+      );
+
+      final project = await harness.createProject('electrical');
+      final asset = await harness.ingestAsset(projectId: project.id, seed: 3);
+      await harness.database.enqueueSyncJob(
+        assetId: asset.id,
+        projectId: asset.projectId,
+        provider: CloudProviderType.backend,
+      );
+
+      await harness.database.markBootstrapCompleted();
+      await syncService.kick(forceBootstrap: false);
+
+      expect(fakeClient.lastCommitRequest?.provider, CloudProviderType.oneDrive);
+      expect(fakeClient.lastCommitRequest?.remoteFileId, 'onedrive-item-42');
+      expect(
+        fakeClient.lastCommitRequest?.uploadSessionId,
+        'session-onedrive-1',
+      );
+    },
+  );
+
   test('placeholder ingest finalization queues and uploads asset', () async {
     final harness = await _createHarness();
     addTearDown(harness.dispose);
@@ -1287,9 +1359,11 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   int reconcileCalls = 0;
   int updateDeviceActivityCalls = 0;
   List<int> lastUploadedBytes = const [];
+  UploadInstructionResult uploadResult = const UploadInstructionResult();
   String? lastUpdatedDeviceId;
   int? lastUpdatedDeviceLastSyncEventId;
   bool lastUpdatedDeviceMarkedSyncAt = false;
+  CommitAssetRequest? lastCommitRequest;
   final List<String> deletedAssetIds = <String>[];
   final List<String> reconciledProjectIds = <String>[];
 
@@ -1424,7 +1498,7 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   }
 
   @override
-  Future<void> uploadWithInstruction({
+  Future<UploadInstructionResult> uploadWithInstruction({
     required DirectUploadInstruction instruction,
     required Uint8List bytes,
     required String contentType,
@@ -1432,10 +1506,12 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   }) async {
     uploadCalls += 1;
     lastUploadedBytes = List<int>.from(bytes);
+    return uploadResult;
   }
 
   @override
   Future<CommitAssetResponse> commitAsset(CommitAssetRequest request) async {
+    lastCommitRequest = request;
     if (commitError != null) {
       throw commitError!;
     }

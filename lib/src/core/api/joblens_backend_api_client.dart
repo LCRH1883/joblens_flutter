@@ -254,6 +254,41 @@ class JoblensBackendApiClient {
     return CommitAssetResponse.fromMap(map);
   }
 
+  UploadInstructionResult _parseUploadResult(http.Response response) {
+    final body = response.body.trim();
+    if (body.isEmpty) {
+      return const UploadInstructionResult();
+    }
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map) {
+        final map = decoded.map(
+          (key, value) => MapEntry(key.toString(), value),
+        );
+        return UploadInstructionResult(
+          remoteFileId: _firstNonEmptyString(
+            map['id'],
+            map['fileId'],
+            map['providerFileId'],
+          ),
+          rawResponse: Map<String, dynamic>.from(map),
+        );
+      }
+    } catch (_) {
+      // Not all provider upload endpoints return JSON payloads.
+    }
+    return const UploadInstructionResult();
+  }
+
+  String? _firstNonEmptyString(Object? first, [Object? second, Object? third]) {
+    for (final candidate in [first, second, third]) {
+      if (candidate is String && candidate.trim().isNotEmpty) {
+        return candidate.trim();
+      }
+    }
+    return null;
+  }
+
   Future<MoveAssetResponse> moveAssetToProject({
     required String assetId,
     required String projectId,
@@ -378,15 +413,16 @@ class JoblensBackendApiClient {
     ).toString();
   }
 
-  Future<void> uploadWithInstruction({
+  Future<UploadInstructionResult> uploadWithInstruction({
     required DirectUploadInstruction instruction,
     required Uint8List bytes,
     required String contentType,
     required String filename,
   }) async {
+    UploadInstructionResult result;
     switch (instruction.strategy) {
       case 'single_put':
-        await _sendBinaryRequest(
+        result = await _sendBinaryRequest(
           method: 'PUT',
           url: instruction.url,
           bytes: bytes,
@@ -394,7 +430,7 @@ class JoblensBackendApiClient {
           headers: instruction.headers,
         );
       case 'single_post':
-        await _sendBinaryRequest(
+        result = await _sendBinaryRequest(
           method: 'POST',
           url: instruction.url,
           bytes: bytes,
@@ -402,13 +438,13 @@ class JoblensBackendApiClient {
           headers: instruction.headers,
         );
       case 'multipart_post':
-        await _sendMultipartRequest(
+        result = await _sendMultipartRequest(
           instruction: instruction,
           bytes: bytes,
           filename: filename,
         );
       case 'chunked_put':
-        await _sendChunkedPut(
+        result = await _sendChunkedPut(
           instruction: instruction,
           bytes: bytes,
           contentType: contentType,
@@ -422,11 +458,12 @@ class JoblensBackendApiClient {
 
     if (instruction.completionUrl != null &&
         instruction.completionUrl!.isNotEmpty) {
-      await _sendCompletionRequest(instruction);
+      result = await _sendCompletionRequest(instruction);
     }
+    return result;
   }
 
-  Future<void> _sendBinaryRequest({
+  Future<UploadInstructionResult> _sendBinaryRequest({
     required String method,
     required String url,
     required Uint8List bytes,
@@ -451,9 +488,10 @@ class JoblensBackendApiClient {
       _ => throw ArgumentError.value(method, 'method', 'Unsupported method'),
     };
     _ensureUploadSucceeded(response);
+    return _parseUploadResult(response);
   }
 
-  Future<void> _sendMultipartRequest({
+  Future<UploadInstructionResult> _sendMultipartRequest({
     required DirectUploadInstruction instruction,
     required Uint8List bytes,
     required String filename,
@@ -474,9 +512,10 @@ class JoblensBackendApiClient {
     final streamed = await request.send();
     final response = await http.Response.fromStream(streamed);
     _ensureUploadSucceeded(response);
+    return _parseUploadResult(response);
   }
 
-  Future<void> _sendChunkedPut({
+  Future<UploadInstructionResult> _sendChunkedPut({
     required DirectUploadInstruction instruction,
     required Uint8List bytes,
     required String contentType,
@@ -486,6 +525,7 @@ class JoblensBackendApiClient {
         ? bytes.length
         : instruction.chunkSizeBytes!;
     var start = 0;
+    http.Response? lastResponse;
     while (start < bytes.length) {
       final endExclusive = (start + chunkSize > bytes.length)
           ? bytes.length
@@ -504,11 +544,16 @@ class JoblensBackendApiClient {
         body: chunk,
       );
       _ensureUploadSucceeded(response);
+      lastResponse = response;
       start = endExclusive;
     }
+    if (lastResponse == null) {
+      return const UploadInstructionResult();
+    }
+    return _parseUploadResult(lastResponse);
   }
 
-  Future<void> _sendCompletionRequest(
+  Future<UploadInstructionResult> _sendCompletionRequest(
     DirectUploadInstruction instruction,
   ) async {
     final method = (instruction.completionMethod ?? 'POST').toUpperCase();
@@ -532,6 +577,7 @@ class JoblensBackendApiClient {
       ),
     };
     _ensureUploadSucceeded(response);
+    return _parseUploadResult(response);
   }
 
   void _ensureUploadSucceeded(http.Response response) {
