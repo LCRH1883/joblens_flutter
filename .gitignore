@@ -3,6 +3,7 @@
 .air/
 .env
 .env.local
+.claude/
 .infisical.json
 infisical.json
 .env.release
