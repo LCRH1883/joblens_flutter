@@ -37,6 +37,34 @@ final joblensStoreListenableProvider = ChangeNotifierProvider<JoblensStore>(
   (ref) => ref.watch(joblensStoreProvider),
 );
 
+class ProviderBackfillProgress {
+  const ProviderBackfillProgress({
+    required this.provider,
+    required this.providerConnectionId,
+    required this.projectsPending,
+    required this.assetsPending,
+    required this.projectsMirrored,
+    required this.assetsMirrored,
+    required this.projectFailures,
+    required this.assetFailures,
+  });
+
+  final CloudProviderType provider;
+  final String providerConnectionId;
+  final int projectsPending;
+  final int assetsPending;
+  final int projectsMirrored;
+  final int assetsMirrored;
+  final int projectFailures;
+  final int assetFailures;
+
+  bool get isVisible =>
+      projectsPending > 0 ||
+      assetsPending > 0 ||
+      projectFailures > 0 ||
+      assetFailures > 0;
+}
+
 class JoblensStore extends ChangeNotifier {
   JoblensStore({
     required AppDatabase database,
@@ -76,6 +104,8 @@ class JoblensStore extends ChangeNotifier {
   CaptureTargetPreference _captureTargetPreference =
       CaptureTargetPreference.defaults;
   bool _hasStoredAppLaunchDestination = false;
+  ProviderAuthSessionResult? _lastProviderAuthSessionResult;
+  ProviderBackfillProgress? _providerBackfillProgress;
 
   List<PhotoAsset> _assets = const [];
   List<PhotoAsset> _deletedAssets = const [];
@@ -109,6 +139,10 @@ class JoblensStore extends ChangeNotifier {
   LibraryImportMode get libraryImportMode => _libraryImportMode;
   CaptureTargetPreference get captureTargetPreference =>
       _captureTargetPreference;
+  ProviderBackfillProgress? get providerBackfillProgress =>
+      _providerBackfillProgress?.isVisible == true
+      ? _providerBackfillProgress
+      : null;
 
   AppLaunchDestination launchDestinationForSession({
     required bool isAuthenticated,
@@ -697,7 +731,8 @@ class JoblensStore extends ChangeNotifier {
 
   Future<void> completeProviderConnection(String sessionId) async {
     await _runBusy(() async {
-      await _syncService.completeProviderConnection(sessionId);
+      final result = await _syncService.completeProviderConnection(sessionId);
+      _lastProviderAuthSessionResult = result;
       await _syncService.refreshProviderConnections();
       await _hydrateLocalState(includeDiagnostics: false);
       _notifyListenersIfActive();
@@ -1066,6 +1101,7 @@ class JoblensStore extends ChangeNotifier {
     _projects = await _database.getProjects();
     _projectCounts = await _database.getProjectCounts();
     _providers = await _database.getProviderAccounts();
+    await _refreshProviderBackfillProgress();
     await _refreshAssetSyncStatuses();
     _projectSortMode = await _database.getProjectSortMode();
     final storedAppLaunchDestination =
@@ -1081,6 +1117,47 @@ class JoblensStore extends ChangeNotifier {
       _syncLogs = await _database.getSyncLogs();
     }
   }
+
+  Future<void> _refreshProviderBackfillProgress() async {
+    final activeProvider = _activeProviderAccount;
+    final connectionId = activeProvider?.connectionId?.trim();
+    if (activeProvider == null || connectionId == null || connectionId.isEmpty) {
+      _providerBackfillProgress = null;
+      return;
+    }
+
+    final projectCounts = await _database.getProjectProviderMirrorCounts(
+      connectionId,
+    );
+    final assetCounts = await _database.getAssetProviderMirrorCounts(
+      connectionId,
+    );
+    final sessionResult = _lastProviderAuthSessionResult;
+    final matchingSessionResult =
+        sessionResult != null &&
+            sessionResult.connectionId?.trim() == connectionId
+        ? sessionResult
+        : null;
+
+    _providerBackfillProgress = ProviderBackfillProgress(
+      provider: activeProvider.providerType,
+      providerConnectionId: connectionId,
+      projectsPending: _maxCount(
+        projectCounts['pending'] ?? 0,
+        matchingSessionResult?.projectsPending ?? 0,
+      ),
+      assetsPending: _maxCount(
+        assetCounts['pending'] ?? 0,
+        matchingSessionResult?.assetsPending ?? 0,
+      ),
+      projectsMirrored: projectCounts['mirrored'] ?? 0,
+      assetsMirrored: assetCounts['mirrored'] ?? 0,
+      projectFailures: projectCounts['failed'] ?? 0,
+      assetFailures: assetCounts['failed'] ?? 0,
+    );
+  }
+
+  int _maxCount(int left, int right) => left > right ? left : right;
 
   Future<void> _kickSync({bool forceBootstrap = false}) {
     return _scheduleBackgroundSyncAction(

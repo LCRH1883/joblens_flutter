@@ -204,6 +204,96 @@ void main() {
     },
   );
 
+  test(
+    'provider connection stores backfill progress from session result and mirror rows',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_provider_progress_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+      final syncService = _ProviderSwitchSyncService(database)
+        ..providerAuthSessionResult = const ProviderAuthSessionResult(
+          sessionId: 'session-1',
+          status: 'completed',
+          provider: CloudProviderType.dropbox,
+          intent: 'switch',
+          connectionId: 'conn-1',
+          connectionStatus: 'connected_bootstrapping',
+          projectsPending: 4,
+          assetsPending: 9,
+        );
+      final store = JoblensStore(
+        database: database,
+        mediaStorage: mediaStorage,
+        syncService: syncService,
+        currentAuthUserIdProvider: () => 'test-user',
+      );
+      addTearDown(() async {
+        await store.waitForIdle();
+        store.dispose();
+        await database.close();
+      });
+
+      final projectId = await database.createProject('Library');
+      await database.ensureProviderRows();
+      await database.insertPendingAssetShell(
+        PhotoAsset(
+          id: 'asset-1',
+          localPath: '/tmp/asset-1.jpg',
+          thumbPath: '/tmp/asset-1-thumb.jpg',
+          createdAt: DateTime(2026, 4, 12),
+          importedAt: DateTime(2026, 4, 12),
+          projectId: projectId,
+          hash: 'a' * 64,
+          status: AssetStatus.active,
+          sourceType: AssetSourceType.imported,
+          cloudState: AssetCloudState.localAndCloud,
+          existsInPhoneStorage: true,
+        ),
+      );
+      await database.upsertProjectProviderMirror(
+        localProjectId: projectId,
+        providerConnectionId: 'conn-1',
+        status: 'pending',
+      );
+      await database.upsertAssetProviderMirror(
+        assetId: 'asset-1',
+        providerConnectionId: 'conn-1',
+        status: 'failed',
+      );
+
+      syncService.onRefreshProviderConnections = () async {
+        await database.updateProviderAccountStatus(
+          CloudProviderType.dropbox,
+          connectionStatus: ProviderConnectionStatus.connectedBootstrapping,
+          connectionId: 'conn-1',
+          displayName: 'Dropbox',
+          accountIdentifier: 'jane@example.com',
+          isActive: true,
+        );
+      };
+
+      await store.initialize();
+      await store.completeProviderConnection('session-1');
+
+      final progress = store.providerBackfillProgress;
+      expect(progress, isNotNull);
+      expect(progress!.provider, CloudProviderType.dropbox);
+      expect(progress.projectsPending, 4);
+      expect(progress.assetsPending, 9);
+      expect(progress.projectFailures, 0);
+      expect(progress.assetFailures, 1);
+    },
+  );
+
   test('disconnected provider does not expose stale account identity', () async {
     final account = ProviderAccount(
       id: 'dropbox',
@@ -557,6 +647,12 @@ class _ProviderSwitchSyncService extends SyncService {
   _ProviderSwitchSyncService(super.db) : super();
 
   Future<void> Function()? onRefreshProviderConnections;
+  ProviderAuthSessionResult providerAuthSessionResult =
+      const ProviderAuthSessionResult(
+        sessionId: 'session-1',
+        status: 'completed',
+        provider: CloudProviderType.dropbox,
+      );
   int reconcileCalls = 0;
   int kickCalls = 0;
   int registerDeviceCalls = 0;
@@ -580,6 +676,13 @@ class _ProviderSwitchSyncService extends SyncService {
     if (onRefreshProviderConnections != null) {
       await onRefreshProviderConnections!();
     }
+  }
+
+  @override
+  Future<ProviderAuthSessionResult> completeProviderConnection(
+    String sessionId,
+  ) async {
+    return providerAuthSessionResult;
   }
 
   @override

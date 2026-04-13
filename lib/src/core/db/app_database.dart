@@ -2958,6 +2958,42 @@ class AppDatabase {
     };
   }
 
+  Future<Map<String, int>> getProjectProviderMirrorCounts(
+    String providerConnectionId,
+  ) async {
+    final rows = await _db.rawQuery(
+      '''
+      SELECT status, COUNT(*) AS count
+      FROM project_provider_mirrors
+      WHERE provider_connection_id = ?
+      GROUP BY status
+      ''',
+      [providerConnectionId],
+    );
+    return {
+      for (final row in rows)
+        (row['status']! as String): ((row['count'] as int?) ?? 0),
+    };
+  }
+
+  Future<Map<String, int>> getAssetProviderMirrorCounts(
+    String providerConnectionId,
+  ) async {
+    final rows = await _db.rawQuery(
+      '''
+      SELECT status, COUNT(*) AS count
+      FROM asset_provider_mirrors
+      WHERE provider_connection_id = ?
+      GROUP BY status
+      ''',
+      [providerConnectionId],
+    );
+    return {
+      for (final row in rows)
+        (row['status']! as String): ((row['count'] as int?) ?? 0),
+    };
+  }
+
   Future<bool> assetExistsByHash(String hash) async {
     final rows = await _db.query(
       'photo_assets',

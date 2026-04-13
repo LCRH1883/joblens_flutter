@@ -67,6 +67,7 @@ class _SyncPageState extends ConsumerState<SyncPage>
     final failedCount = store.syncJobs
         .where((job) => job.state == SyncJobState.failed)
         .length;
+    final providerBackfillProgress = store.providerBackfillProgress;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Sync'),
@@ -156,6 +157,7 @@ class _SyncPageState extends ConsumerState<SyncPage>
               uploadingCount: uploadingCount,
               failedCount: failedCount,
               selectedProviderAccount: lockedProvider,
+              providerBackfillProgress: providerBackfillProgress,
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) => const _SyncActivityPage(),
@@ -459,6 +461,7 @@ class _SyncStatusCard extends StatelessWidget {
     required this.uploadingCount,
     required this.failedCount,
     required this.selectedProviderAccount,
+    required this.providerBackfillProgress,
     required this.onTap,
   });
 
@@ -466,6 +469,7 @@ class _SyncStatusCard extends StatelessWidget {
   final int uploadingCount;
   final int failedCount;
   final ProviderAccount? selectedProviderAccount;
+  final ProviderBackfillProgress? providerBackfillProgress;
   final VoidCallback onTap;
 
   @override
@@ -554,9 +558,77 @@ class _SyncStatusCard extends StatelessWidget {
                   ),
                 ],
               ),
+              if (providerBackfillProgress != null) ...[
+                const SizedBox(height: 12),
+                _ProviderBackfillSummary(progress: providerBackfillProgress!),
+              ],
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ProviderBackfillSummary extends StatelessWidget {
+  const _ProviderBackfillSummary({required this.progress});
+
+  final ProviderBackfillProgress progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final failures = progress.projectFailures + progress.assetFailures;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Backfilling to ${progress.provider.label}',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${progress.projectsPending} projects and ${progress.assetsPending} assets still need to be mirrored to the active provider.',
+            style: theme.textTheme.bodySmall,
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _CountChip(
+                label: 'Projects left',
+                count: progress.projectsPending,
+                icon: Icons.folder_copy_outlined,
+              ),
+              _CountChip(
+                label: 'Assets left',
+                count: progress.assetsPending,
+                icon: Icons.cloud_upload_outlined,
+              ),
+              _CountChip(
+                label: 'Mirrored',
+                count: progress.assetsMirrored,
+                icon: Icons.check_circle_outline,
+              ),
+              if (failures > 0)
+                _CountChip(
+                  label: 'Failures',
+                  count: failures,
+                  icon: Icons.error_outline,
+                  highlight: true,
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }
