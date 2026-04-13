@@ -323,15 +323,19 @@ class JoblensBackendApiClient {
   Future<BackendAssetRecord> restoreAsset(
     String assetId, {
     int? expectedRevision,
+    bool? hasLocalFile,
   }) async {
+    final body = <String, Object?>{};
+    if (expectedRevision != null) {
+      body['expectedRevision'] = expectedRevision;
+    }
+    if (hasLocalFile != null) {
+      body['hasLocalFile'] = hasLocalFile;
+    }
     final map = await _authorizedJsonRequest(
       method: 'POST',
       path: '/assets/$assetId/restore',
-      body: expectedRevision == null
-          ? null
-          : {
-              'expectedRevision': expectedRevision,
-            },
+      body: body.isEmpty ? null : body,
     );
     return BackendAssetRecord.fromMap(
       map['asset'] is Map<String, dynamic>

@@ -72,6 +72,41 @@ void main() {
     expect(store.projectSortMode, ProjectSortMode.name);
     expect(store.projects.first.name, 'Inbox');
   });
+
+  test('creating a project with an existing name reuses the local project', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'joblens_project_duplicate_test_',
+    );
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    final dbPath = p.join(tempDir.path, 'joblens.db');
+    final database = await AppDatabase.open(databasePath: dbPath);
+    final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+    final store = JoblensStore(
+      database: database,
+      mediaStorage: mediaStorage,
+      syncService: _NoopSyncService(database),
+    );
+    addTearDown(() async {
+      await store.waitForIdle();
+      store.dispose();
+      await database.close();
+    });
+
+    await store.initialize();
+    await store.createProject('Plumbing');
+    await store.createProject('Plumbing');
+
+    final plumbingProjects = store.projects
+        .where((project) => project.name == 'Plumbing')
+        .toList(growable: false);
+    expect(plumbingProjects, hasLength(1));
+    expect(store.lastError, isNull);
+  });
 }
 
 class _NoopSyncService extends SyncService {

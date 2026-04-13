@@ -268,15 +268,25 @@ class SyncService {
     }
 
     final providers = await _db.getProviderAccounts();
-    final hasActiveCloudConnection = providers.any(
-      (provider) =>
-          provider.providerType != CloudProviderType.backend &&
-          provider.hasActiveConnection,
-    );
-    if (!hasActiveCloudConnection) {
+    String? activeConnectionId;
+    for (final provider in providers) {
+      if (provider.providerType == CloudProviderType.backend ||
+          !provider.hasActiveConnection) {
+        continue;
+      }
+      final connectionId = provider.connectionId?.trim();
+      if (connectionId == null || connectionId.isEmpty) {
+        continue;
+      }
+      activeConnectionId = connectionId;
+      break;
+    }
+    if (activeConnectionId == null || activeConnectionId.isEmpty) {
       return;
     }
-    final queued = await _db.backfillEligibleBlobUploads();
+    final queued = await _db.backfillEligibleBlobUploads(
+      activeProviderConnectionId: activeConnectionId,
+    );
     if (queued <= 0) {
       return;
     }
@@ -456,7 +466,24 @@ class SyncService {
       await _db.completeBlobUpload(task.assetId, task.uploadGeneration);
       return;
     }
-    if (asset.remoteAssetId != null && asset.remoteAssetId!.trim().isNotEmpty) {
+    final hasCanonicalRemoteAsset =
+        asset.remoteAssetId != null && asset.remoteAssetId!.trim().isNotEmpty;
+    final activeProviderConnectionId = await _db.getActiveProviderConnectionId();
+    final activeMirror =
+        activeProviderConnectionId == null
+        ? null
+        : await _db.getAssetProviderMirrorSnapshot(
+            assetId: asset.id,
+            providerConnectionId: activeProviderConnectionId,
+          );
+    final needsActiveProviderUpload =
+        hasCanonicalRemoteAsset &&
+        activeProviderConnectionId != null &&
+        (activeMirror == null ||
+            activeMirror.status == 'pending' ||
+            (activeMirror.status == 'failed' &&
+                activeMirror.lastError == 'needs_client_upload'));
+    if (hasCanonicalRemoteAsset && !needsActiveProviderUpload) {
       await _db.completeBlobUpload(task.assetId, task.uploadGeneration);
       await _db.completeEntitySync(SyncEntityType.asset, task.assetId);
       await _db.updateAssetCloudMetadata(
@@ -473,28 +500,30 @@ class SyncService {
     final remoteProjectId = await _ensureProjectRemoteId(asset.projectId);
     final context = _PendingAssetContext(asset: asset);
     try {
-      final bulkCheck = await _backendApiClient!.bulkCheckAssets(
-        projectId: remoteProjectId,
-        assets: [
-          BulkCheckAssetInput(deviceAssetId: asset.id, sha256: asset.hash),
-        ],
-      );
-      final result = bulkCheck.results.cast<BulkCheckResult?>().firstOrNull;
-      if (result != null && result.isDuplicate) {
-        await _handleDuplicate(
-          context,
-          result.assetId,
-          remoteProjectId: remoteProjectId,
+      if (!needsActiveProviderUpload) {
+        final bulkCheck = await _backendApiClient!.bulkCheckAssets(
+          projectId: remoteProjectId,
+          assets: [
+            BulkCheckAssetInput(deviceAssetId: asset.id, sha256: asset.hash),
+          ],
         );
-        await _db.completeBlobUpload(task.assetId, task.uploadGeneration);
-        await _db.completeEntitySync(SyncEntityType.asset, task.assetId);
-        await _db.updateAssetCloudMetadata(
-          assetId: asset.id,
-          cloudState: AssetCloudState.localAndCloud,
-          lastSyncErrorCode: null,
-          dirtyFields: const [],
-        );
-        return;
+        final result = bulkCheck.results.cast<BulkCheckResult?>().firstOrNull;
+        if (result != null && result.isDuplicate) {
+          await _handleDuplicate(
+            context,
+            result.assetId,
+            remoteProjectId: remoteProjectId,
+          );
+          await _db.completeBlobUpload(task.assetId, task.uploadGeneration);
+          await _db.completeEntitySync(SyncEntityType.asset, task.assetId);
+          await _db.updateAssetCloudMetadata(
+            assetId: asset.id,
+            cloudState: AssetCloudState.localAndCloud,
+            lastSyncErrorCode: null,
+            dirtyFields: const [],
+          );
+          return;
+        }
       }
 
       final outcome = await _uploadAndCommitWithRetry(
@@ -1437,6 +1466,7 @@ class SyncService {
   Future<void> restoreAsset(PhotoAsset asset) async {
     final client = _backendApiClient;
     final remoteAssetId = asset.remoteAssetId?.trim();
+    final hasLocalFile = await _assetHasLocalFile(asset);
     if (client == null) {
       await _db.restoreAsset(asset.id);
       return;
@@ -1449,6 +1479,7 @@ class SyncService {
             ? await client.restoreAsset(
                 remoteMatch.assetId,
                 expectedRevision: remoteMatch.revision,
+                hasLocalFile: hasLocalFile,
               )
             : remoteMatch;
         await _mergeRemoteAsset(
@@ -1491,6 +1522,7 @@ class SyncService {
     final restored = await client.restoreAsset(
       remoteAssetId,
       expectedRevision: asset.remoteRev,
+      hasLocalFile: hasLocalFile,
     );
     await _mergeRemoteAsset(
       restored,
@@ -1503,6 +1535,18 @@ class SyncService {
       projectId: asset.projectId,
       message: 'Restored asset from Trash.',
     );
+  }
+
+  Future<bool> _assetHasLocalFile(PhotoAsset asset) async {
+    final path = asset.localPath.trim();
+    if (path.isEmpty) {
+      return false;
+    }
+    try {
+      return await File(path).exists();
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<BackendAssetRecord?> _findRemoteRestoreCandidate(

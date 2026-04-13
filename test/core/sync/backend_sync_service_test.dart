@@ -389,17 +389,22 @@ void main() {
         remoteProjectId: 'remote-project-1',
         remoteRev: 1,
       );
+      await harness.database.ensureProviderRows();
       await harness.database.updateProviderAccountStatus(
         CloudProviderType.dropbox,
         connectionStatus: ProviderConnectionStatus.ready,
+        connectionId: 'conn-dropbox',
         displayName: 'Dropbox',
         accountIdentifier: 'jane@example.com',
         isActive: true,
       );
       final asset = await harness.ingestAsset(projectId: project.id, seed: 42);
       await harness.database.deleteBlobUploadsForAsset(asset.id);
-
-      expect(await harness.database.getAllBlobUploadTasks(), isEmpty);
+      await harness.database.upsertBlobUploadTask(
+        assetId: asset.id,
+        uploadGeneration: asset.uploadGeneration,
+        localUri: asset.localPath,
+      );
 
       await harness.database.markBootstrapCompleted();
       await syncService.kick(forceBootstrap: false);
@@ -1522,8 +1527,15 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
     this.bulkCheckResponse = const BulkCheckAssetsResponse(
       projectId: 'unused',
       duplicateCount: 0,
-      missingCount: 0,
-      results: [],
+      missingCount: 1,
+      results: [
+        BulkCheckResult(
+          deviceAssetId: 'unused-device-asset',
+          sha256: 'unused-sha',
+          status: 'missing',
+          assetId: null,
+        ),
+      ],
     ),
     this.bulkCheckResponseSequence,
     this.prepareUploadResponse,
@@ -1776,6 +1788,7 @@ class _FakeBackendApiClient extends JoblensBackendApiClient {
   Future<BackendAssetRecord> restoreAsset(
     String assetId, {
     int? expectedRevision,
+    bool? hasLocalFile,
   }) async {
     restoreCalls += 1;
     restoredAssetIds.add(assetId);

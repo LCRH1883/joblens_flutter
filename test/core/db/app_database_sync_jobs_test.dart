@@ -6,6 +6,8 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:joblens_flutter/src/core/db/app_database.dart';
 import 'package:joblens_flutter/src/core/models/cloud_provider.dart';
+import 'package:joblens_flutter/src/core/models/photo_asset.dart';
+import 'package:joblens_flutter/src/core/models/provider_account.dart';
 import 'package:joblens_flutter/src/core/models/sync_job.dart';
 
 void main() {
@@ -189,6 +191,70 @@ void main() {
       await database.cleanupSyncState();
 
       expect(await database.getAllBlobUploadTasks(), isEmpty);
+    },
+  );
+
+  test(
+    'backfillEligibleBlobUploads queues active-provider reupload for needs_client_upload mirror',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_db_provider_backfill_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      addTearDown(database.close);
+
+      await database.ensureProviderRows();
+      await database.updateProviderAccountStatus(
+        CloudProviderType.googleDrive,
+        connectionStatus: ProviderConnectionStatus.ready,
+        connectionId: 'conn-google',
+        isActive: true,
+      );
+
+      final projectId = await database.ensureDefaultProject();
+      await database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-1',
+        projectId: projectId,
+        remoteAssetId: 'remote-1',
+        remoteProvider: CloudProviderType.oneDrive.key,
+        remoteFileId: 'old-provider-file',
+        remotePath: 'Joblens/Library/asset-1.jpg',
+        sha256: 'd' * 64,
+        createdAt: DateTime(2026, 4, 13),
+        cloudState: AssetCloudState.localAndCloud,
+      );
+      await database.updateAssetLocalMedia(
+        assetId: 'asset-1',
+        localPath: '/tmp/asset-1.jpg',
+        thumbPath: '/tmp/asset-1-thumb.jpg',
+        hash: 'd' * 64,
+        cloudState: AssetCloudState.localAndCloud,
+        existsInPhoneStorage: true,
+      );
+      await database.upsertAssetProviderMirror(
+        assetId: 'asset-1',
+        providerConnectionId: 'conn-google',
+        status: 'failed',
+        lastError: 'needs_client_upload',
+      );
+
+      final queued = await database.backfillEligibleBlobUploads(
+        activeProviderConnectionId: 'conn-google',
+      );
+
+      expect(queued, 1);
+      final tasks = await database.getAllBlobUploadTasks();
+      expect(tasks, hasLength(1));
+      expect(tasks.single.assetId, 'asset-1');
+      expect(tasks.single.uploadGeneration, 1);
+      expect(tasks.single.localUri, '/tmp/asset-1.jpg');
     },
   );
 }

@@ -1061,6 +1061,16 @@ class AppDatabase {
     final now = DateTime.now().toIso8601String();
     final localSeq = _nextLocalSeq();
     return _db.transaction((txn) async {
+      final existing = await txn.query(
+        'projects',
+        columns: ['id'],
+        where: 'name = ? AND deleted_at IS NULL',
+        whereArgs: [name],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) {
+        return existing.first['id']! as int;
+      }
       final id = await txn.insert('projects', {
         'name': name,
         'notes': '',
@@ -1831,6 +1841,47 @@ class AppDatabase {
     return rows.map(ProviderAccount.fromMap).toList();
   }
 
+  Future<String?> getActiveProviderConnectionId() async {
+    final rows = await _db.query(
+      'provider_accounts',
+      columns: ['connection_id'],
+      where: 'is_active = 1 AND TRIM(COALESCE(connection_id, \'\')) != ?',
+      whereArgs: [''],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    final connectionId = rows.first['connection_id'] as String?;
+    final trimmed = connectionId?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  Future<({String status, String? lastError})?> getAssetProviderMirrorSnapshot({
+    required String assetId,
+    required String providerConnectionId,
+  }) async {
+    final rows = await _db.query(
+      'asset_provider_mirrors',
+      columns: ['status', 'last_error'],
+      where: 'asset_id = ? AND provider_connection_id = ?',
+      whereArgs: [assetId, providerConnectionId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    final status = (rows.first['status'] as String?)?.trim();
+    if (status == null || status.isEmpty) {
+      return null;
+    }
+    final lastError = (rows.first['last_error'] as String?)?.trim();
+    return (status: status, lastError: lastError?.isEmpty ?? true ? null : lastError);
+  }
+
   Future<void> enqueueSyncJob({
     required String assetId,
     required int projectId,
@@ -2111,20 +2162,35 @@ class AppDatabase {
     );
   }
 
-  Future<int> backfillEligibleBlobUploads() async {
+  Future<int> backfillEligibleBlobUploads({
+    required String activeProviderConnectionId,
+  }) async {
     return _db.transaction((txn) async {
       final rows = await txn.rawQuery(
         '''
-        SELECT id, upload_generation, local_path
-        FROM photo_assets
-        WHERE status = ?
-          AND deleted_at IS NULL
-          AND ingest_state = ?
-          AND TRIM(COALESCE(local_path, '')) != ''
-          AND TRIM(COALESCE(remote_asset_id, '')) = ''
-          AND id NOT IN (SELECT asset_id FROM blob_upload)
+        SELECT DISTINCT a.id, a.upload_generation, a.local_path
+        FROM photo_assets a
+        LEFT JOIN asset_provider_mirrors m
+          ON m.asset_id = a.id
+         AND m.provider_connection_id = ?
+        WHERE a.status = ?
+          AND a.deleted_at IS NULL
+          AND a.ingest_state = ?
+          AND TRIM(COALESCE(a.local_path, '')) != ''
+          AND a.exists_in_phone_storage = 1
+          AND (
+            TRIM(COALESCE(a.remote_asset_id, '')) = ''
+            OR m.asset_id IS NULL
+            OR m.status = 'pending'
+            OR (m.status = 'failed' AND COALESCE(m.last_error, '') = 'needs_client_upload')
+          )
+          AND a.id NOT IN (SELECT asset_id FROM blob_upload)
       ''',
-        [AssetStatus.active.name, AssetIngestState.ready.name],
+        [
+          activeProviderConnectionId,
+          AssetStatus.active.name,
+          AssetIngestState.ready.name,
+        ],
       );
       for (final row in rows) {
         await _upsertBlobUploadExecutor(
