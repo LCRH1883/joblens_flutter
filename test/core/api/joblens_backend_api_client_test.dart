@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -498,6 +499,60 @@ void main() {
     expect(
       downloadedUri.toString(),
       'https://api.joblens.xyz/functions/v1/api/v1/media/asset-1/original?token=xyz',
+    );
+  });
+
+  test('backend requests time out instead of hanging forever', () async {
+    final completer = Completer<http.Response>();
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      backendRequestTimeout: const Duration(milliseconds: 10),
+      httpClient: MockClient((request) => completer.future),
+    );
+
+    await expectLater(
+      client.listDevices(),
+      throwsA(
+        isA<ApiException>().having(
+          (e) => e.code,
+          'code',
+          'backend_request_timeout',
+        ),
+      ),
+    );
+  });
+
+  test('direct uploads time out instead of hanging forever', () async {
+    final completer = Completer<http.Response>();
+    final client = JoblensBackendApiClient(
+      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+      accessTokenProvider: _FakeTokenProvider('token-123'),
+      directUploadTimeout: const Duration(milliseconds: 10),
+      httpClient: MockClient((request) => completer.future),
+    );
+
+    await expectLater(
+      client.uploadWithInstruction(
+        instruction: DirectUploadInstruction(
+          strategy: 'single_put',
+          url: 'https://upload.example/file',
+          method: 'PUT',
+          headers: const {},
+          fields: const {},
+          fileFieldName: 'file',
+        ),
+        bytes: Uint8List.fromList([1, 2, 3]),
+        contentType: 'image/jpeg',
+        filename: 'photo.jpg',
+      ),
+      throwsA(
+        isA<ApiException>().having(
+          (e) => e.code,
+          'code',
+          'direct_upload_timeout',
+        ),
+      ),
     );
   });
 }

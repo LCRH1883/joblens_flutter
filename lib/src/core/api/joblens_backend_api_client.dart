@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -14,15 +15,21 @@ class JoblensBackendApiClient {
     required String baseUrl,
     required AccessTokenProvider accessTokenProvider,
     http.Client? httpClient,
+    Duration backendRequestTimeout = const Duration(seconds: 30),
+    Duration directUploadTimeout = const Duration(minutes: 2),
   }) : _baseUrl = baseUrl.endsWith('/')
            ? baseUrl.substring(0, baseUrl.length - 1)
            : baseUrl,
        _accessTokenProvider = accessTokenProvider,
-       _httpClient = httpClient ?? http.Client();
+       _httpClient = httpClient ?? http.Client(),
+       _backendRequestTimeout = backendRequestTimeout,
+       _directUploadTimeout = directUploadTimeout;
 
   final String _baseUrl;
   final AccessTokenProvider _accessTokenProvider;
   final http.Client _httpClient;
+  final Duration _backendRequestTimeout;
+  final Duration _directUploadTimeout;
 
   Future<ProviderConnectionsResponse> listProviderConnections() async {
     final map = await _authorizedJsonRequest(
@@ -386,7 +393,12 @@ class JoblensBackendApiClient {
 
   Future<Uint8List> downloadAssetBytes(String assetId) async {
     final signed = await getDownloadUrl(assetId);
-    final response = await _httpClient.get(Uri.parse(signed.url));
+    final response = await _withTimeout(
+      _httpClient.get(Uri.parse(signed.url)),
+      timeout: _directUploadTimeout,
+      code: 'remote_download_timeout',
+      message: 'Timed out downloading the remote asset.',
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(
         code: 'remote_download_failed',
@@ -513,15 +525,25 @@ class JoblensBackendApiClient {
       if (!headers.containsKey('Content-Type')) 'Content-Type': contentType,
     };
     final response = switch (method) {
-      'PUT' => await _httpClient.put(
-        Uri.parse(url),
-        headers: mergedHeaders,
-        body: bytes,
+      'PUT' => await _withTimeout(
+        _httpClient.put(
+          Uri.parse(url),
+          headers: mergedHeaders,
+          body: bytes,
+        ),
+        timeout: _directUploadTimeout,
+        code: 'direct_upload_timeout',
+        message: 'Timed out uploading the asset to the cloud provider.',
       ),
-      'POST' => await _httpClient.post(
-        Uri.parse(url),
-        headers: mergedHeaders,
-        body: bytes,
+      'POST' => await _withTimeout(
+        _httpClient.post(
+          Uri.parse(url),
+          headers: mergedHeaders,
+          body: bytes,
+        ),
+        timeout: _directUploadTimeout,
+        code: 'direct_upload_timeout',
+        message: 'Timed out uploading the asset to the cloud provider.',
       ),
       _ => throw ArgumentError.value(method, 'method', 'Unsupported method'),
     };
@@ -547,8 +569,18 @@ class JoblensBackendApiClient {
         filename: filename,
       ),
     );
-    final streamed = await request.send();
-    final response = await http.Response.fromStream(streamed);
+    final streamed = await _withTimeout(
+      request.send(),
+      timeout: _directUploadTimeout,
+      code: 'direct_upload_timeout',
+      message: 'Timed out uploading the asset to the cloud provider.',
+    );
+    final response = await _withTimeout(
+      http.Response.fromStream(streamed),
+      timeout: _directUploadTimeout,
+      code: 'direct_upload_timeout',
+      message: 'Timed out finalizing the cloud upload response.',
+    );
     _ensureUploadSucceeded(response);
     return _parseUploadResult(response);
   }
@@ -576,10 +608,15 @@ class JoblensBackendApiClient {
         'Content-Length': '${chunk.length}',
         'Content-Range': 'bytes $start-${endExclusive - 1}/${bytes.length}',
       };
-      final response = await _httpClient.put(
-        Uri.parse(instruction.url),
-        headers: headers,
-        body: chunk,
+      final response = await _withTimeout(
+        _httpClient.put(
+          Uri.parse(instruction.url),
+          headers: headers,
+          body: chunk,
+        ),
+        timeout: _directUploadTimeout,
+        code: 'direct_upload_timeout',
+        message: 'Timed out uploading the asset to the cloud provider.',
       );
       _ensureUploadSucceeded(response);
       lastResponse = response;
@@ -606,8 +643,18 @@ class JoblensBackendApiClient {
         ? null
         : jsonEncode(instruction.completionBody);
     final response = switch (method) {
-      'POST' => await _httpClient.post(uri, headers: headers, body: body),
-      'PUT' => await _httpClient.put(uri, headers: headers, body: body),
+      'POST' => await _withTimeout(
+        _httpClient.post(uri, headers: headers, body: body),
+        timeout: _directUploadTimeout,
+        code: 'upload_completion_timeout',
+        message: 'Timed out finalizing the cloud upload.',
+      ),
+      'PUT' => await _withTimeout(
+        _httpClient.put(uri, headers: headers, body: body),
+        timeout: _directUploadTimeout,
+        code: 'upload_completion_timeout',
+        message: 'Timed out finalizing the cloud upload.',
+      ),
       _ => throw ArgumentError.value(
         method,
         'completionMethod',
@@ -705,16 +752,34 @@ class JoblensBackendApiClient {
       if (body != null) 'Content-Type': 'application/json',
     };
 
-    return switch (method) {
-      'POST' => _httpClient.post(uri, headers: headers, body: jsonEncode(body)),
-      'GET' => _httpClient.get(uri, headers: headers),
-      'PATCH' => _httpClient.patch(
-        uri,
-        headers: headers,
-        body: jsonEncode(body),
-      ),
-      _ => throw ArgumentError.value(method, 'method', 'Unsupported method'),
-    };
+    return _withTimeout(
+      switch (method) {
+        'POST' => _httpClient.post(uri, headers: headers, body: jsonEncode(body)),
+        'GET' => _httpClient.get(uri, headers: headers),
+        'PATCH' => _httpClient.patch(
+          uri,
+          headers: headers,
+          body: jsonEncode(body),
+        ),
+        _ => throw ArgumentError.value(method, 'method', 'Unsupported method'),
+      },
+      timeout: _backendRequestTimeout,
+      code: 'backend_request_timeout',
+      message: 'Timed out contacting the Joblens backend.',
+    );
+  }
+
+  Future<T> _withTimeout<T>(
+    Future<T> future, {
+    required Duration timeout,
+    required String code,
+    required String message,
+  }) async {
+    try {
+      return await future.timeout(timeout);
+    } on TimeoutException {
+      throw ApiException(code: code, message: message);
+    }
   }
 
   ApiException _mapApiException(http.Response response) {

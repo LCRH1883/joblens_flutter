@@ -48,10 +48,24 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
 
   @override
   Widget build(BuildContext context) {
+    final store = ref.watch(joblensStoreListenableProvider);
+    final currentAsset = _currentAsset(store);
+    final canDownloadCurrent = store.canDownloadAsset(currentAsset);
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         title: Text('${_currentIndex + 1} / ${widget.assets.length}'),
+        actions: [
+          if (canDownloadCurrent)
+            IconButton(
+              tooltip: 'Download to Joblens',
+              onPressed: store.isBusy
+                  ? null
+                  : () => _downloadCurrentAsset(context, store, currentAsset),
+              icon: const Icon(Icons.download_outlined),
+            ),
+        ],
       ),
       body: EdgeSwipeBack(
         child: PageView.builder(
@@ -68,7 +82,7 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
           },
           itemBuilder: (context, index) {
             final transformController = _controllerFor(index);
-            final asset = widget.assets[index];
+            final asset = _assetAt(store, index);
             return Center(
               child: InteractiveViewer(
                 transformationController: transformController,
@@ -111,6 +125,34 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
     setState(() {
       _isCurrentZoomed = zoomed;
     });
+  }
+
+  PhotoAsset _assetAt(JoblensStore store, int index) {
+    final fallback = widget.assets[index];
+    return store.assetById(fallback.id) ?? fallback;
+  }
+
+  PhotoAsset _currentAsset(JoblensStore store) => _assetAt(store, _currentIndex);
+
+  Future<void> _downloadCurrentAsset(
+    BuildContext context,
+    JoblensStore store,
+    PhotoAsset asset,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await store.downloadAssetsToDevice([asset]);
+    if (!mounted) {
+      return;
+    }
+    if (store.lastError != null) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.lastError!)),
+      );
+      return;
+    }
+    messenger.showSnackBar(
+      SnackBar(content: Text(result.summaryMessage())),
+    );
   }
 }
 

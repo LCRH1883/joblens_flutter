@@ -496,6 +496,12 @@ class SyncService {
     }
 
     await _db.markBlobUploadUploading(task.assetId, task.uploadGeneration);
+    await _logInfo(
+      'upload_started',
+      assetId: asset.id,
+      projectId: asset.projectId,
+      message: 'Started uploading asset to the active cloud provider.',
+    );
 
     final remoteProjectId = await _ensureProjectRemoteId(asset.projectId);
     final context = _PendingAssetContext(asset: asset);
@@ -1406,6 +1412,18 @@ class SyncService {
       forceRefresh: forceRefresh,
       loader: () => client.getDownloadUrl(remoteAssetId),
     );
+  }
+
+  Future<Uint8List> downloadAssetBytes(PhotoAsset asset) async {
+    final remoteAssetId = asset.remoteAssetId?.trim() ?? '';
+    final client = _backendApiClient;
+    if (client == null || remoteAssetId.isEmpty) {
+      throw const ApiException(
+        code: 'remote_download_unavailable',
+        message: 'This asset is not available for remote download.',
+      );
+    }
+    return client.downloadAssetBytes(remoteAssetId);
   }
 
   Future<String?> getVideoPreviewUrl(

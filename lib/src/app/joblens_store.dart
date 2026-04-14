@@ -85,6 +85,79 @@ class SyncActivitySummary {
   int get totalOutstanding => queuedCount + uploadingCount + failedCount;
 }
 
+class AssetDownloadProgress {
+  const AssetDownloadProgress({
+    required this.totalRequested,
+    required this.downloadedCount,
+    required this.skippedCount,
+    required this.failedCount,
+    this.currentAssetId,
+    this.currentAssetName,
+  });
+
+  final int totalRequested;
+  final int downloadedCount;
+  final int skippedCount;
+  final int failedCount;
+  final String? currentAssetId;
+  final String? currentAssetName;
+
+  bool get isActive => totalRequested > 0;
+
+  AssetDownloadProgress copyWith({
+    int? totalRequested,
+    int? downloadedCount,
+    int? skippedCount,
+    int? failedCount,
+    String? currentAssetId,
+    String? currentAssetName,
+    bool clearCurrentAsset = false,
+  }) {
+    return AssetDownloadProgress(
+      totalRequested: totalRequested ?? this.totalRequested,
+      downloadedCount: downloadedCount ?? this.downloadedCount,
+      skippedCount: skippedCount ?? this.skippedCount,
+      failedCount: failedCount ?? this.failedCount,
+      currentAssetId: clearCurrentAsset
+          ? null
+          : currentAssetId ?? this.currentAssetId,
+      currentAssetName: clearCurrentAsset
+          ? null
+          : currentAssetName ?? this.currentAssetName,
+    );
+  }
+}
+
+class AssetDownloadBatchResult {
+  const AssetDownloadBatchResult({
+    required this.requestedCount,
+    required this.downloadedCount,
+    required this.skippedCount,
+    required this.failedCount,
+  });
+
+  const AssetDownloadBatchResult.empty()
+    : this(
+        requestedCount: 0,
+        downloadedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+      );
+
+  final int requestedCount;
+  final int downloadedCount;
+  final int skippedCount;
+  final int failedCount;
+
+  String summaryMessage({String itemLabel = 'photo'}) {
+    final noun = requestedCount == 1 ? itemLabel : '${itemLabel}s';
+    if (requestedCount == 0) {
+      return 'No $noun needed downloading.';
+    }
+    return 'Downloaded $downloadedCount, skipped $skippedCount, failed $failedCount.';
+  }
+}
+
 class JoblensStore extends ChangeNotifier {
   JoblensStore({
     required AppDatabase database,
@@ -133,6 +206,7 @@ class JoblensStore extends ChangeNotifier {
     uploadUploading: 0,
     uploadFailed: 0,
   );
+  AssetDownloadProgress? _assetDownloadProgress;
 
   List<PhotoAsset> _assets = const [];
   List<PhotoAsset> _deletedAssets = const [];
@@ -169,6 +243,23 @@ class JoblensStore extends ChangeNotifier {
       ? _providerBackfillProgress
       : null;
   SyncActivitySummary get syncActivitySummary => _syncActivitySummary;
+  AssetDownloadProgress? get assetDownloadProgress => _assetDownloadProgress;
+
+  PhotoAsset? assetById(String assetId) {
+    for (final asset in _assets) {
+      if (asset.id == assetId) {
+        return asset;
+      }
+    }
+    return null;
+  }
+
+  bool hasLocalOriginal(PhotoAsset asset) => _hasValidLocalOriginal(asset);
+
+  bool canDownloadAsset(PhotoAsset asset) {
+    final remoteAssetId = asset.remoteAssetId?.trim() ?? '';
+    return remoteAssetId.isNotEmpty && !_hasValidLocalOriginal(asset);
+  }
 
   AppLaunchDestination launchDestinationForSession({
     required bool isAuthenticated,
@@ -1068,6 +1159,164 @@ class JoblensStore extends ChangeNotifier {
     return _syncService.getDownloadUrl(asset, forceRefresh: forceRefresh);
   }
 
+  Future<AssetDownloadBatchResult> downloadAssetsToDevice(
+    Iterable<PhotoAsset> assets,
+  ) async {
+    final requestedAssets = <PhotoAsset>[];
+    final seenAssetIds = <String>{};
+    for (final asset in assets) {
+      if (seenAssetIds.add(asset.id)) {
+        requestedAssets.add(asset);
+      }
+    }
+    if (requestedAssets.isEmpty) {
+      return const AssetDownloadBatchResult.empty();
+    }
+
+    var downloadedCount = 0;
+    var skippedCount = 0;
+    var failedCount = 0;
+
+    await _runBusy(() async {
+      await _enqueueLocalIngest(() async {
+        _assetDownloadProgress = AssetDownloadProgress(
+          totalRequested: requestedAssets.length,
+          downloadedCount: 0,
+          skippedCount: 0,
+          failedCount: 0,
+        );
+        _notifyListenersIfActive();
+
+        try {
+          for (final requestedAsset in requestedAssets) {
+            if (_isDisposed) {
+              break;
+            }
+
+            final asset =
+                await _database.getAssetById(requestedAsset.id) ??
+                requestedAsset;
+            _assetDownloadProgress = _assetDownloadProgress?.copyWith(
+              currentAssetId: asset.id,
+              currentAssetName: _downloadLabelForAsset(asset),
+            );
+            _notifyListenersIfActive();
+
+            if (_hasValidLocalOriginal(asset)) {
+              skippedCount += 1;
+              await _database.addSyncLog(
+                level: SyncLogLevel.info,
+                event: 'download_skipped_already_local',
+                assetId: asset.id,
+                projectId: asset.projectId,
+                message:
+                    'Skipped download because a local original already exists.',
+              );
+              _assetDownloadProgress = _assetDownloadProgress?.copyWith(
+                downloadedCount: downloadedCount,
+                skippedCount: skippedCount,
+                failedCount: failedCount,
+              );
+              _notifyListenersIfActive();
+              continue;
+            }
+
+            final remoteAssetId = asset.remoteAssetId?.trim() ?? '';
+            if (remoteAssetId.isEmpty) {
+              failedCount += 1;
+              await _database.addSyncLog(
+                level: SyncLogLevel.error,
+                event: 'download_failed',
+                assetId: asset.id,
+                projectId: asset.projectId,
+                message:
+                    'Asset cannot be downloaded because it has no remote source.',
+              );
+              _assetDownloadProgress = _assetDownloadProgress?.copyWith(
+                downloadedCount: downloadedCount,
+                skippedCount: skippedCount,
+                failedCount: failedCount,
+              );
+              _notifyListenersIfActive();
+              continue;
+            }
+
+            await _database.addSyncLog(
+              level: SyncLogLevel.info,
+              event: 'download_started',
+              assetId: asset.id,
+              projectId: asset.projectId,
+              message: 'Started downloading original into Joblens storage.',
+            );
+
+            try {
+              final bytes = await _syncService.downloadAssetBytes(asset);
+              final stored = await _mediaStorage.storeDownloadedBytes(
+                assetId: asset.id,
+                bytes: bytes,
+                filename: _downloadFilenameForAsset(asset),
+              );
+              await _database.updateAssetLocalMedia(
+                assetId: asset.id,
+                localPath: stored.localPath,
+                thumbPath: stored.thumbPath,
+                hash: stored.hash,
+                cloudState: AssetCloudState.localAndCloud,
+                existsInPhoneStorage: asset.existsInPhoneStorage,
+              );
+              downloadedCount += 1;
+              await _database.addSyncLog(
+                level: SyncLogLevel.info,
+                event: 'download_completed',
+                assetId: asset.id,
+                projectId: asset.projectId,
+                message:
+                    'Downloaded original into Joblens local storage successfully.',
+              );
+            } catch (error) {
+              failedCount += 1;
+              final message = error is ApiException
+                  ? error.message
+                  : error.toString();
+              await _database.addSyncLog(
+                level: SyncLogLevel.error,
+                event: 'download_failed',
+                assetId: asset.id,
+                projectId: asset.projectId,
+                message: message,
+              );
+            }
+
+            _assetDownloadProgress = _assetDownloadProgress?.copyWith(
+              downloadedCount: downloadedCount,
+              skippedCount: skippedCount,
+              failedCount: failedCount,
+            );
+            _notifyListenersIfActive();
+          }
+        } finally {
+          _assetDownloadProgress = null;
+          await _hydrateLocalState();
+          _notifyListenersIfActive();
+        }
+      });
+    });
+
+    return AssetDownloadBatchResult(
+      requestedCount: requestedAssets.length,
+      downloadedCount: downloadedCount,
+      skippedCount: skippedCount,
+      failedCount: failedCount,
+    );
+  }
+
+  Future<AssetDownloadBatchResult> downloadMissingProjectAssets(int projectId) {
+    final projectAssets = _assets
+        .where((asset) => asset.projectId == projectId)
+        .toList(growable: false);
+    return downloadAssetsToDevice(projectAssets);
+  }
+
   Future<void> _runBusy(Future<void> Function() action) async {
     if (_isBusy) {
       return;
@@ -1125,6 +1374,35 @@ class JoblensStore extends ChangeNotifier {
       }
     }
     return null;
+  }
+
+  bool _hasValidLocalOriginal(PhotoAsset asset) {
+    final localPath = asset.localPath.trim();
+    if (localPath.isEmpty) {
+      return false;
+    }
+    return File(localPath).existsSync();
+  }
+
+  String _downloadLabelForAsset(PhotoAsset asset) {
+    final uploadPath = asset.uploadPath?.trim() ?? '';
+    if (uploadPath.isNotEmpty) {
+      return p.basename(uploadPath);
+    }
+    final localPath = asset.localPath.trim();
+    if (localPath.isNotEmpty) {
+      return p.basename(localPath);
+    }
+    return asset.id;
+  }
+
+  String? _downloadFilenameForAsset(PhotoAsset asset) {
+    final uploadPath = asset.uploadPath?.trim() ?? '';
+    if (uploadPath.isEmpty) {
+      return null;
+    }
+    final filename = p.basename(uploadPath);
+    return filename.trim().isEmpty ? null : filename;
   }
 
   Future<void> _hydrateLocalState({bool includeDiagnostics = true}) async {
@@ -1205,7 +1483,7 @@ class JoblensStore extends ChangeNotifier {
       final authUserId = _currentAuthUserIdProvider?.call();
       if (authUserId == null || authUserId.trim().isEmpty) {
         _lastError = null;
-        await _hydrateLocalState(includeDiagnostics: false);
+        await _hydrateLocalState(includeDiagnostics: true);
         _notifyListenersIfActive();
         return;
       }
@@ -1215,7 +1493,7 @@ class JoblensStore extends ChangeNotifier {
           return;
         }
         _lastError = null;
-        await _hydrateLocalState(includeDiagnostics: false);
+        await _hydrateLocalState(includeDiagnostics: true);
       } catch (error, stackTrace) {
         if (_isDisposed) {
           return;
@@ -1227,6 +1505,7 @@ class JoblensStore extends ChangeNotifier {
         if (kDebugMode) {
           debugPrint('Background sync failed: $error\n$stackTrace');
         }
+        await _hydrateLocalState(includeDiagnostics: true);
       }
       _notifyListenersIfActive();
     });

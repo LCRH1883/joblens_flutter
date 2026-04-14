@@ -12,6 +12,7 @@ import 'package:joblens_flutter/src/core/models/photo_asset.dart';
 import 'package:joblens_flutter/src/core/storage/media_storage_service.dart';
 import 'package:joblens_flutter/src/core/sync/sync_service.dart';
 import 'package:joblens_flutter/src/features/gallery/gallery_page.dart';
+import 'package:joblens_flutter/src/features/gallery/photo_viewer_page.dart';
 import 'package:joblens_flutter/src/features/projects/project_detail_page.dart';
 import 'package:joblens_flutter/src/features/projects/projects_page.dart';
 
@@ -158,6 +159,101 @@ void main() {
     await tester.pump();
 
     expect(find.text('2 selected'), findsOneWidget);
+  });
+
+  testWidgets('PhotoViewerPage shows download action for cloud-only assets', (
+    tester,
+  ) async {
+    final harness = (await tester.runAsync(_createHarness))!;
+    addTearDown(harness.dispose);
+
+    final projectId = await tester.runAsync(
+      () => harness.database.ensureDefaultProject(),
+    );
+    await tester.runAsync(
+      () => harness.database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-cloud',
+        projectId: projectId!,
+        remoteAssetId: 'remote-asset-cloud',
+        sha256: 'e' * 64,
+        createdAt: DateTime(2026, 4, 14),
+        remotePath: 'Joblens/Inbox/cloud.jpg',
+      ),
+    );
+    await tester.runAsync(harness.store.refresh);
+
+    final asset = harness.store.assets.singleWhere(
+      (item) => item.id == 'asset-cloud',
+    );
+    await tester.pumpWidget(
+      _wrapWithStore(
+        harness.store,
+        PhotoViewerPage(assets: [asset], initialIndex: 0),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('Download to Joblens'), findsOneWidget);
+  });
+
+  testWidgets('GalleryPage selection toolbar shows download action', (
+    tester,
+  ) async {
+    final harness = (await tester.runAsync(_createHarness))!;
+    addTearDown(harness.dispose);
+
+    final source = File(p.join(harness.tempDir.path, 'gallery-download.jpg'));
+    await tester.runAsync(() => source.writeAsBytes(List<int>.filled(128, 9)));
+    await tester.runAsync(
+      () => harness.store.ingestCapturedFile(source, processSyncNow: true),
+    );
+
+    await tester.pumpWidget(_wrapWithStore(harness.store, const GalleryPage()));
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Select photos'));
+    await tester.pump();
+    await tester.tap(find.byType(Image).first);
+    await tester.pump();
+
+    expect(find.byTooltip('Download selected'), findsOneWidget);
+  });
+
+  testWidgets('ProjectDetailPage shows project and selection download actions', (
+    tester,
+  ) async {
+    final harness = (await tester.runAsync(_createHarness))!;
+    addTearDown(harness.dispose);
+
+    await tester.runAsync(
+      () => harness.store.createProject('Download Project'),
+    );
+    final project = harness.store.projects.firstWhere(
+      (item) => item.name == 'Download Project',
+    );
+
+    final source = File(p.join(harness.tempDir.path, 'project-download.jpg'));
+    await tester.runAsync(() => source.writeAsBytes(List<int>.filled(128, 5)));
+    await tester.runAsync(
+      () => harness.store.ingestCapturedFile(source, projectId: project.id),
+    );
+
+    final latestProject = harness.store.projects.firstWhere(
+      (item) => item.id == project.id,
+    );
+    await tester.pumpWidget(
+      _wrapWithStore(harness.store, ProjectDetailPage(project: latestProject)),
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('Download missing photos'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Select photos'));
+    await tester.pump();
+    await tester.tap(find.byType(Image).first);
+    await tester.pump();
+
+    expect(find.byTooltip('Download selected'), findsOneWidget);
   });
 }
 

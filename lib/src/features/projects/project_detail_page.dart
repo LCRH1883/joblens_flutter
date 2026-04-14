@@ -84,6 +84,13 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                   icon: const Icon(Icons.drive_file_move_outline),
                 ),
                 IconButton(
+                  tooltip: 'Download selected',
+                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
+                      ? null
+                      : () => _downloadSelectedToJoblens(context, store, assets),
+                  icon: const Icon(Icons.download_outlined),
+                ),
+                IconButton(
                   tooltip: 'Copy selected to phone gallery',
                   onPressed: store.isBusy || _selectedAssetIds.isEmpty
                       ? null
@@ -116,6 +123,13 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                         ? Icons.menu_book_outlined
                         : Icons.menu_book,
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Download missing photos',
+                  onPressed: store.isBusy || assets.isEmpty
+                      ? null
+                      : () => _downloadProjectToJoblens(context, store, project),
+                  icon: const Icon(Icons.download_outlined),
                 ),
                 IconButton(
                   tooltip: 'Rescan cloud',
@@ -436,6 +450,59 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
               : 'Copied $copied photo(s) to phone gallery.',
         ),
       ),
+    );
+  }
+
+  Future<void> _downloadSelectedToJoblens(
+    BuildContext context,
+    JoblensStore store,
+    List<PhotoAsset> assets,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final selectedAssets = assets
+        .where((asset) => _selectedAssetIds.contains(asset.id))
+        .toList(growable: false);
+    if (selectedAssets.isEmpty) {
+      return;
+    }
+
+    final result = await store.downloadAssetsToDevice(selectedAssets);
+    if (!mounted) {
+      return;
+    }
+
+    if (store.lastError != null) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.lastError!)),
+      );
+      return;
+    }
+
+    messenger.showSnackBar(
+      SnackBar(content: Text(result.summaryMessage())),
+    );
+  }
+
+  Future<void> _downloadProjectToJoblens(
+    BuildContext context,
+    JoblensStore store,
+    Project project,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await store.downloadMissingProjectAssets(project.id);
+    if (!mounted) {
+      return;
+    }
+
+    if (store.lastError != null) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.lastError!)),
+      );
+      return;
+    }
+
+    messenger.showSnackBar(
+      SnackBar(content: Text(result.summaryMessage())),
     );
   }
 

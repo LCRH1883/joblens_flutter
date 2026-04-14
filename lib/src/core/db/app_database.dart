@@ -2917,6 +2917,7 @@ class AppDatabase {
       'hash': hash,
       'cloud_state': cloudState,
       'ingest_state': AssetIngestState.ready.name,
+      'last_sync_error_code': null,
     };
     if (existsInPhoneStorage != null) {
       values['exists_in_phone_storage'] = existsInPhoneStorage ? 1 : 0;
