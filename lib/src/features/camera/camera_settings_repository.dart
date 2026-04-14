@@ -107,10 +107,16 @@ class CameraSettings {
     final lensDirection = _lensDirectionFromWire(
       json['lensDirection'] as String? ?? json['cameraName'] as String?,
     );
-    final zoomStop =
+    var zoomStop =
         (json['zoomStop'] as num?)?.toDouble() ??
         (json['zoomLevel'] as num?)?.toDouble() ??
         1.0;
+    // Older native-camera sessions could persist 0.5x on the back camera,
+    // which reopens into the ultra-wide perspective on iPhone. Treat 1.0x
+    // as the minimum persisted rear-camera default.
+    if (lensDirection == CameraLensDirection.back && zoomStop < 1.0) {
+      zoomStop = 1.0;
+    }
 
     return CameraSettings(
       rapidCaptureMode: rapidCaptureMode,

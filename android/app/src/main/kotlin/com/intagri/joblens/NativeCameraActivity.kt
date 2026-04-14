@@ -11,6 +11,7 @@ import android.text.Editable
 import android.text.InputType
 import android.text.TextUtils
 import android.text.TextWatcher
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -78,13 +79,16 @@ class NativeCameraActivity : AppCompatActivity() {
     private var previewReadySent = false
     private var captureInFlight = false
     private var lensSwitchInFlight = false
+    private var lensSwitchStartedAtMs: Long? = null
     private var zoomObserver: Observer<androidx.camera.core.ZoomState>? = null
+    private val logTag = "JoblensCamera"
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
                 startCamera()
             } else {
+                logError("Camera permission denied.")
                 emitFailure("Camera permission is required to capture photos.")
                 closeSession()
             }
@@ -102,6 +106,7 @@ class NativeCameraActivity : AppCompatActivity() {
 
         launchConfig = CameraLaunchConfig.fromPayload(payload)
         openedAtMs = SystemClock.elapsedRealtime()
+        logInfo("Opening native camera session=${launchConfig?.sessionId}")
         currentTarget = launchConfig?.resolveCurrentTarget()
         currentLensFacing = launchConfig?.settings?.lensFacing ?: CameraSelector.LENS_FACING_BACK
         currentFlashMode = launchConfig?.settings?.flashMode ?: ImageCapture.FLASH_MODE_OFF
@@ -331,6 +336,7 @@ class NativeCameraActivity : AppCompatActivity() {
                 bindCameraUseCases(provider)
                 return
             }
+            logError("No compatible camera was found on this device.")
             emitFailure("No compatible camera was found on this device.")
             closeSession()
             return
@@ -349,14 +355,28 @@ class NativeCameraActivity : AppCompatActivity() {
         try {
             camera = provider.bindToLifecycle(this, selector, preview, capture)
             imageCapture = capture
-            lensSwitchInFlight = false
             observeZoomState()
             applyZoomRatio(currentZoomRatio, emitPreviewReady = !previewReadySent)
             updateLensButton()
             updateFlashButton()
         } catch (error: Exception) {
+            val durationMs = lensSwitchStartedAtMs?.let {
+                (SystemClock.elapsedRealtime() - it).toInt()
+            }
             lensSwitchInFlight = false
-            emitFailure("Unable to bind camera: ${error.message ?: error}")
+            lensSwitchStartedAtMs = null
+            lensButton.isEnabled = true
+            if (durationMs != null) {
+                NativeCameraBridge.emit(
+                    sessionEvent(
+                        type = "lensSwitchFailed",
+                        message = "Unable to bind camera: ${error.message ?: error}",
+                        durationMs = durationMs,
+                    ),
+                )
+            } else {
+                emitFailure("Unable to bind camera: ${error.message ?: error}")
+            }
             closeSession()
         }
     }
@@ -370,10 +390,28 @@ class NativeCameraActivity : AppCompatActivity() {
             rebuildZoomButtons(zoomState.minZoomRatio, zoomState.maxZoomRatio)
             if (!previewReadySent) {
                 previewReadySent = true
+                logInfo(
+                    "Preview ready session=${launchConfig?.sessionId} openMs=" +
+                        (SystemClock.elapsedRealtime() - openedAtMs).toInt(),
+                )
                 NativeCameraBridge.emit(
                     sessionEvent(
                         type = "previewReady",
                         openDurationMs = (SystemClock.elapsedRealtime() - openedAtMs).toInt(),
+                    ),
+                )
+            }
+            val switchStartedAtMs = lensSwitchStartedAtMs
+            if (lensSwitchInFlight && switchStartedAtMs != null) {
+                val durationMs = (SystemClock.elapsedRealtime() - switchStartedAtMs).toInt()
+                lensSwitchInFlight = false
+                lensSwitchStartedAtMs = null
+                lensButton.isEnabled = true
+                logInfo("Lens switch completed durationMs=$durationMs")
+                NativeCameraBridge.emit(
+                    sessionEvent(
+                        type = "lensSwitchCompleted",
+                        durationMs = durationMs,
                     ),
                 )
             }
@@ -424,6 +462,7 @@ class NativeCameraActivity : AppCompatActivity() {
         val captureStart = SystemClock.elapsedRealtime()
         val outputFile = createOutputFile(photoId)
         val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
+        logInfo("Capture started photoId=$photoId")
 
         NativeCameraBridge.emit(
             sessionEvent(
@@ -459,6 +498,10 @@ class NativeCameraActivity : AppCompatActivity() {
                                 capturedAt = isoNow(),
                                 captureDurationMs = (SystemClock.elapsedRealtime() - captureStart).toInt(),
                             ),
+                        )
+                        logInfo(
+                            "Capture saved photoId=$photoId durationMs=" +
+                                (SystemClock.elapsedRealtime() - captureStart).toInt(),
                         )
                     }
                 }
@@ -496,12 +539,14 @@ class NativeCameraActivity : AppCompatActivity() {
             return
         }
         lensSwitchInFlight = true
+        lensSwitchStartedAtMs = SystemClock.elapsedRealtime()
         lensButton.isEnabled = false
         currentLensFacing = if (currentLensFacing == CameraSelector.LENS_FACING_BACK) {
             CameraSelector.LENS_FACING_FRONT
         } else {
             CameraSelector.LENS_FACING_BACK
         }
+        logInfo("Lens switch started lens=$currentLensFacing")
         bindCameraUseCases(provider)
     }
 
@@ -655,7 +700,26 @@ class NativeCameraActivity : AppCompatActivity() {
                 return@post
             }
             val horizontalOffset = (targetButton.width - popupWidth) / 2
-            popup.showAsDropDown(targetButton, horizontalOffset, dp(10))
+            val pickerStartedAtMs = SystemClock.elapsedRealtime()
+            try {
+                popup.showAsDropDown(targetButton, horizontalOffset, dp(10))
+                val durationMs = (SystemClock.elapsedRealtime() - pickerStartedAtMs).toInt()
+                logInfo("Target picker opened durationMs=$durationMs")
+                NativeCameraBridge.emit(
+                    sessionEvent(
+                        type = "targetPickerOpened",
+                        durationMs = durationMs,
+                    ),
+                )
+            } catch (error: Exception) {
+                logError("Unable to open capture target picker: ${error.message ?: error}")
+                NativeCameraBridge.emit(
+                    sessionEvent(
+                        type = "targetPickerFailed",
+                        message = "Unable to open capture target picker.",
+                    ),
+                )
+            }
         }
     }
 
@@ -806,6 +870,10 @@ class NativeCameraActivity : AppCompatActivity() {
         }
         if (emitPreviewReady && !previewReadySent) {
             previewReadySent = true
+            logInfo(
+                "Preview ready session=${launchConfig?.sessionId} openMs=" +
+                    (SystemClock.elapsedRealtime() - openedAtMs).toInt(),
+            )
             NativeCameraBridge.emit(
                 sessionEvent(
                     type = "previewReady",
@@ -816,6 +884,7 @@ class NativeCameraActivity : AppCompatActivity() {
     }
 
     private fun emitFailure(message: String) {
+        logError(message)
         NativeCameraBridge.emit(sessionEvent(type = "captureFailed", message = message))
     }
 
@@ -852,6 +921,7 @@ class NativeCameraActivity : AppCompatActivity() {
         capturedAt: String? = null,
         openDurationMs: Int? = null,
         captureDurationMs: Int? = null,
+        durationMs: Int? = null,
         capturedCount: Int? = null,
         settings: Map<String, Any?>? = null,
     ): Map<String, Any?> {
@@ -868,9 +938,18 @@ class NativeCameraActivity : AppCompatActivity() {
             "capturedAt" to capturedAt,
             "openDurationMs" to openDurationMs,
             "captureDurationMs" to captureDurationMs,
+            "durationMs" to durationMs,
             "capturedCount" to capturedCount,
             "settings" to settings,
         ).filterValues { it != null }
+    }
+
+    private fun logInfo(message: String) {
+        Log.i(logTag, "[Android] $message")
+    }
+
+    private fun logError(message: String) {
+        Log.e(logTag, "[Android] $message")
     }
 
     private fun createTextPillButton(label: String): AppCompatButton {

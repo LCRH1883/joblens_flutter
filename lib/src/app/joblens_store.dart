@@ -555,7 +555,7 @@ class JoblensStore extends ChangeNotifier {
     );
   }
 
-  Future<void> ingestCapturedFile(
+  Future<bool> ingestCapturedFile(
     File sourceFile, {
     int? projectId,
     bool processSyncNow = false,
@@ -569,8 +569,9 @@ class JoblensStore extends ChangeNotifier {
     await _database.insertPendingAssetShell(asset);
     _insertAssetIntoState(asset);
     _notifyListenersIfActive();
+    var completed = false;
     await _enqueueLocalIngest(() async {
-      await _finalizePendingAssetIngest(
+      completed = await _finalizePendingAssetIngest(
         asset,
         sourceFile: sourceFile,
         existsInPhoneStorage: false,
@@ -578,17 +579,18 @@ class JoblensStore extends ChangeNotifier {
       if (_isDisposed) {
         return;
       }
-      if (processSyncNow) {
+      if (completed && processSyncNow) {
         await _syncService.kick();
         if (_isDisposed) {
           return;
         }
         await _hydrateLocalState(includeDiagnostics: false);
         _notifyListenersIfActive();
-      } else {
+      } else if (completed) {
         unawaited(_kickSync());
       }
     });
+    return completed;
   }
 
   Future<void> importFromPhoneGallery({int? projectId}) async {

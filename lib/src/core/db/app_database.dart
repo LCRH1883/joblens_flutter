@@ -9,6 +9,7 @@ import '../models/cloud_provider.dart';
 import '../models/app_launch_destination.dart';
 import '../models/app_theme_mode.dart';
 import '../models/blob_upload_task.dart';
+import '../models/camera_metrics.dart';
 import '../models/capture_target_preference.dart';
 import '../models/entity_sync_record.dart';
 import '../models/library_import_mode.dart';
@@ -46,7 +47,7 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 14;
+  static const _schemaVersion = 15;
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -138,6 +139,27 @@ class AppDatabase {
           await db.execute(
             'ALTER TABLE provider_accounts ADD COLUMN open_conflict_count INTEGER NOT NULL DEFAULT 0',
           );
+        }
+        if (oldVersion < 15) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS camera_session_metrics (
+              session_id TEXT PRIMARY KEY,
+              platform TEXT NOT NULL,
+              opened_at TEXT NOT NULL,
+              preview_ready_at TEXT,
+              closed_at TEXT,
+              open_to_preview_ready_ms INTEGER,
+              last_capture_local_save_ms INTEGER,
+              last_lens_switch_ms INTEGER,
+              last_target_picker_open_ms INTEGER,
+              capture_attempt_count INTEGER NOT NULL DEFAULT 0,
+              capture_local_save_count INTEGER NOT NULL DEFAULT 0,
+              capture_success_count INTEGER NOT NULL DEFAULT 0,
+              hard_failure_count INTEGER NOT NULL DEFAULT 0,
+              abandoned INTEGER NOT NULL DEFAULT 0,
+              close_reason TEXT
+            )
+          ''');
         }
       },
     );
@@ -472,6 +494,25 @@ class AppDatabase {
       )
     ''');
     await db.execute('''
+      CREATE TABLE IF NOT EXISTS camera_session_metrics (
+        session_id TEXT PRIMARY KEY,
+        platform TEXT NOT NULL,
+        opened_at TEXT NOT NULL,
+        preview_ready_at TEXT,
+        closed_at TEXT,
+        open_to_preview_ready_ms INTEGER,
+        last_capture_local_save_ms INTEGER,
+        last_lens_switch_ms INTEGER,
+        last_target_picker_open_ms INTEGER,
+        capture_attempt_count INTEGER NOT NULL DEFAULT 0,
+        capture_local_save_count INTEGER NOT NULL DEFAULT 0,
+        capture_success_count INTEGER NOT NULL DEFAULT 0,
+        hard_failure_count INTEGER NOT NULL DEFAULT 0,
+        abandoned INTEGER NOT NULL DEFAULT 0,
+        close_reason TEXT
+      )
+    ''');
+    await db.execute('''
       CREATE TABLE IF NOT EXISTS project_provider_mirrors (
         local_project_id INTEGER NOT NULL,
         provider_connection_id TEXT NOT NULL,
@@ -700,6 +741,25 @@ class AppDatabase {
         asset_id TEXT,
         project_id INTEGER,
         created_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE camera_session_metrics (
+        session_id TEXT PRIMARY KEY,
+        platform TEXT NOT NULL,
+        opened_at TEXT NOT NULL,
+        preview_ready_at TEXT,
+        closed_at TEXT,
+        open_to_preview_ready_ms INTEGER,
+        last_capture_local_save_ms INTEGER,
+        last_lens_switch_ms INTEGER,
+        last_target_picker_open_ms INTEGER,
+        capture_attempt_count INTEGER NOT NULL DEFAULT 0,
+        capture_local_save_count INTEGER NOT NULL DEFAULT 0,
+        capture_success_count INTEGER NOT NULL DEFAULT 0,
+        hard_failure_count INTEGER NOT NULL DEFAULT 0,
+        abandoned INTEGER NOT NULL DEFAULT 0,
+        close_reason TEXT
       )
     ''');
 
@@ -1994,6 +2054,162 @@ class AppDatabase {
 
   Future<void> clearSyncLogs() async {
     await _db.delete('sync_log_entries');
+  }
+
+  Future<void> upsertCameraSessionOpened({
+    required String sessionId,
+    required String platform,
+    required DateTime openedAt,
+  }) async {
+    await _db.insert('camera_session_metrics', {
+      'session_id': sessionId,
+      'platform': platform,
+      'opened_at': openedAt.toIso8601String(),
+      'abandoned': 0,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> markCameraSessionPreviewReady({
+    required String sessionId,
+    required DateTime previewReadyAt,
+    int? openToPreviewReadyMs,
+  }) async {
+    await _db.update(
+      'camera_session_metrics',
+      {
+        'preview_ready_at': previewReadyAt.toIso8601String(),
+        'open_to_preview_ready_ms': openToPreviewReadyMs,
+      },
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
+  }
+
+  Future<void> incrementCameraSessionCaptureAttempt(String sessionId) async {
+    await _db.rawUpdate(
+      '''
+      UPDATE camera_session_metrics
+      SET capture_attempt_count = capture_attempt_count + 1
+      WHERE session_id = ?
+      ''',
+      [sessionId],
+    );
+  }
+
+  Future<void> incrementCameraSessionCaptureLocalSave(
+    String sessionId, {
+    int? captureLocalSaveMs,
+  }) async {
+    await _db.rawUpdate(
+      '''
+      UPDATE camera_session_metrics
+      SET capture_local_save_count = capture_local_save_count + 1,
+          last_capture_local_save_ms = ?
+      WHERE session_id = ?
+      ''',
+      [captureLocalSaveMs, sessionId],
+    );
+  }
+
+  Future<void> incrementCameraSessionCaptureSuccess(String sessionId) async {
+    await _db.rawUpdate(
+      '''
+      UPDATE camera_session_metrics
+      SET capture_success_count = capture_success_count + 1
+      WHERE session_id = ?
+      ''',
+      [sessionId],
+    );
+  }
+
+  Future<void> incrementCameraSessionHardFailure(String sessionId) async {
+    await _db.rawUpdate(
+      '''
+      UPDATE camera_session_metrics
+      SET hard_failure_count = hard_failure_count + 1
+      WHERE session_id = ?
+      ''',
+      [sessionId],
+    );
+  }
+
+  Future<void> updateCameraSessionLensSwitchDuration(
+    String sessionId, {
+    int? durationMs,
+  }) async {
+    await _db.update(
+      'camera_session_metrics',
+      {'last_lens_switch_ms': durationMs},
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
+  }
+
+  Future<void> updateCameraSessionTargetPickerDuration(
+    String sessionId, {
+    int? durationMs,
+  }) async {
+    await _db.update(
+      'camera_session_metrics',
+      {'last_target_picker_open_ms': durationMs},
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
+  }
+
+  Future<void> completeCameraSession({
+    required String sessionId,
+    required DateTime closedAt,
+    required bool abandoned,
+    required String closeReason,
+  }) async {
+    await _db.update(
+      'camera_session_metrics',
+      {
+        'closed_at': closedAt.toIso8601String(),
+        'abandoned': abandoned ? 1 : 0,
+        'close_reason': closeReason,
+      },
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+    );
+  }
+
+  Future<CameraSessionMetrics?> getCameraSessionMetrics(String sessionId) async {
+    final rows = await _db.query(
+      'camera_session_metrics',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return CameraSessionMetrics.fromMap(rows.first);
+  }
+
+  Future<CameraMetricsSummary> getCameraMetricsSummary() async {
+    final rows = await _db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS total_sessions,
+        SUM(CASE WHEN preview_ready_at IS NOT NULL THEN 1 ELSE 0 END) AS preview_ready_sessions,
+        SUM(CASE WHEN abandoned = 1 THEN 1 ELSE 0 END) AS abandoned_sessions,
+        SUM(capture_attempt_count) AS capture_attempts,
+        SUM(capture_success_count) AS capture_successes,
+        SUM(hard_failure_count) AS hard_failures
+      FROM camera_session_metrics
+      ''',
+    );
+    final row = rows.firstOrNull ?? const <String, Object?>{};
+    return CameraMetricsSummary(
+      totalSessions: _readInt(row['total_sessions']),
+      previewReadySessions: _readInt(row['preview_ready_sessions']),
+      abandonedSessions: _readInt(row['abandoned_sessions']),
+      captureAttempts: _readInt(row['capture_attempts']),
+      captureSuccesses: _readInt(row['capture_successes']),
+      hardFailures: _readInt(row['hard_failures']),
+    );
   }
 
   Future<String> getOrCreateClientDeviceId() async {

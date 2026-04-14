@@ -10,6 +10,10 @@ enum NativeCameraEventType {
   previewReady,
   captureStarted,
   targetChanged,
+  lensSwitchCompleted,
+  lensSwitchFailed,
+  targetPickerOpened,
+  targetPickerFailed,
   captureSaved,
   captureFailed,
   sessionClosed;
@@ -96,6 +100,7 @@ class NativeCameraSessionEvent {
     this.capturedAt,
     this.openDurationMs,
     this.captureDurationMs,
+    this.durationMs,
     this.capturedCount,
     this.settings,
   });
@@ -112,6 +117,7 @@ class NativeCameraSessionEvent {
   final DateTime? capturedAt;
   final int? openDurationMs;
   final int? captureDurationMs;
+  final int? durationMs;
   final int? capturedCount;
   final CameraSettings? settings;
 
@@ -137,6 +143,7 @@ class NativeCameraSessionEvent {
           : DateTime.tryParse(map['capturedAt'] as String),
       openDurationMs: _intFromDynamic(map['openDurationMs']),
       captureDurationMs: _intFromDynamic(map['captureDurationMs']),
+      durationMs: _intFromDynamic(map['durationMs']),
       capturedCount: _intFromDynamic(map['capturedCount']),
       settings: settingsMap is Map<Object?, Object?>
           ? CameraSettings.fromJson(

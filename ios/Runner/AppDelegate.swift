@@ -14,7 +14,7 @@ import UIKit
         messenger: registrar.messenger()
       )
     } else {
-      NSLog("[JoblensNativeCamera][iOS] Failed to acquire plugin registrar")
+      NSLog("[JoblensCamera][iOS] Failed to acquire plugin registrar")
     }
     let didLaunch = super.application(application, didFinishLaunchingWithOptions: launchOptions)
     return didLaunch
@@ -38,7 +38,7 @@ private final class NativeCameraBridgeCoordinator: NSObject, FlutterStreamHandle
   private weak var cameraViewController: NativeCameraViewController?
 
   func configure(messenger: FlutterBinaryMessenger) {
-    NSLog("[JoblensNativeCamera][iOS] Configuring method and event channels")
+    NSLog("[JoblensCamera][iOS] Configuring method and event channels")
     methodChannel?.setMethodCallHandler(nil)
     methodChannel = FlutterMethodChannel(name: methodChannelName, binaryMessenger: messenger)
     methodChannel?.setMethodCallHandler { [weak self] call, result in
@@ -67,7 +67,7 @@ private final class NativeCameraBridgeCoordinator: NSObject, FlutterStreamHandle
   }
 
   private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-    NSLog("[JoblensNativeCamera][iOS] Received method call: \(call.method)")
+    NSLog("[JoblensCamera][iOS] Received method call: \(call.method)")
     switch call.method {
     case "openCamera":
       guard let payload = call.arguments as? String, !payload.isEmpty else {
@@ -97,7 +97,7 @@ private final class NativeCameraBridgeCoordinator: NSObject, FlutterStreamHandle
 
       DispatchQueue.main.async {
         guard self.cameraViewController == nil else {
-          NSLog("[JoblensNativeCamera][iOS] Camera already open")
+          NSLog("[JoblensCamera][iOS] Camera already open")
           result(
             FlutterError(
               code: "camera_already_open",
@@ -109,7 +109,7 @@ private final class NativeCameraBridgeCoordinator: NSObject, FlutterStreamHandle
         }
 
         guard let presenter = Self.topMostViewController() else {
-          NSLog("[JoblensNativeCamera][iOS] Presenter unavailable")
+          NSLog("[JoblensCamera][iOS] Presenter unavailable")
           result(
             FlutterError(
               code: "presenter_unavailable",
@@ -126,7 +126,7 @@ private final class NativeCameraBridgeCoordinator: NSObject, FlutterStreamHandle
         )
         viewController.modalPresentationStyle = .fullScreen
         self.cameraViewController = viewController
-        NSLog("[JoblensNativeCamera][iOS] Presenting native camera")
+        NSLog("[JoblensCamera][iOS] Presenting native camera")
         presenter.present(viewController, animated: true) {
           result(nil)
         }
@@ -181,6 +181,7 @@ private final class NativeCameraViewController: UIViewController {
   private var previewReadySent = false
   private var isCaptureInFlight = false
   private var isSwitchingLens = false
+  private var lensSwitchStartedAt: Date?
   private var didEmitSessionClosed = false
   private var isClosing = false
   private var currentInput: AVCaptureDeviceInput?
@@ -485,7 +486,7 @@ private final class NativeCameraViewController: UIViewController {
       do {
         try self.configureSession()
         self.captureSession.startRunning()
-        NSLog("[JoblensNativeCamera][iOS] Camera session started on attempt \(attempt)")
+        NSLog("[JoblensCamera][iOS] Camera session started on attempt \(attempt)")
         self.emitPreviewReadyIfNeeded()
       } catch {
         DispatchQueue.main.async {
@@ -499,7 +500,7 @@ private final class NativeCameraViewController: UIViewController {
     guard isClosing == false else { return }
     let nsError = error as NSError
     NSLog(
-      "[JoblensNativeCamera][iOS] Camera start failed on attempt \(attempt): domain=\(nsError.domain) code=\(nsError.code) message=\(nsError.localizedDescription)"
+      "[JoblensCamera][iOS] Camera start failed on attempt \(attempt): domain=\(nsError.domain) code=\(nsError.code) message=\(nsError.localizedDescription)"
     )
 
     if attempt < Self.maxSessionStartAttempts {
@@ -570,6 +571,9 @@ private final class NativeCameraViewController: UIViewController {
   private func emitPreviewReadyIfNeeded() {
     guard previewReadySent == false else { return }
     previewReadySent = true
+    NSLog(
+      "[JoblensCamera][iOS] Preview ready session=\(launchConfig.sessionId) openMs=\(Int(Date().timeIntervalSince(openedAt) * 1000))"
+    )
     bridge?.emit(
       sessionEvent(
         type: "previewReady",
@@ -770,20 +774,49 @@ private final class NativeCameraViewController: UIViewController {
     let target: AVCaptureDevice.Position = currentLensPosition == .back ? .front : .back
     guard Self.bestDevice(for: target) != nil else { return }
     isSwitchingLens = true
+    lensSwitchStartedAt = Date()
     lensButton.isEnabled = false
     currentLensPosition = target
+    NSLog("[JoblensCamera][iOS] Lens switch started lens=\(target.flutterLensName)")
     sessionQueue.async {
       do {
         try self.configureSession()
         self.captureSession.startRunning()
         DispatchQueue.main.async {
           self.isSwitchingLens = false
+          let durationMs = self.lensSwitchStartedAt.map {
+            Int(Date().timeIntervalSince($0) * 1000)
+          }
+          self.lensSwitchStartedAt = nil
           self.updateLensButton()
+          NSLog("[JoblensCamera][iOS] Lens switch completed durationMs=\(durationMs ?? -1)")
+          self.bridge?.emit(
+            self.sessionEvent(
+              type: "lensSwitchCompleted",
+              durationMs: durationMs
+            )
+          )
         }
       } catch {
         DispatchQueue.main.async {
+          let durationMs = self.lensSwitchStartedAt.map {
+            Int(Date().timeIntervalSince($0) * 1000)
+          }
+          self.lensSwitchStartedAt = nil
           self.isSwitchingLens = false
-          self.emitFailure("Unable to bind camera: \(error.localizedDescription)")
+          NSLog(
+            "[JoblensCamera][iOS] Lens switch failed durationMs=\(durationMs ?? -1) message=\(error.localizedDescription)"
+          )
+          self.bridge?.emit(
+            self.sessionEvent(
+              type: "lensSwitchFailed",
+              message: "Unable to bind camera: \(error.localizedDescription)",
+              durationMs: durationMs
+            )
+          )
+          if durationMs == nil {
+            self.emitFailure("Unable to bind camera: \(error.localizedDescription)")
+          }
           self.closeSession()
         }
       }
@@ -800,6 +833,7 @@ private final class NativeCameraViewController: UIViewController {
 
     let photoId = UUID().uuidString.lowercased()
     let captureStart = Date()
+    NSLog("[JoblensCamera][iOS] Capture started photoId=\(photoId)")
     bridge?.emit(
       sessionEvent(
         type: "captureStarted",
@@ -849,6 +883,17 @@ private final class NativeCameraViewController: UIViewController {
   }
 
   @objc private func targetTapped() {
+    let pickerOpenedAt = Date()
+    guard presentedViewController == nil else {
+      NSLog("[JoblensCamera][iOS] Target picker failed: presenter already busy")
+      bridge?.emit(
+        sessionEvent(
+          type: "targetPickerFailed",
+          message: "Unable to open capture target picker."
+        )
+      )
+      return
+    }
     let picker = NativeCameraTargetPickerViewController(
       options: launchConfig.targets,
       selectedTarget: currentTarget
@@ -871,7 +916,16 @@ private final class NativeCameraViewController: UIViewController {
       sheet.detents = [.medium(), .large()]
       sheet.prefersGrabberVisible = true
     }
-    present(picker, animated: true)
+    present(picker, animated: true) {
+      let durationMs = Int(Date().timeIntervalSince(pickerOpenedAt) * 1000)
+      NSLog("[JoblensCamera][iOS] Target picker opened durationMs=\(durationMs)")
+      self.bridge?.emit(
+        self.sessionEvent(
+          type: "targetPickerOpened",
+          durationMs: durationMs
+        )
+      )
+    }
   }
 
   @objc private func zoomTapped(_ sender: UIButton) {
@@ -916,6 +970,7 @@ private final class NativeCameraViewController: UIViewController {
       capturedCount += 1
       updateCaptureCount()
       playCaptureSuccessFeedback()
+      NSLog("[JoblensCamera][iOS] Capture saved photoId=\(photoId) durationMs=\(captureDurationMs)")
       bridge?.emit(
         sessionEvent(
           type: "captureSaved",
@@ -936,6 +991,7 @@ private final class NativeCameraViewController: UIViewController {
 
   private func emitFailure(_ message: String) {
     guard isClosing == false else { return }
+    NSLog("[JoblensCamera][iOS] \(message)")
     bridge?.emit(sessionEvent(type: "captureFailed", message: message))
   }
 
@@ -984,6 +1040,7 @@ private final class NativeCameraViewController: UIViewController {
     capturedAt: String? = nil,
     openDurationMs: Int? = nil,
     captureDurationMs: Int? = nil,
+    durationMs: Int? = nil,
     capturedCount: Int? = nil,
     settings: [String: Any]? = nil
   ) -> [String: Any?] {
@@ -1000,6 +1057,7 @@ private final class NativeCameraViewController: UIViewController {
       "capturedAt": capturedAt,
       "openDurationMs": openDurationMs,
       "captureDurationMs": captureDurationMs,
+      "durationMs": durationMs,
       "capturedCount": capturedCount,
       "settings": settings
     ]
@@ -1031,25 +1089,32 @@ private final class NativeCameraViewController: UIViewController {
   }
 
   private static func bestDevice(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
-    let deviceTypes: [AVCaptureDevice.DeviceType]
+    let preferredTypes: [AVCaptureDevice.DeviceType]
     switch position {
     case .front:
-      deviceTypes = [.builtInTrueDepthCamera, .builtInWideAngleCamera]
+      preferredTypes = [.builtInTrueDepthCamera, .builtInWideAngleCamera]
     default:
-      deviceTypes = [
-        .builtInTripleCamera,
-        .builtInDualWideCamera,
-        .builtInDualCamera,
+      // Prefer the standard rear wide camera. Falling back to ultra-wide by
+      // default produces the distorted perspective the app should avoid.
+      preferredTypes = [
         .builtInWideAngleCamera,
+        .builtInDualCamera,
+        .builtInDualWideCamera,
+        .builtInTripleCamera,
         .builtInUltraWideCamera,
       ]
     }
 
     let discoverySession = AVCaptureDevice.DiscoverySession(
-      deviceTypes: deviceTypes,
+      deviceTypes: preferredTypes,
       mediaType: .video,
       position: position
     )
+    for type in preferredTypes {
+      if let device = discoverySession.devices.first(where: { $0.deviceType == type }) {
+        return device
+      }
+    }
     return discoverySession.devices.first
   }
 

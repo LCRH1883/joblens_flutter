@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/joblens_store.dart';
 import '../../core/models/capture_target_preference.dart';
 import '../../core/models/project.dart';
+import 'camera_metrics_tracker.dart';
 import 'camera_settings_repository.dart';
 import 'native_camera_bridge.dart';
 
@@ -27,6 +28,10 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
   bool _launching = false;
   String? _sessionId;
   int _capturedCount = 0;
+  bool _previewReady = false;
+  int _captureAttemptCount = 0;
+  String? _closeReason;
+  bool _sessionFinished = false;
 
   @override
   void initState() {
@@ -118,23 +123,43 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
     final settings = await settingsRepository.read();
     final config = _buildLaunchConfig(store, projects, settings);
     final nextSessionId = config.sessionId;
+    final tracker = ref.read(cameraMetricsTrackerProvider);
 
     setState(() {
       _launching = true;
       _error = null;
       _capturedCount = 0;
       _sessionId = nextSessionId;
+      _previewReady = false;
+      _captureAttemptCount = 0;
+      _closeReason = null;
+      _sessionFinished = false;
     });
 
     try {
+      await tracker.startSession(
+        sessionId: nextSessionId,
+        platform: Platform.operatingSystem,
+      );
       await _bridge.openCamera(config);
     } catch (error) {
+      await tracker.recordOpenFailed(
+        sessionId: nextSessionId,
+        message: 'Native camera failed to open: $error',
+      );
+      await tracker.completeSession(
+        sessionId: nextSessionId,
+        abandoned: false,
+        closeReason: 'open_failed',
+      );
       if (!mounted) {
         return;
       }
       setState(() {
         _launching = false;
         _error = 'Native camera failed to open: $error';
+        _sessionId = null;
+        _sessionFinished = true;
       });
     }
   }
@@ -198,12 +223,27 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
     }
 
     final store = ref.read(joblensStoreProvider);
+    final tracker = ref.read(cameraMetricsTrackerProvider);
     final settingsRepository = ref.read(cameraSettingsRepositoryProvider);
+    final activeSessionId = _sessionId;
+    if (activeSessionId == null) {
+      return;
+    }
 
     switch (event.type) {
       case NativeCameraEventType.previewReady:
+        _previewReady = true;
+        await tracker.recordPreviewReady(
+          sessionId: activeSessionId,
+          openToPreviewReadyMs: event.openDurationMs,
+        );
         break;
       case NativeCameraEventType.captureStarted:
+        _captureAttemptCount += 1;
+        await tracker.recordCaptureStarted(
+          sessionId: activeSessionId,
+          photoId: event.photoId,
+        );
         break;
       case NativeCameraEventType.targetChanged:
         final targetMode = event.targetMode;
@@ -214,16 +254,77 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
           );
         }
         break;
+      case NativeCameraEventType.lensSwitchCompleted:
+        await tracker.recordLensSwitchCompleted(
+          sessionId: activeSessionId,
+          durationMs: event.durationMs,
+        );
+        break;
+      case NativeCameraEventType.lensSwitchFailed:
+        _closeReason ??= 'lens_switch_failed';
+        await tracker.recordLensSwitchFailed(
+          sessionId: activeSessionId,
+          durationMs: event.durationMs,
+          message: event.message ?? 'Lens switch failed.',
+        );
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _error = event.message ?? 'Lens switch failed.';
+        });
+        break;
+      case NativeCameraEventType.targetPickerOpened:
+        await tracker.recordTargetPickerOpened(
+          sessionId: activeSessionId,
+          durationMs: event.durationMs,
+        );
+        break;
+      case NativeCameraEventType.targetPickerFailed:
+        await tracker.recordTargetPickerFailed(
+          sessionId: activeSessionId,
+          message: event.message ?? 'Capture target picker failed.',
+        );
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _error = event.message ?? 'Capture target picker failed.';
+        });
+        break;
       case NativeCameraEventType.captureSaved:
         final localPath = event.localPath;
         final targetProjectId = event.targetProjectId;
         if (localPath == null || targetProjectId == null) {
           break;
         }
-        await store.ingestCapturedFile(
+        await tracker.recordCaptureLocalSaved(
+          sessionId: activeSessionId,
+          photoId: event.photoId,
+          captureLocalSaveMs: event.captureDurationMs,
+        );
+        final ingested = await store.ingestCapturedFile(
           File(localPath),
           projectId: targetProjectId,
           processSyncNow: false,
+        );
+        if (!ingested) {
+          await tracker.recordIngestFailed(
+            sessionId: activeSessionId,
+            photoId: event.photoId,
+            message: 'Capture ingest failed: local ingest did not complete.',
+          );
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _error = 'Capture ingest failed.';
+          });
+          break;
+        }
+        await tracker.recordCaptureSuccess(
+          sessionId: activeSessionId,
+          photoId: event.photoId,
         );
         if (!mounted) {
           return;
@@ -233,6 +334,11 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
         });
         break;
       case NativeCameraEventType.captureFailed:
+        await tracker.recordCaptureFailed(
+          sessionId: activeSessionId,
+          photoId: event.photoId,
+          message: event.message ?? 'Capture failed.',
+        );
         if (!mounted) {
           return;
         }
@@ -244,11 +350,24 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
         if (event.settings != null) {
           await settingsRepository.write(event.settings!);
         }
+        if (!_sessionFinished) {
+          final reason = _closeReason ?? 'session_closed';
+          await tracker.completeSession(
+            sessionId: activeSessionId,
+            abandoned: _previewReady && _captureAttemptCount == 0,
+            closeReason: reason,
+          );
+          _sessionFinished = true;
+        }
         if (!mounted) {
           return;
         }
         setState(() {
           _launching = false;
+          _sessionId = null;
+          _previewReady = false;
+          _captureAttemptCount = 0;
+          _closeReason = null;
         });
         widget.onSessionClosed?.call();
         break;

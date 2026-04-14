@@ -12,6 +12,9 @@ import '../../core/ui/edge_swipe_back.dart';
 import 'camera_providers.dart';
 import 'camera_settings_repository.dart';
 
+@Deprecated(
+  'Legacy fallback camera implementation. Joblens uses JoblensCameraPage as the only active camera surface.',
+)
 class CameraCapturePage extends ConsumerStatefulWidget {
   const CameraCapturePage({super.key});
 

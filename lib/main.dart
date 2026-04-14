@@ -10,6 +10,7 @@ import 'src/core/api/joblens_backend_api_client.dart';
 import 'src/core/config/app_runtime_configuration.dart';
 import 'src/core/api/signed_media_url_cache.dart';
 import 'src/core/db/app_database.dart';
+import 'src/core/db/app_database_provider.dart';
 import 'src/core/storage/media_storage_service.dart';
 import 'src/core/sync/sync_service.dart';
 import 'src/features/auth/auth_state.dart';
@@ -74,6 +75,7 @@ Future<void> _runJoblensApp(AppRuntimeConfiguration config) async {
   final app = ProviderScope(
     overrides: [
       joblensStoreProvider.overrideWithValue(store),
+      appDatabaseProvider.overrideWithValue(database),
       availableCamerasProvider.overrideWithValue(cameras),
       authConfigurationProvider.overrideWithValue(config.isConfigured),
       appRuntimeConfigurationProvider.overrideWithValue(config),
