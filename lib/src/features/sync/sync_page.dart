@@ -7,7 +7,6 @@ import '../../app/joblens_store.dart';
 import '../../core/models/cloud_provider.dart';
 import '../../core/models/provider_account.dart';
 import '../../core/models/sync_log_entry.dart';
-import '../../core/models/sync_job.dart';
 import '../../core/ui/user_facing_error.dart';
 import '../auth/auth_page.dart';
 import '../auth/auth_state.dart';
@@ -58,15 +57,10 @@ class _SyncPageState extends ConsumerState<SyncPage>
     final lockedProvider = activeProviderAccounts.isEmpty
         ? null
         : activeProviderAccounts.first;
-    final queuedCount = store.syncJobs
-        .where((job) => job.state == SyncJobState.queued)
-        .length;
-    final uploadingCount = store.syncJobs
-        .where((job) => job.state == SyncJobState.uploading)
-        .length;
-    final failedCount = store.syncJobs
-        .where((job) => job.state == SyncJobState.failed)
-        .length;
+    final syncActivity = store.syncActivitySummary;
+    final queuedCount = syncActivity.queuedCount;
+    final uploadingCount = syncActivity.uploadingCount;
+    final failedCount = syncActivity.failedCount;
     final providerBackfillProgress = store.providerBackfillProgress;
     return Scaffold(
       appBar: AppBar(

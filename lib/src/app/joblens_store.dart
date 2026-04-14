@@ -21,7 +21,6 @@ import '../core/models/photo_asset.dart';
 import '../core/models/project.dart';
 import '../core/models/provider_account.dart';
 import '../core/models/sync_log_entry.dart';
-import '../core/models/sync_job.dart';
 import '../core/storage/media_storage_service.dart';
 import '../core/sync/sync_service.dart';
 
@@ -65,6 +64,27 @@ class ProviderBackfillProgress {
       assetFailures > 0;
 }
 
+class SyncActivitySummary {
+  const SyncActivitySummary({
+    required this.metadataQueued,
+    required this.metadataFailed,
+    required this.uploadQueued,
+    required this.uploadUploading,
+    required this.uploadFailed,
+  });
+
+  final int metadataQueued;
+  final int metadataFailed;
+  final int uploadQueued;
+  final int uploadUploading;
+  final int uploadFailed;
+
+  int get queuedCount => metadataQueued + uploadQueued;
+  int get uploadingCount => uploadUploading;
+  int get failedCount => metadataFailed + uploadFailed;
+  int get totalOutstanding => queuedCount + uploadingCount + failedCount;
+}
+
 class JoblensStore extends ChangeNotifier {
   JoblensStore({
     required AppDatabase database,
@@ -106,6 +126,13 @@ class JoblensStore extends ChangeNotifier {
   bool _hasStoredAppLaunchDestination = false;
   ProviderAuthSessionResult? _lastProviderAuthSessionResult;
   ProviderBackfillProgress? _providerBackfillProgress;
+  SyncActivitySummary _syncActivitySummary = const SyncActivitySummary(
+    metadataQueued: 0,
+    metadataFailed: 0,
+    uploadQueued: 0,
+    uploadUploading: 0,
+    uploadFailed: 0,
+  );
 
   List<PhotoAsset> _assets = const [];
   List<PhotoAsset> _deletedAssets = const [];
@@ -114,7 +141,6 @@ class JoblensStore extends ChangeNotifier {
   Map<int, int> _projectCounts = const {};
   List<ProviderAccount> _providers = const [];
   List<SignedInDevice> _signedInDevices = const [];
-  List<SyncJob> _syncJobs = const [];
   List<SyncLogEntry> _syncLogs = const [];
 
   bool get isLoading => _isLoading;
@@ -131,7 +157,6 @@ class JoblensStore extends ChangeNotifier {
   Map<int, int> get projectCounts => _projectCounts;
   List<ProviderAccount> get providers => _providers;
   List<SignedInDevice> get signedInDevices => _signedInDevices;
-  List<SyncJob> get syncJobs => _syncJobs;
   List<SyncLogEntry> get syncLogs => _syncLogs;
   ProjectSortMode get projectSortMode => _projectSortMode;
   AppLaunchDestination get appLaunchDestination => _appLaunchDestination;
@@ -143,6 +168,7 @@ class JoblensStore extends ChangeNotifier {
       _providerBackfillProgress?.isVisible == true
       ? _providerBackfillProgress
       : null;
+  SyncActivitySummary get syncActivitySummary => _syncActivitySummary;
 
   AppLaunchDestination launchDestinationForSession({
     required bool isAuthenticated,
@@ -200,6 +226,9 @@ class JoblensStore extends ChangeNotifier {
           ..sort((a, b) {
             if (a.isCurrent != b.isCurrent) {
               return a.isCurrent ? -1 : 1;
+            }
+            if (a.isActive != b.isActive) {
+              return a.isActive ? -1 : 1;
             }
             final aSeen = a.lastSeenAt?.millisecondsSinceEpoch ?? 0;
             final bSeen = b.lastSeenAt?.millisecondsSinceEpoch ?? 0;
@@ -273,6 +302,9 @@ class JoblensStore extends ChangeNotifier {
         ..sort((a, b) {
           if (a.isCurrent != b.isCurrent) {
             return a.isCurrent ? -1 : 1;
+          }
+          if (a.isActive != b.isActive) {
+            return a.isActive ? -1 : 1;
           }
           final aSeen = a.lastSeenAt?.millisecondsSinceEpoch ?? 0;
           final bSeen = b.lastSeenAt?.millisecondsSinceEpoch ?? 0;
@@ -1103,6 +1135,7 @@ class JoblensStore extends ChangeNotifier {
     _providers = await _database.getProviderAccounts();
     await _refreshProviderBackfillProgress();
     await _refreshAssetSyncStatuses();
+    await _refreshSyncActivitySummary();
     _projectSortMode = await _database.getProjectSortMode();
     final storedAppLaunchDestination =
         await _database.getStoredAppLaunchDestination();
@@ -1113,7 +1146,6 @@ class JoblensStore extends ChangeNotifier {
     _libraryImportMode = await _database.getLibraryImportMode();
     _captureTargetPreference = await _database.getCaptureTargetPreference();
     if (includeDiagnostics) {
-      _syncJobs = await _database.getSyncJobs();
       _syncLogs = await _database.getSyncLogs();
     }
   }
@@ -1582,7 +1614,7 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> _refreshAssetSyncStatuses() async {
-    final syncJobStates = await _database.getAssetSyncJobStates(
+    final outboxStates = await _database.getAssetOutboxStates(
       _assets.map((asset) => asset.id),
     );
     final activeConnectionId = _activeProviderAccount?.connectionId?.trim();
@@ -1597,15 +1629,26 @@ class JoblensStore extends ChangeNotifier {
       for (final asset in _assets)
         asset.id: _deriveAssetSyncStatus(
           asset,
-          syncJobState: syncJobStates[asset.id],
+          outboxState: outboxStates[asset.id],
           activeMirrorStatus: mirrorStates[asset.id],
         ),
     };
   }
 
+  Future<void> _refreshSyncActivitySummary() async {
+    final counts = await _database.getSyncActivityCounts();
+    _syncActivitySummary = SyncActivitySummary(
+      metadataQueued: counts.metadataQueued,
+      metadataFailed: counts.metadataFailed,
+      uploadQueued: counts.uploadQueued,
+      uploadUploading: counts.uploadUploading,
+      uploadFailed: counts.uploadFailed,
+    );
+  }
+
   AssetSyncStatus _deriveAssetSyncStatus(
     PhotoAsset asset, {
-    SyncJobState? syncJobState,
+    AssetOutboxState? outboxState,
     String? activeMirrorStatus,
   }) {
     final activeProvider = _activeProviderAccount;
@@ -1615,15 +1658,15 @@ class JoblensStore extends ChangeNotifier {
         (asset.lastSyncErrorCode?.trim().isNotEmpty ?? false)) {
       return AssetSyncStatus.failed;
     }
-    if (syncJobState == SyncJobState.failed) {
+    if (outboxState == AssetOutboxState.failed) {
       return AssetSyncStatus.failed;
     }
     if (asset.cloudState == AssetCloudState.cloudOnly) {
       return AssetSyncStatus.cloudOnly;
     }
     if (asset.ingestState == AssetIngestState.pending ||
-        syncJobState == SyncJobState.queued ||
-        syncJobState == SyncJobState.uploading) {
+        outboxState == AssetOutboxState.queued ||
+        outboxState == AssetOutboxState.uploading) {
       return AssetSyncStatus.syncing;
     }
     switch (activeMirrorStatus) {

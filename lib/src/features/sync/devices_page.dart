@@ -24,6 +24,13 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
   Widget build(BuildContext context) {
     final store = ref.watch(joblensStoreListenableProvider);
     final devices = store.signedInDevices;
+    final currentDevice = devices.where((device) => device.isCurrent).firstOrNull;
+    final activeDevices = devices
+        .where((device) => device.isActive && !device.isCurrent)
+        .toList(growable: false);
+    final historyDevices = devices
+        .where((device) => !device.isCurrent && !device.isActive)
+        .toList(growable: false);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Devices')),
@@ -34,7 +41,7 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
             Text(
-              'Signed in devices',
+              'Device history',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
@@ -48,7 +55,7 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
             if (devices.isEmpty)
               Card(
                 child: ListTile(
-                  title: const Text('No signed-in devices registered yet'),
+                  title: const Text('No device history available yet'),
                   subtitle: Text(
                     store.lastError?.trim().isNotEmpty == true
                         ? store.lastError!
@@ -65,97 +72,60 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
                         ),
                 ),
               ),
-            for (final device in devices)
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              device.deviceName,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                          if (device.isCurrent)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .secondaryContainer,
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                'This device',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelMedium
-                                    ?.copyWith(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSecondaryContainer,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      _DeviceMetaRow(
-                        label: 'OS',
-                        value: _buildPlatformLabel(device),
-                      ),
-                      _DeviceMetaRow(
-                        label: 'Location',
-                        value: device.approxLocation?.display ?? 'Unavailable',
-                      ),
-                      _DeviceMetaRow(
-                        label: 'Last seen',
-                        value: _formatLastSeen(device.lastSeenAt),
-                      ),
-                      _DeviceMetaRow(
-                        label: 'Last sync',
-                        value: device.lastSyncAt == null
-                            ? 'Not synced yet'
-                            : _formatLastSeen(device.lastSyncAt),
-                      ),
-                      if (device.signedInAt != null)
-                        _DeviceMetaRow(
-                          label: 'Signed in',
-                          value: _formatTimestamp(device.signedInAt!),
-                        ),
-                      if (device.canSignOut) ...[
-                        const SizedBox(height: 12),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: OutlinedButton.icon(
-                            onPressed: store.isBusy
-                                ? null
-                                : () => _confirmSignOutDevice(device),
-                            icon: const Icon(Icons.logout_rounded),
-                            label: const Text('Sign out'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Theme.of(context)
-                                  .colorScheme
-                                  .error,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
+            if (currentDevice != null) ...[
+              Text(
+                'Current device',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
                 ),
               ),
+              const SizedBox(height: 8),
+              _DeviceCard(
+                device: currentDevice,
+                onSignOut: null,
+                formatLastSeen: _formatLastSeen,
+                formatTimestamp: _formatTimestamp,
+                buildPlatformLabel: _buildPlatformLabel,
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (activeDevices.isNotEmpty) ...[
+              Text(
+                'Other active devices',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              for (final device in activeDevices)
+                _DeviceCard(
+                  device: device,
+                  onSignOut: device.canSignOut && !store.isBusy
+                      ? () => _confirmSignOutDevice(device)
+                      : null,
+                  formatLastSeen: _formatLastSeen,
+                  formatTimestamp: _formatTimestamp,
+                  buildPlatformLabel: _buildPlatformLabel,
+                ),
+              const SizedBox(height: 12),
+            ],
+            if (historyDevices.isNotEmpty) ...[
+              Text(
+                'Signed-out device history',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              for (final device in historyDevices)
+                _DeviceCard(
+                  device: device,
+                  onSignOut: null,
+                  formatLastSeen: _formatLastSeen,
+                  formatTimestamp: _formatTimestamp,
+                  buildPlatformLabel: _buildPlatformLabel,
+                ),
+            ],
           ],
         ),
       ),
@@ -248,6 +218,175 @@ class _DevicesPageState extends ConsumerState<DevicesPage> {
       'Dec',
     ];
     return labels[(month - 1).clamp(0, labels.length - 1)];
+  }
+}
+
+class _DeviceCard extends StatelessWidget {
+  const _DeviceCard({
+    required this.device,
+    required this.onSignOut,
+    required this.formatLastSeen,
+    required this.formatTimestamp,
+    required this.buildPlatformLabel,
+  });
+
+  final SignedInDevice device;
+  final VoidCallback? onSignOut;
+  final String Function(DateTime?) formatLastSeen;
+  final String Function(DateTime) formatTimestamp;
+  final String Function(SignedInDevice) buildPlatformLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    device.deviceName,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                _StatusChip(device: device),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _DeviceMetaRow(
+              label: 'OS',
+              value: buildPlatformLabel(device),
+            ),
+            _DeviceMetaRow(
+              label: 'Location',
+              value: device.approxLocation?.display ?? 'Unavailable',
+            ),
+            _DeviceMetaRow(
+              label: 'Last seen',
+              value: formatLastSeen(device.lastSeenAt),
+            ),
+            _DeviceMetaRow(
+              label: 'Last sync',
+              value: device.lastSyncAt == null
+                  ? 'Not synced yet'
+                  : formatLastSeen(device.lastSyncAt),
+            ),
+            if (device.signedInAt != null)
+              _DeviceMetaRow(
+                label: 'Signed in',
+                value: formatTimestamp(device.signedInAt!),
+              ),
+            if (device.revokedAt != null)
+              _DeviceMetaRow(
+                label: 'Signed out',
+                value: formatTimestamp(device.revokedAt!),
+              ),
+            if (device.endedAt != null)
+              _DeviceMetaRow(
+                label: 'Ended',
+                value: formatTimestamp(device.endedAt!),
+              ),
+            if (device.revokeReason != null && device.revokeReason!.trim().isNotEmpty)
+              _DeviceMetaRow(
+                label: 'Reason',
+                value: _formatReason(device.revokeReason!),
+              ),
+            if (device.endReason != null && device.endReason!.trim().isNotEmpty)
+              _DeviceMetaRow(
+                label: 'Session end',
+                value: _formatReason(device.endReason!),
+              ),
+            if (onSignOut != null) ...[
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  onPressed: onSignOut,
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('Sign out'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatReason(String value) {
+    switch (value.trim()) {
+      case 'signed_in_on_another_device':
+        return 'Signed out because this account was used on another device';
+      case 'remote_user_signout':
+        return 'Signed out remotely by the account owner';
+      case 'superseded_by_new_session':
+        return 'Replaced by a newer session on this device';
+      default:
+        return value.replaceAll('_', ' ');
+    }
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.device});
+
+  final SignedInDevice device;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (label, background, foreground) = switch (device.status.trim()) {
+      'active' => device.isCurrent
+          ? (
+              'This device',
+              scheme.secondaryContainer,
+              scheme.onSecondaryContainer,
+            )
+          : (
+              'Active',
+              scheme.primaryContainer,
+              scheme.onPrimaryContainer,
+            ),
+      'revoked' => (
+          'Signed out',
+          scheme.errorContainer,
+          scheme.onErrorContainer,
+        ),
+      'ended' => (
+          'Ended',
+          scheme.surfaceContainerHighest,
+          scheme.onSurfaceVariant,
+        ),
+      _ => (
+          device.status.trim().isEmpty ? 'Unknown' : device.status.trim(),
+          scheme.surfaceContainerHighest,
+          scheme.onSurfaceVariant,
+        ),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: foreground,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
   }
 }
 

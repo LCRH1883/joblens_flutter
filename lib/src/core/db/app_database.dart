@@ -18,6 +18,29 @@ import '../models/provider_account.dart';
 import '../models/sync_log_entry.dart';
 import '../models/sync_job.dart';
 
+enum AssetOutboxState { queued, uploading, failed }
+
+class SyncActivityCounts {
+  const SyncActivityCounts({
+    required this.metadataQueued,
+    required this.metadataFailed,
+    required this.uploadQueued,
+    required this.uploadUploading,
+    required this.uploadFailed,
+  });
+
+  final int metadataQueued;
+  final int metadataFailed;
+  final int uploadQueued;
+  final int uploadUploading;
+  final int uploadFailed;
+
+  int get queuedCount => metadataQueued + uploadQueued;
+  int get uploadingCount => uploadUploading;
+  int get failedCount => metadataFailed + uploadFailed;
+  int get totalOutstanding => queuedCount + uploadingCount + failedCount;
+}
+
 class AppDatabase {
   AppDatabase._(this._db);
 
@@ -2056,6 +2079,40 @@ class AppDatabase {
     return rows.map(EntitySyncRecord.fromMap).toList(growable: false);
   }
 
+  Future<SyncActivityCounts> getSyncActivityCounts() async {
+    final entityRows = await _db.rawQuery(
+      '''
+      SELECT
+        SUM(CASE WHEN TRIM(COALESCE(last_error, '')) = '' THEN 1 ELSE 0 END) AS queued_count,
+        SUM(CASE WHEN TRIM(COALESCE(last_error, '')) != '' THEN 1 ELSE 0 END) AS failed_count
+      FROM entity_sync
+      ''',
+    );
+    final blobRows = await _db.rawQuery(
+      '''
+      SELECT
+        SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS queued_count,
+        SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS uploading_count,
+        SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS failed_count
+      FROM blob_upload
+      ''',
+      [
+        BlobUploadState.queued.name,
+        BlobUploadState.uploading.name,
+        BlobUploadState.failed.name,
+      ],
+    );
+    final entity = entityRows.firstOrNull ?? const <String, Object?>{};
+    final blob = blobRows.firstOrNull ?? const <String, Object?>{};
+    return SyncActivityCounts(
+      metadataQueued: _readInt(entity['queued_count']),
+      metadataFailed: _readInt(entity['failed_count']),
+      uploadQueued: _readInt(blob['queued_count']),
+      uploadUploading: _readInt(blob['uploading_count']),
+      uploadFailed: _readInt(blob['failed_count']),
+    );
+  }
+
   Future<void> upsertEntitySync({
     required SyncEntityType entityType,
     required String entityId,
@@ -2628,6 +2685,70 @@ class AppDatabase {
     return states;
   }
 
+  Future<Map<String, AssetOutboxState>> getAssetOutboxStates(
+    Iterable<String> assetIds,
+  ) async {
+    final normalized = assetIds
+        .map((assetId) => assetId.trim())
+        .where((assetId) => assetId.isNotEmpty)
+        .toSet();
+    if (normalized.isEmpty) {
+      return const {};
+    }
+
+    final placeholders = List.filled(normalized.length, '?').join(',');
+    final blobRows = await _db.rawQuery(
+      '''
+      SELECT asset_id, state
+      FROM blob_upload
+      WHERE asset_id IN ($placeholders)
+      ''',
+      normalized.toList(growable: false),
+    );
+    final entityRows = await _db.rawQuery(
+      '''
+      SELECT entity_id, last_error
+      FROM entity_sync
+      WHERE entity_type = ?
+        AND entity_id IN ($placeholders)
+      ''',
+      [
+        SyncEntityType.asset.name,
+        ...normalized,
+      ],
+    );
+
+    final states = <String, AssetOutboxState>{};
+    for (final row in blobRows) {
+      final assetId = (row['asset_id'] as String?)?.trim();
+      if (assetId == null || assetId.isEmpty) {
+        continue;
+      }
+      final rawState = (row['state'] as String?)?.trim();
+      if (rawState == null || rawState.isEmpty) {
+        continue;
+      }
+      final next = switch (rawState) {
+        'uploading' => AssetOutboxState.uploading,
+        'failed' => AssetOutboxState.failed,
+        _ => AssetOutboxState.queued,
+      };
+      states[assetId] = _preferAssetOutboxState(states[assetId], next);
+    }
+    for (final row in entityRows) {
+      final assetId = (row['entity_id'] as String?)?.trim();
+      if (assetId == null || assetId.isEmpty) {
+        continue;
+      }
+      final lastError = (row['last_error'] as String?)?.trim();
+      final next = (lastError != null && lastError.isNotEmpty)
+          ? AssetOutboxState.failed
+          : AssetOutboxState.queued;
+      states[assetId] = _preferAssetOutboxState(states[assetId], next);
+    }
+    return states;
+  }
+
   SyncJobState _preferSyncState(SyncJobState? current, SyncJobState next) {
     if (current == null) {
       return next;
@@ -2640,6 +2761,31 @@ class AppDatabase {
       SyncJobState.paused: 0,
     };
     return (rank[next] ?? 0) >= (rank[current] ?? 0) ? next : current;
+  }
+
+  AssetOutboxState _preferAssetOutboxState(
+    AssetOutboxState? current,
+    AssetOutboxState next,
+  ) {
+    if (current == null) {
+      return next;
+    }
+    const rank = <AssetOutboxState, int>{
+      AssetOutboxState.failed: 3,
+      AssetOutboxState.uploading: 2,
+      AssetOutboxState.queued: 1,
+    };
+    return (rank[next] ?? 0) >= (rank[current] ?? 0) ? next : current;
+  }
+
+  int _readInt(Object? value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    return int.tryParse('$value') ?? 0;
   }
 
   Future<PhotoAsset?> getAssetById(String assetId) async {

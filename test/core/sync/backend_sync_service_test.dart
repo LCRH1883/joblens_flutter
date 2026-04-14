@@ -971,11 +971,9 @@ void main() {
       expect(assets, hasLength(1));
       expect(assets.single.remoteAssetId, 'asset-remote-1');
       expect(assets.single.remoteProvider, CloudProviderType.googleDrive.key);
-      expect(assets.single.cloudState, AssetCloudState.localAndCloud);
-      expect(assets.single.localPath, isNotEmpty);
-      expect(assets.single.thumbPath, isNotEmpty);
-      expect(File(assets.single.localPath).existsSync(), isTrue);
-      expect(File(assets.single.thumbPath).existsSync(), isTrue);
+      expect(assets.single.cloudState, AssetCloudState.cloudOnly);
+      expect(assets.single.localPath, isEmpty);
+      expect(assets.single.thumbPath, isEmpty);
     },
   );
 
@@ -1067,7 +1065,7 @@ void main() {
       expect(assets, hasLength(1));
       expect(assets.single.remoteAssetId, 'asset-remote-1');
       expect(assets.single.remoteRev, 4);
-      expect(assets.single.localPath, isNotEmpty);
+      expect(assets.single.localPath, isEmpty);
     },
   );
 

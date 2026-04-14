@@ -90,7 +90,7 @@ class SettingsPage extends ConsumerWidget {
             child: ListTile(
               title: const Text('Library status'),
               subtitle: Text(
-                '${store.assets.length} photos • ${store.projects.length} projects • ${store.syncJobs.length} sync jobs',
+                '${store.assets.length} photos • ${store.projects.length} projects • ${store.syncActivitySummary.totalOutstanding} pending sync ops',
               ),
             ),
           ),

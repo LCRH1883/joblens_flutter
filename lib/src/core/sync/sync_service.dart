@@ -2009,49 +2009,12 @@ class SyncService {
     PhotoAsset asset, {
     required BackendAssetRecord remoteAsset,
   }) async {
-    final client = _backendApiClient;
-    final mediaStorage = _mediaStorage;
-    if (client == null || mediaStorage == null) {
-      return;
-    }
-    if (asset.localPath.isNotEmpty || asset.status == AssetStatus.deleted) {
-      return;
-    }
-    final remoteAssetId = asset.remoteAssetId;
-    if (remoteAssetId == null || remoteAssetId.isEmpty) {
-      return;
-    }
-
-    try {
-      final bytes = await client.downloadAssetBytes(remoteAssetId);
-      final stored = await mediaStorage.storeDownloadedBytes(
-        assetId: asset.id,
-        bytes: bytes,
-        filename: remoteAsset.filename,
-      );
-      await _db.updateAssetLocalMedia(
-        assetId: asset.id,
-        localPath: stored.localPath,
-        thumbPath: stored.thumbPath,
-        hash: stored.hash,
-        cloudState: AssetCloudState.localAndCloud,
-      );
-      await _logInfo(
-        'remote_asset_downloaded',
-        assetId: asset.id,
-        projectId: asset.projectId,
-        message: 'Downloaded remote asset to local storage.',
-      );
-    } catch (error) {
-      final mapped = _mapSyncError(error);
-      await _db.updateAssetSyncError(asset.id, mapped.code);
-      await _logError(
-        'remote_asset_download_failed',
-        assetId: asset.id,
-        projectId: asset.projectId,
-        message: mapped.message,
-      );
-    }
+    asset;
+    remoteAsset;
+    _mediaStorage;
+    // Normal sync no longer auto-downloads full originals. Thumbnails and
+    // download URLs are resolved on demand from the active provider.
+    return;
   }
 
   Future<void> _handleDuplicate(

@@ -248,22 +248,34 @@ class SignedInDevice {
     required this.lastSyncAt,
     required this.isCurrent,
     required this.canSignOut,
+    this.status = 'active',
     this.osVersion,
     this.appVersion,
     this.approxLocation,
+    this.revokedAt,
+    this.revokeReason,
+    this.endedAt,
+    this.endReason,
   });
 
   final String deviceId;
   final String deviceName;
   final String platform;
+  final String status;
   final String? osVersion;
   final String? appVersion;
   final ApproxLocation? approxLocation;
   final DateTime? signedInAt;
   final DateTime? lastSeenAt;
   final DateTime? lastSyncAt;
+  final DateTime? revokedAt;
+  final String? revokeReason;
+  final DateTime? endedAt;
+  final String? endReason;
   final bool isCurrent;
   final bool canSignOut;
+
+  bool get isActive => status == 'active';
 
   factory SignedInDevice.fromMap(Map<String, dynamic> map) {
     final location = _asMap(map['approxLocation'] ?? map['approx_location']);
@@ -271,6 +283,7 @@ class SignedInDevice {
       deviceId: _asString(map['deviceId'] ?? map['device_id']),
       deviceName: _asString(map['deviceName'] ?? map['device_name']),
       platform: _asString(map['platform'], fallback: 'unknown'),
+      status: _asString(map['status'], fallback: 'unknown'),
       osVersion: _asNullableString(map['osVersion'] ?? map['os_version']),
       appVersion: _asNullableString(map['appVersion'] ?? map['app_version']),
       approxLocation: location.isEmpty
@@ -279,6 +292,10 @@ class SignedInDevice {
       signedInAt: _asNullableDateTime(map['signedInAt'] ?? map['signed_in_at']),
       lastSeenAt: _asNullableDateTime(map['lastSeenAt'] ?? map['last_seen_at']),
       lastSyncAt: _asNullableDateTime(map['lastSyncAt'] ?? map['last_sync_at']),
+      revokedAt: _asNullableDateTime(map['revokedAt'] ?? map['revoked_at']),
+      revokeReason: _asNullableString(map['revokeReason'] ?? map['revoke_reason']),
+      endedAt: _asNullableDateTime(map['endedAt'] ?? map['ended_at']),
+      endReason: _asNullableString(map['endReason'] ?? map['end_reason']),
       isCurrent: _asBool(map['isCurrent'] ?? map['is_current']),
       canSignOut: _asBool(map['canSignOut'] ?? map['can_sign_out']),
     );
