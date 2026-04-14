@@ -194,6 +194,31 @@ void main() {
     await tester.pump();
 
     expect(find.byTooltip('Download to Joblens'), findsOneWidget);
+    expect(find.byTooltip('Archive in Joblens'), findsNothing);
+  });
+
+  testWidgets('PhotoViewerPage shows archive action for assets with a local original', (
+    tester,
+  ) async {
+    final harness = (await tester.runAsync(_createHarness))!;
+    addTearDown(harness.dispose);
+
+    final source = File(p.join(harness.tempDir.path, 'viewer-archive.jpg'));
+    await tester.runAsync(() => source.writeAsBytes(List<int>.filled(128, 6)));
+    await tester.runAsync(
+      () => harness.store.ingestCapturedFile(source, processSyncNow: true),
+    );
+
+    final asset = harness.store.assets.single;
+    await tester.pumpWidget(
+      _wrapWithStore(
+        harness.store,
+        PhotoViewerPage(assets: [asset], initialIndex: 0),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('Archive in Joblens'), findsOneWidget);
   });
 
   testWidgets('GalleryPage selection toolbar shows download action', (
@@ -216,6 +241,7 @@ void main() {
     await tester.tap(find.byType(Image).first);
     await tester.pump();
 
+    expect(find.byTooltip('Archive selected'), findsOneWidget);
     expect(find.byTooltip('Download selected'), findsOneWidget);
   });
 
@@ -246,6 +272,7 @@ void main() {
     );
     await tester.pump();
 
+    expect(find.byTooltip('Archive project photos'), findsOneWidget);
     expect(find.byTooltip('Download missing photos'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Select photos'));
@@ -253,6 +280,7 @@ void main() {
     await tester.tap(find.byType(Image).first);
     await tester.pump();
 
+    expect(find.byTooltip('Archive selected'), findsOneWidget);
     expect(find.byTooltip('Download selected'), findsOneWidget);
   });
 }

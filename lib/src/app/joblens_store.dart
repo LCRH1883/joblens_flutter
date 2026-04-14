@@ -158,6 +158,86 @@ class AssetDownloadBatchResult {
   }
 }
 
+class AssetArchiveProgress {
+  const AssetArchiveProgress({
+    required this.totalRequested,
+    required this.archivedCount,
+    required this.skippedCount,
+    required this.failedCount,
+    this.currentAssetId,
+    this.currentAssetName,
+  });
+
+  final int totalRequested;
+  final int archivedCount;
+  final int skippedCount;
+  final int failedCount;
+  final String? currentAssetId;
+  final String? currentAssetName;
+
+  bool get isActive => totalRequested > 0;
+
+  AssetArchiveProgress copyWith({
+    int? totalRequested,
+    int? archivedCount,
+    int? skippedCount,
+    int? failedCount,
+    String? currentAssetId,
+    String? currentAssetName,
+    bool clearCurrentAsset = false,
+  }) {
+    return AssetArchiveProgress(
+      totalRequested: totalRequested ?? this.totalRequested,
+      archivedCount: archivedCount ?? this.archivedCount,
+      skippedCount: skippedCount ?? this.skippedCount,
+      failedCount: failedCount ?? this.failedCount,
+      currentAssetId: clearCurrentAsset
+          ? null
+          : currentAssetId ?? this.currentAssetId,
+      currentAssetName: clearCurrentAsset
+          ? null
+          : currentAssetName ?? this.currentAssetName,
+    );
+  }
+}
+
+class AssetArchiveBatchResult {
+  const AssetArchiveBatchResult({
+    required this.requestedCount,
+    required this.archivedCount,
+    required this.skippedCount,
+    required this.failedCount,
+  });
+
+  const AssetArchiveBatchResult.empty()
+    : this(
+        requestedCount: 0,
+        archivedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+      );
+
+  final int requestedCount;
+  final int archivedCount;
+  final int skippedCount;
+  final int failedCount;
+
+  String summaryMessage({String itemLabel = 'photo'}) {
+    final noun = requestedCount == 1 ? itemLabel : '${itemLabel}s';
+    if (requestedCount == 0) {
+      return 'No $noun needed archiving.';
+    }
+    return 'Archived $archivedCount, skipped $skippedCount, failed $failedCount.';
+  }
+}
+
+enum _ArchiveAction {
+  ready,
+  skipAlreadyCloudOnly,
+  failMissingLocalOriginal,
+  failNotSynced,
+}
+
 class JoblensStore extends ChangeNotifier {
   JoblensStore({
     required AppDatabase database,
@@ -207,6 +287,7 @@ class JoblensStore extends ChangeNotifier {
     uploadFailed: 0,
   );
   AssetDownloadProgress? _assetDownloadProgress;
+  AssetArchiveProgress? _assetArchiveProgress;
 
   List<PhotoAsset> _assets = const [];
   List<PhotoAsset> _deletedAssets = const [];
@@ -244,6 +325,7 @@ class JoblensStore extends ChangeNotifier {
       : null;
   SyncActivitySummary get syncActivitySummary => _syncActivitySummary;
   AssetDownloadProgress? get assetDownloadProgress => _assetDownloadProgress;
+  AssetArchiveProgress? get assetArchiveProgress => _assetArchiveProgress;
 
   PhotoAsset? assetById(String assetId) {
     for (final asset in _assets) {
@@ -259,6 +341,12 @@ class JoblensStore extends ChangeNotifier {
   bool canDownloadAsset(PhotoAsset asset) {
     final remoteAssetId = asset.remoteAssetId?.trim() ?? '';
     return remoteAssetId.isNotEmpty && !_hasValidLocalOriginal(asset);
+  }
+
+  bool canArchiveAsset(PhotoAsset asset) {
+    return asset.status == AssetStatus.active &&
+        asset.cloudState != AssetCloudState.cloudOnly &&
+        _hasValidLocalOriginal(asset);
   }
 
   AppLaunchDestination launchDestinationForSession({
@@ -1317,6 +1405,218 @@ class JoblensStore extends ChangeNotifier {
     return downloadAssetsToDevice(projectAssets);
   }
 
+  Future<AssetArchiveBatchResult> archiveAssetsToCloudOnly(
+    Iterable<PhotoAsset> assets,
+  ) async {
+    final requestedAssets = <PhotoAsset>[];
+    final seenAssetIds = <String>{};
+    for (final asset in assets) {
+      if (seenAssetIds.add(asset.id)) {
+        requestedAssets.add(asset);
+      }
+    }
+    if (requestedAssets.isEmpty) {
+      return const AssetArchiveBatchResult.empty();
+    }
+
+    var archivedCount = 0;
+    var skippedCount = 0;
+    var failedCount = 0;
+
+    await _runBusy(() async {
+      await _enqueueLocalIngest(() async {
+        _assetArchiveProgress = AssetArchiveProgress(
+          totalRequested: requestedAssets.length,
+          archivedCount: 0,
+          skippedCount: 0,
+          failedCount: 0,
+        );
+        _notifyListenersIfActive();
+
+        try {
+          final requestedIds = requestedAssets
+              .map((asset) => asset.id)
+              .toSet()
+              .toList(growable: false);
+          var assetsById = await _loadAssetsById(
+            requestedAssets: requestedAssets,
+            requestedIds: requestedIds,
+          );
+
+          if (await _shouldKickSyncBeforeArchive(
+            requestedAssets: requestedAssets,
+            assetsById: assetsById,
+          )) {
+            try {
+              await _syncService.kick();
+            } catch (error, stackTrace) {
+              await _handleError(error);
+              if (kDebugMode) {
+                debugPrint('Archive preflight sync failed: $error\n$stackTrace');
+              }
+            }
+            await _hydrateLocalState(includeDiagnostics: false);
+            assetsById = await _loadAssetsById(
+              requestedAssets: requestedAssets,
+              requestedIds: requestedIds,
+            );
+          }
+
+          final activeProvider = _activeProviderAccount;
+          final activeConnectionId = activeProvider?.connectionId?.trim() ?? '';
+          final outboxStates = await _database.getAssetOutboxStates(requestedIds);
+          final mirrorStatuses =
+              activeConnectionId.isNotEmpty
+              ? await _database.getAssetProviderMirrorStatuses(
+                  assetIds: requestedIds,
+                  providerConnectionId: activeConnectionId,
+                )
+              : const <String, String>{};
+
+          for (final requestedAsset in requestedAssets) {
+            if (_isDisposed) {
+              break;
+            }
+
+            final asset = assetsById[requestedAsset.id] ?? requestedAsset;
+            _assetArchiveProgress = _assetArchiveProgress?.copyWith(
+              currentAssetId: asset.id,
+              currentAssetName: _downloadLabelForAsset(asset),
+            );
+            _notifyListenersIfActive();
+
+            final decision = _decideArchiveAction(
+              asset,
+              activeProvider: activeProvider,
+              outboxState: outboxStates[asset.id],
+              activeMirrorStatus: mirrorStatuses[asset.id],
+            );
+            switch (decision) {
+              case _ArchiveAction.skipAlreadyCloudOnly:
+                skippedCount += 1;
+                await _database.addSyncLog(
+                  level: SyncLogLevel.info,
+                  event: 'archive_skipped_already_cloud_only',
+                  assetId: asset.id,
+                  projectId: asset.projectId,
+                  message:
+                      'Skipped archive because the asset is already cloud-only in Joblens.',
+                );
+                break;
+              case _ArchiveAction.failMissingLocalOriginal:
+                failedCount += 1;
+                await _database.addSyncLog(
+                  level: SyncLogLevel.error,
+                  event: 'archive_failed',
+                  assetId: asset.id,
+                  projectId: asset.projectId,
+                  message:
+                      'Asset cannot be archived because the Joblens local original is missing.',
+                );
+                break;
+              case _ArchiveAction.failNotSynced:
+                failedCount += 1;
+                await _database.addSyncLog(
+                  level: SyncLogLevel.error,
+                  event: 'archive_blocked_not_synced',
+                  assetId: asset.id,
+                  projectId: asset.projectId,
+                  message:
+                      'Asset cannot be archived because it is not confirmed on the active cloud provider.',
+                );
+                break;
+              case _ArchiveAction.ready:
+                await _database.addSyncLog(
+                  level: SyncLogLevel.info,
+                  event: 'archive_started',
+                  assetId: asset.id,
+                  projectId: asset.projectId,
+                  message:
+                      'Started archiving the local original while preserving cloud access.',
+                );
+                try {
+                  final preservedThumb = await _mediaStorage
+                      .ensureStandaloneThumbnail(
+                        assetId: asset.id,
+                        localPath: asset.localPath,
+                        thumbPath: asset.thumbPath,
+                      );
+                  await _database.updateAssetLocalMedia(
+                    assetId: asset.id,
+                    localPath: '',
+                    thumbPath: preservedThumb,
+                    hash: asset.hash,
+                    cloudState: AssetCloudState.cloudOnly,
+                    existsInPhoneStorage: asset.existsInPhoneStorage,
+                  );
+                  try {
+                    await File(asset.localPath).delete();
+                  } catch (error) {
+                    await _database.updateAssetLocalMedia(
+                      assetId: asset.id,
+                      localPath: asset.localPath,
+                      thumbPath: asset.thumbPath,
+                      hash: asset.hash,
+                      cloudState: asset.cloudState,
+                      existsInPhoneStorage: asset.existsInPhoneStorage,
+                    );
+                    rethrow;
+                  }
+                  archivedCount += 1;
+                  await _database.addSyncLog(
+                    level: SyncLogLevel.info,
+                    event: 'archive_completed',
+                    assetId: asset.id,
+                    projectId: asset.projectId,
+                    message:
+                        'Archived the local original and kept a thumbnail in Joblens storage.',
+                  );
+                } catch (error) {
+                  failedCount += 1;
+                  final message = error is ApiException
+                      ? error.message
+                      : error.toString();
+                  await _database.addSyncLog(
+                    level: SyncLogLevel.error,
+                    event: 'archive_failed',
+                    assetId: asset.id,
+                    projectId: asset.projectId,
+                    message: message,
+                  );
+                }
+                break;
+            }
+
+            _assetArchiveProgress = _assetArchiveProgress?.copyWith(
+              archivedCount: archivedCount,
+              skippedCount: skippedCount,
+              failedCount: failedCount,
+            );
+            _notifyListenersIfActive();
+          }
+        } finally {
+          _assetArchiveProgress = null;
+          await _hydrateLocalState();
+          _notifyListenersIfActive();
+        }
+      });
+    });
+
+    return AssetArchiveBatchResult(
+      requestedCount: requestedAssets.length,
+      archivedCount: archivedCount,
+      skippedCount: skippedCount,
+      failedCount: failedCount,
+    );
+  }
+
+  Future<AssetArchiveBatchResult> archiveProjectAssets(int projectId) {
+    final projectAssets = _assets
+        .where((asset) => asset.projectId == projectId)
+        .toList(growable: false);
+    return archiveAssetsToCloudOnly(projectAssets);
+  }
+
   Future<void> _runBusy(Future<void> Function() action) async {
     if (_isBusy) {
       return;
@@ -1394,6 +1694,100 @@ class JoblensStore extends ChangeNotifier {
       return p.basename(localPath);
     }
     return asset.id;
+  }
+
+  Future<Map<String, PhotoAsset>> _loadAssetsById({
+    required List<PhotoAsset> requestedAssets,
+    required List<String> requestedIds,
+  }) async {
+    final persistedAssets = await _database.getAssetsByIds(requestedIds);
+    final assetsById = {
+      for (final asset in persistedAssets) asset.id: asset,
+    };
+    for (final asset in requestedAssets) {
+      assetsById.putIfAbsent(asset.id, () => asset);
+    }
+    return assetsById;
+  }
+
+  Future<bool> _shouldKickSyncBeforeArchive({
+    required List<PhotoAsset> requestedAssets,
+    required Map<String, PhotoAsset> assetsById,
+  }) async {
+    final activeProvider = _activeProviderAccount;
+    final activeConnectionId = activeProvider?.connectionId?.trim() ?? '';
+    final requestedIds = requestedAssets
+        .map((asset) => asset.id)
+        .toSet()
+        .toList(growable: false);
+    final outboxStates = await _database.getAssetOutboxStates(requestedIds);
+    final mirrorStatuses =
+        activeConnectionId.isNotEmpty
+        ? await _database.getAssetProviderMirrorStatuses(
+            assetIds: requestedIds,
+            providerConnectionId: activeConnectionId,
+          )
+        : const <String, String>{};
+
+    for (final requestedAsset in requestedAssets) {
+      final asset = assetsById[requestedAsset.id] ?? requestedAsset;
+      final decision = _decideArchiveAction(
+        asset,
+        activeProvider: activeProvider,
+        outboxState: outboxStates[asset.id],
+        activeMirrorStatus: mirrorStatuses[asset.id],
+      );
+      if (decision == _ArchiveAction.failNotSynced) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _ArchiveAction _decideArchiveAction(
+    PhotoAsset asset, {
+    required ProviderAccount? activeProvider,
+    required AssetOutboxState? outboxState,
+    required String? activeMirrorStatus,
+  }) {
+    if (asset.cloudState == AssetCloudState.cloudOnly) {
+      return _ArchiveAction.skipAlreadyCloudOnly;
+    }
+    if (asset.status != AssetStatus.active || asset.deletedAt != null) {
+      return _ArchiveAction.failNotSynced;
+    }
+    if (!_hasValidLocalOriginal(asset)) {
+      return _ArchiveAction.failMissingLocalOriginal;
+    }
+    if (activeProvider == null) {
+      return _ArchiveAction.failNotSynced;
+    }
+    if (outboxState != null) {
+      return _ArchiveAction.failNotSynced;
+    }
+
+    final derivedStatus = _deriveAssetSyncStatus(
+      asset,
+      outboxState: outboxState,
+      activeMirrorStatus: activeMirrorStatus,
+    );
+    if (derivedStatus == AssetSyncStatus.failed ||
+        derivedStatus == AssetSyncStatus.syncing ||
+        derivedStatus == AssetSyncStatus.local) {
+      return _ArchiveAction.failNotSynced;
+    }
+    if (activeMirrorStatus == 'mirrored') {
+      return _ArchiveAction.ready;
+    }
+
+    final remoteAssetId = asset.remoteAssetId?.trim() ?? '';
+    final remoteProvider = asset.remoteProvider?.trim() ?? '';
+    if (remoteAssetId.isNotEmpty &&
+        remoteProvider == activeProvider.providerType.key &&
+        derivedStatus == AssetSyncStatus.synced) {
+      return _ArchiveAction.ready;
+    }
+    return _ArchiveAction.failNotSynced;
   }
 
   String? _downloadFilenameForAsset(PhotoAsset asset) {

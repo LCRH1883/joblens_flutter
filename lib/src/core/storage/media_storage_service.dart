@@ -110,6 +110,40 @@ class MediaStorageService {
     return (localPath: storedPath, thumbPath: thumbPath, hash: result.hash);
   }
 
+  Future<String> ensureStandaloneThumbnail({
+    required String assetId,
+    required String localPath,
+    required String thumbPath,
+  }) async {
+    final originalPath = localPath.trim();
+    if (originalPath.isEmpty) {
+      throw StateError('Cannot preserve a thumbnail without a local original.');
+    }
+
+    final originalFile = File(originalPath);
+    if (!await originalFile.exists()) {
+      throw StateError('Cannot preserve a thumbnail because the local original is missing.');
+    }
+
+    final existingThumbPath = thumbPath.trim();
+    if (existingThumbPath.isNotEmpty && existingThumbPath != originalPath) {
+      final existingThumbFile = File(existingThumbPath);
+      if (await existingThumbFile.exists()) {
+        return existingThumbPath;
+      }
+    }
+
+    final safeAssetId = assetId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final preservedThumbPath = p.join(thumbnailsDir.path, '$safeAssetId.jpg');
+    final result = await Isolate.run(
+      () => _generateStandaloneThumbnail(originalPath, preservedThumbPath),
+    );
+    if (!result.generatedThumbnail) {
+      throw StateError('Failed to generate a standalone thumbnail for the local original.');
+    }
+    return preservedThumbPath;
+  }
+
   Future<void> clearAll() async {
     if (await rootDir.exists()) {
       await rootDir.delete(recursive: true);
@@ -137,4 +171,20 @@ class MediaStorageService {
   final encoded = img.encodeJpg(resized, quality: 85);
   File(thumbPath).writeAsBytesSync(encoded, flush: true);
   return (hash: hash, generatedThumbnail: true);
+}
+
+({bool generatedThumbnail}) _generateStandaloneThumbnail(
+  String sourcePath,
+  String thumbPath,
+) {
+  final sourceBytes = File(sourcePath).readAsBytesSync();
+  final decoded = img.decodeImage(Uint8List.fromList(sourceBytes));
+  if (decoded == null) {
+    return (generatedThumbnail: false);
+  }
+
+  final resized = img.copyResize(decoded, width: 512);
+  final encoded = img.encodeJpg(resized, quality: 85);
+  File(thumbPath).writeAsBytesSync(encoded, flush: true);
+  return (generatedThumbnail: true);
 }

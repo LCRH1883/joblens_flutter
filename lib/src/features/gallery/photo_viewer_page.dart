@@ -51,12 +51,21 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
     final store = ref.watch(joblensStoreListenableProvider);
     final currentAsset = _currentAsset(store);
     final canDownloadCurrent = store.canDownloadAsset(currentAsset);
+    final canArchiveCurrent = store.canArchiveAsset(currentAsset);
 
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         title: Text('${_currentIndex + 1} / ${widget.assets.length}'),
         actions: [
+          if (canArchiveCurrent)
+            IconButton(
+              tooltip: 'Archive in Joblens',
+              onPressed: store.isBusy
+                  ? null
+                  : () => _archiveCurrentAsset(context, store, currentAsset),
+              icon: const Icon(Icons.archive_outlined),
+            ),
           if (canDownloadCurrent)
             IconButton(
               tooltip: 'Download to Joblens',
@@ -141,6 +150,27 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
   ) async {
     final messenger = ScaffoldMessenger.of(context);
     final result = await store.downloadAssetsToDevice([asset]);
+    if (!mounted) {
+      return;
+    }
+    if (store.lastError != null) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.lastError!)),
+      );
+      return;
+    }
+    messenger.showSnackBar(
+      SnackBar(content: Text(result.summaryMessage())),
+    );
+  }
+
+  Future<void> _archiveCurrentAsset(
+    BuildContext context,
+    JoblensStore store,
+    PhotoAsset asset,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await store.archiveAssetsToCloudOnly([asset]);
     if (!mounted) {
       return;
     }

@@ -71,6 +71,13 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                   icon: const Icon(Icons.drive_file_move_outline),
                 ),
                 IconButton(
+                  tooltip: 'Archive selected',
+                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
+                      ? null
+                      : () => _archiveSelectedToCloudOnly(context, store, assets),
+                  icon: const Icon(Icons.archive_outlined),
+                ),
+                IconButton(
                   tooltip: 'Download selected',
                   onPressed: store.isBusy || _selectedAssetIds.isEmpty
                       ? null
@@ -467,6 +474,36 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     }
 
     final result = await store.downloadAssetsToDevice(selectedAssets);
+    if (!mounted) {
+      return;
+    }
+
+    if (store.lastError != null) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(store.lastError!)),
+      );
+      return;
+    }
+
+    messenger.showSnackBar(
+      SnackBar(content: Text(result.summaryMessage())),
+    );
+  }
+
+  Future<void> _archiveSelectedToCloudOnly(
+    BuildContext context,
+    JoblensStore store,
+    List<PhotoAsset> assets,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final selectedAssets = assets
+        .where((asset) => _selectedAssetIds.contains(asset.id))
+        .toList(growable: false);
+    if (selectedAssets.isEmpty) {
+      return;
+    }
+
+    final result = await store.archiveAssetsToCloudOnly(selectedAssets);
     if (!mounted) {
       return;
     }

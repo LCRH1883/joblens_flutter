@@ -8,7 +8,9 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:joblens_flutter/src/app/joblens_store.dart';
 import 'package:joblens_flutter/src/core/db/app_database.dart';
+import 'package:joblens_flutter/src/core/models/cloud_provider.dart';
 import 'package:joblens_flutter/src/core/models/photo_asset.dart';
+import 'package:joblens_flutter/src/core/models/provider_account.dart';
 import 'package:joblens_flutter/src/core/storage/media_storage_service.dart';
 import 'package:joblens_flutter/src/core/sync/sync_service.dart';
 
@@ -163,6 +165,216 @@ void main() {
     expect(repaired.cloudState, AssetCloudState.localAndCloud);
     expect(await harness.database.getAllBlobUploadTasks(), isEmpty);
   });
+
+  test(
+    'archiveAssetsToCloudOnly archives a synced asset and preserves a standalone thumbnail',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final projectId = await harness.database.ensureDefaultProject();
+      await harness.database.updateProviderAccountStatus(
+        CloudProviderType.googleDrive,
+        connectionStatus: ProviderConnectionStatus.ready,
+        connectionId: 'conn-1',
+        connectedAt: DateTime(2026, 4, 14),
+        isActive: true,
+      );
+
+      final originalFile = File(p.join(harness.tempDir.path, 'archive-me.jpg'));
+      await originalFile.writeAsBytes(_testImageBytes, flush: true);
+      await harness.database.insertPendingAssetShell(
+        PhotoAsset(
+          id: 'asset-archive',
+          localPath: originalFile.path,
+          thumbPath: originalFile.path,
+          createdAt: DateTime(2026, 4, 14),
+          importedAt: DateTime(2026, 4, 14),
+          projectId: projectId,
+          hash: 'e' * 64,
+          status: AssetStatus.active,
+          sourceType: AssetSourceType.imported,
+          cloudState: AssetCloudState.localAndCloud,
+          existsInPhoneStorage: false,
+          remoteAssetId: 'remote-archive',
+          remoteProvider: CloudProviderType.googleDrive.key,
+          remoteFileId: 'provider-file-archive',
+          uploadPath: 'Joblens/Inbox/archive-me.jpg',
+        ),
+      );
+      await harness.database.upsertAssetProviderMirror(
+        assetId: 'asset-archive',
+        providerConnectionId: 'conn-1',
+        status: 'mirrored',
+      );
+      await harness.store.refresh();
+
+      final result = await harness.store.archiveAssetsToCloudOnly(
+        harness.store.assets.where((asset) => asset.id == 'asset-archive'),
+      );
+
+      expect(result.archivedCount, 1);
+      expect(result.skippedCount, 0);
+      expect(result.failedCount, 0);
+
+      final updated = await harness.database.getAssetById('asset-archive');
+      expect(updated, isNotNull);
+      expect(updated!.cloudState, AssetCloudState.cloudOnly);
+      expect(updated.localPath, isEmpty);
+      expect(updated.thumbPath, isNotEmpty);
+      expect(updated.thumbPath, isNot(originalFile.path));
+      expect(File(updated.thumbPath).existsSync(), isTrue);
+      expect(originalFile.existsSync(), isFalse);
+      expect(await harness.database.getAllBlobUploadTasks(), isEmpty);
+
+      final logs = await harness.database.getAllSyncLogs();
+      expect(logs.any((log) => log.event == 'archive_started'), isTrue);
+      expect(logs.any((log) => log.event == 'archive_completed'), isTrue);
+    },
+  );
+
+  test(
+    'archiveAssetsToCloudOnly blocks an asset that is not confirmed on the active provider',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final projectId = await harness.database.ensureDefaultProject();
+      await harness.database.updateProviderAccountStatus(
+        CloudProviderType.googleDrive,
+        connectionStatus: ProviderConnectionStatus.ready,
+        connectionId: 'conn-1',
+        connectedAt: DateTime(2026, 4, 14),
+        isActive: true,
+      );
+
+      final originalFile = File(p.join(harness.tempDir.path, 'not-synced.jpg'));
+      await originalFile.writeAsBytes(_testImageBytes, flush: true);
+      await harness.database.insertPendingAssetShell(
+        PhotoAsset(
+          id: 'asset-not-synced',
+          localPath: originalFile.path,
+          thumbPath: originalFile.path,
+          createdAt: DateTime(2026, 4, 14),
+          importedAt: DateTime(2026, 4, 14),
+          projectId: projectId,
+          hash: 'f' * 64,
+          status: AssetStatus.active,
+          sourceType: AssetSourceType.imported,
+          cloudState: AssetCloudState.localAndCloud,
+          existsInPhoneStorage: false,
+          remoteAssetId: 'remote-not-synced',
+          remoteProvider: CloudProviderType.box.key,
+          remoteFileId: 'provider-file-not-synced',
+          uploadPath: 'Joblens/Inbox/not-synced.jpg',
+        ),
+      );
+      await harness.store.refresh();
+
+      final result = await harness.store.archiveAssetsToCloudOnly(
+        harness.store.assets.where((asset) => asset.id == 'asset-not-synced'),
+      );
+
+      expect(harness.syncService.kickCount, 1);
+      expect(result.archivedCount, 0);
+      expect(result.skippedCount, 0);
+      expect(result.failedCount, 1);
+
+      final updated = await harness.database.getAssetById('asset-not-synced');
+      expect(updated, isNotNull);
+      expect(updated!.cloudState, AssetCloudState.localAndCloud);
+      expect(updated.localPath, originalFile.path);
+      expect(originalFile.existsSync(), isTrue);
+
+      final logs = await harness.database.getAllSyncLogs();
+      expect(logs.any((log) => log.event == 'archive_blocked_not_synced'), isTrue);
+    },
+  );
+
+  test('archiveProjectAssets archives eligible assets with partial success', () async {
+    final harness = await _createHarness();
+    addTearDown(harness.dispose);
+
+    final projectId = await harness.database.createProject('Archive Project');
+    await harness.database.updateProviderAccountStatus(
+      CloudProviderType.googleDrive,
+      connectionStatus: ProviderConnectionStatus.ready,
+      connectionId: 'conn-1',
+      connectedAt: DateTime(2026, 4, 14),
+      isActive: true,
+    );
+
+    final safeFile = File(p.join(harness.tempDir.path, 'safe.jpg'));
+    final blockedFile = File(p.join(harness.tempDir.path, 'blocked.jpg'));
+    await safeFile.writeAsBytes(_testImageBytes, flush: true);
+    await blockedFile.writeAsBytes(_testImageBytes, flush: true);
+
+    await harness.database.insertPendingAssetShell(
+      PhotoAsset(
+        id: 'asset-safe',
+        localPath: safeFile.path,
+        thumbPath: safeFile.path,
+        createdAt: DateTime(2026, 4, 14),
+        importedAt: DateTime(2026, 4, 14),
+        projectId: projectId,
+        hash: '1' * 64,
+        status: AssetStatus.active,
+        sourceType: AssetSourceType.imported,
+        cloudState: AssetCloudState.localAndCloud,
+        existsInPhoneStorage: false,
+        remoteAssetId: 'remote-safe',
+        remoteProvider: CloudProviderType.googleDrive.key,
+        remoteFileId: 'provider-file-safe',
+        uploadPath: 'Joblens/Archive/safe.jpg',
+      ),
+    );
+    await harness.database.upsertAssetProviderMirror(
+      assetId: 'asset-safe',
+      providerConnectionId: 'conn-1',
+      status: 'mirrored',
+    );
+    await harness.database.insertPendingAssetShell(
+      PhotoAsset(
+        id: 'asset-blocked',
+        localPath: blockedFile.path,
+        thumbPath: blockedFile.path,
+        createdAt: DateTime(2026, 4, 14),
+        importedAt: DateTime(2026, 4, 14),
+        projectId: projectId,
+        hash: '2' * 64,
+        status: AssetStatus.active,
+        sourceType: AssetSourceType.imported,
+        cloudState: AssetCloudState.localAndCloud,
+        existsInPhoneStorage: false,
+        remoteAssetId: 'remote-blocked',
+        remoteProvider: CloudProviderType.box.key,
+        remoteFileId: 'provider-file-blocked',
+        uploadPath: 'Joblens/Archive/blocked.jpg',
+      ),
+    );
+    await harness.database.upsertCloudOnlyAsset(
+      localAssetId: 'asset-cloud-only',
+      projectId: projectId,
+      remoteAssetId: 'remote-cloud-only',
+      sha256: '3' * 64,
+      createdAt: DateTime(2026, 4, 14),
+      remotePath: 'Joblens/Archive/cloud-only.jpg',
+    );
+    await harness.store.refresh();
+
+    final result = await harness.store.archiveProjectAssets(projectId);
+
+    expect(result.archivedCount, 1);
+    expect(result.skippedCount, 1);
+    expect(result.failedCount, 1);
+
+    final archived = await harness.database.getAssetById('asset-safe');
+    final blocked = await harness.database.getAssetById('asset-blocked');
+    final cloudOnly = await harness.database.getAssetById('asset-cloud-only');
+    expect(archived!.cloudState, AssetCloudState.cloudOnly);
+    expect(blocked!.cloudState, AssetCloudState.localAndCloud);
+    expect(cloudOnly!.cloudState, AssetCloudState.cloudOnly);
+  });
 }
 
 final Uint8List _testImageBytes = Uint8List.fromList(
@@ -218,6 +430,7 @@ class _DownloadSyncService extends SyncService {
   _DownloadSyncService(super.db) : super();
 
   final List<String> downloadRequests = <String>[];
+  int kickCount = 0;
 
   @override
   Future<Uint8List> downloadAssetBytes(PhotoAsset asset) async {
@@ -227,5 +440,7 @@ class _DownloadSyncService extends SyncService {
   }
 
   @override
-  Future<void> kick({bool forceBootstrap = false}) async {}
+  Future<void> kick({bool forceBootstrap = false}) async {
+    kickCount += 1;
+  }
 }
