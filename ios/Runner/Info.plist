@@ -41,6 +41,12 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Joblens needs camera access to capture photos into your private Joblens library.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dartVmService._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Joblens uses local network access during debug builds so Flutter DevTools and hot reload can connect to the Dart VM service.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Joblens can write edited exports when you explicitly choose to export them.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

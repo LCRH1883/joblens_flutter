@@ -44,7 +44,7 @@ You also need working Apple signing in Xcode for the `Runner` target.
 
 ```bash
 cd /Volumes/ExData/Projects/Joblens/joblens_flutter
-bash scripts/build_android_release.sh v0.1.1
+bash scripts/build_android_release.sh v0.1.2
 ```
 
 Outputs:
@@ -58,7 +58,7 @@ Outputs:
 
 ```bash
 cd /Volumes/ExData/Projects/Joblens/joblens_flutter
-bash scripts/build_ios_release.sh v0.1.1
+bash scripts/build_ios_release.sh v0.1.2
 ```
 
 Outputs:

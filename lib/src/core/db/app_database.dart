@@ -47,7 +47,9 @@ class AppDatabase {
 
   final Database _db;
   static const _uuid = Uuid();
-  static const _schemaVersion = 15;
+  static const _schemaVersion = 16;
+  static const _activeProjectNameUniqueIndex =
+      'idx_projects_active_name_unique';
 
   static Future<AppDatabase> open({String? databasePath}) async {
     final resolvedPath = databasePath ?? await _defaultDatabasePath();
@@ -59,17 +61,19 @@ class AppDatabase {
         await _createSchema(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 9) {
+        var schemaVersion = oldVersion;
+        if (schemaVersion < 9) {
           await _migrateLegacySchema(db);
-          return;
+          schemaVersion = 15;
         }
 
-        if (oldVersion < 10) {
+        if (schemaVersion < 10) {
           await db.execute(
             'ALTER TABLE provider_accounts ADD COLUMN account_identifier TEXT',
           );
+          schemaVersion = 10;
         }
-        if (oldVersion < 11) {
+        if (schemaVersion < 11) {
           await db.execute(
             'ALTER TABLE provider_accounts ADD COLUMN connection_id TEXT',
           );
@@ -121,26 +125,30 @@ class AppDatabase {
           await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_asset_provider_mirrors_connection ON asset_provider_mirrors(provider_connection_id, status, updated_at)',
           );
+          schemaVersion = 11;
         }
-        if (oldVersion < 12) {
+        if (schemaVersion < 12) {
           await db.execute(
             'ALTER TABLE photo_assets ADD COLUMN hard_delete_due_at TEXT',
           );
+          schemaVersion = 12;
         }
-        if (oldVersion < 13) {
+        if (schemaVersion < 13) {
           await db.execute(
             'ALTER TABLE photo_assets ADD COLUMN purge_requested_at TEXT',
           );
+          schemaVersion = 13;
         }
-        if (oldVersion < 14) {
+        if (schemaVersion < 14) {
           await db.execute(
             "ALTER TABLE provider_accounts ADD COLUMN sync_health TEXT NOT NULL DEFAULT 'healthy'",
           );
           await db.execute(
             'ALTER TABLE provider_accounts ADD COLUMN open_conflict_count INTEGER NOT NULL DEFAULT 0',
           );
+          schemaVersion = 14;
         }
-        if (oldVersion < 15) {
+        if (schemaVersion < 15) {
           await db.execute('''
             CREATE TABLE IF NOT EXISTS camera_session_metrics (
               session_id TEXT PRIMARY KEY,
@@ -160,6 +168,10 @@ class AppDatabase {
               close_reason TEXT
             )
           ''');
+          schemaVersion = 15;
+        }
+        if (schemaVersion < 16) {
+          await _migrateProjectsActiveNameUniqueness(db);
         }
       },
     );
@@ -180,7 +192,7 @@ class AppDatabase {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
         notes TEXT NOT NULL DEFAULT '',
         start_date TEXT,
         remote_project_id TEXT,
@@ -552,6 +564,7 @@ class AppDatabase {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_projects_remote_project_id ON projects(remote_project_id)',
     );
+    await _ensureActiveProjectNameUniqueIndex(db);
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_entity_sync_next_attempt ON entity_sync(next_attempt_at, updated_at)',
     );
@@ -585,11 +598,105 @@ class AppDatabase {
     );
   }
 
+  static Future<void> _ensureActiveProjectNameUniqueIndex(
+    DatabaseExecutor db,
+  ) async {
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS $_activeProjectNameUniqueIndex ON projects(name) WHERE deleted_at IS NULL',
+    );
+  }
+
+  static Future<void> _migrateProjectsActiveNameUniqueness(Database db) async {
+    final rows = await db.query(
+      'sqlite_master',
+      columns: ['sql'],
+      where: 'type = ? AND name = ?',
+      whereArgs: ['table', 'projects'],
+      limit: 1,
+    );
+    final createTableSql = rows.isEmpty
+        ? ''
+        : (rows.first['sql'] as String? ?? '').toUpperCase();
+    if (!createTableSql.contains('NAME TEXT NOT NULL UNIQUE')) {
+      await _ensureActiveProjectNameUniqueIndex(db);
+      return;
+    }
+
+    await db.execute('PRAGMA foreign_keys = OFF');
+    try {
+      await db.transaction((txn) async {
+        await txn.execute(
+          'DROP INDEX IF EXISTS idx_projects_remote_project_id',
+        );
+        await txn.execute(
+          'DROP INDEX IF EXISTS $_activeProjectNameUniqueIndex',
+        );
+        await txn.execute('''
+          CREATE TABLE projects_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            start_date TEXT,
+            remote_project_id TEXT,
+            cover_asset_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            sync_folder_map TEXT NOT NULL DEFAULT '{}',
+            deleted_at TEXT,
+            remote_rev INTEGER,
+            local_seq INTEGER NOT NULL DEFAULT 0,
+            dirty_fields TEXT NOT NULL DEFAULT '[]'
+          )
+        ''');
+        await txn.execute('''
+          INSERT INTO projects_new (
+            id,
+            name,
+            notes,
+            start_date,
+            remote_project_id,
+            cover_asset_id,
+            created_at,
+            updated_at,
+            sync_folder_map,
+            deleted_at,
+            remote_rev,
+            local_seq,
+            dirty_fields
+          )
+          SELECT
+            id,
+            name,
+            notes,
+            start_date,
+            remote_project_id,
+            cover_asset_id,
+            created_at,
+            updated_at,
+            sync_folder_map,
+            deleted_at,
+            remote_rev,
+            local_seq,
+            dirty_fields
+          FROM projects
+        ''');
+        await txn.execute('DROP TABLE projects');
+        await txn.execute('ALTER TABLE projects_new RENAME TO projects');
+        await txn.execute(
+          'CREATE INDEX IF NOT EXISTS idx_projects_remote_project_id ON projects(remote_project_id)',
+        );
+        await _ensureActiveProjectNameUniqueIndex(txn);
+      });
+    } finally {
+      await db.execute('PRAGMA foreign_keys = ON');
+    }
+  }
+
   static Future<void> _createSchema(Database db) async {
     await db.execute('''
       CREATE TABLE projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
         notes TEXT NOT NULL DEFAULT '',
         start_date TEXT,
         remote_project_id TEXT,
@@ -775,6 +882,7 @@ class AppDatabase {
     await db.execute(
       'CREATE INDEX idx_projects_remote_project_id ON projects(remote_project_id)',
     );
+    await _ensureActiveProjectNameUniqueIndex(db);
     await db.execute(
       'CREATE INDEX idx_entity_sync_next_attempt ON entity_sync(next_attempt_at, updated_at)',
     );
@@ -1962,7 +2070,10 @@ class AppDatabase {
       return null;
     }
     final lastError = (rows.first['last_error'] as String?)?.trim();
-    return (status: status, lastError: lastError?.isEmpty ?? true ? null : lastError);
+    return (
+      status: status,
+      lastError: lastError?.isEmpty ?? true ? null : lastError,
+    );
   }
 
   Future<void> enqueueSyncJob({
@@ -2175,7 +2286,9 @@ class AppDatabase {
     );
   }
 
-  Future<CameraSessionMetrics?> getCameraSessionMetrics(String sessionId) async {
+  Future<CameraSessionMetrics?> getCameraSessionMetrics(
+    String sessionId,
+  ) async {
     final rows = await _db.query(
       'camera_session_metrics',
       where: 'session_id = ?',
@@ -2189,8 +2302,7 @@ class AppDatabase {
   }
 
   Future<CameraMetricsSummary> getCameraMetricsSummary() async {
-    final rows = await _db.rawQuery(
-      '''
+    final rows = await _db.rawQuery('''
       SELECT
         COUNT(*) AS total_sessions,
         SUM(CASE WHEN preview_ready_at IS NOT NULL THEN 1 ELSE 0 END) AS preview_ready_sessions,
@@ -2199,8 +2311,7 @@ class AppDatabase {
         SUM(capture_success_count) AS capture_successes,
         SUM(hard_failure_count) AS hard_failures
       FROM camera_session_metrics
-      ''',
-    );
+      ''');
     final row = rows.firstOrNull ?? const <String, Object?>{};
     return CameraMetricsSummary(
       totalSessions: _readInt(row['total_sessions']),
@@ -2296,14 +2407,12 @@ class AppDatabase {
   }
 
   Future<SyncActivityCounts> getSyncActivityCounts() async {
-    final entityRows = await _db.rawQuery(
-      '''
+    final entityRows = await _db.rawQuery('''
       SELECT
         SUM(CASE WHEN TRIM(COALESCE(last_error, '')) = '' THEN 1 ELSE 0 END) AS queued_count,
         SUM(CASE WHEN TRIM(COALESCE(last_error, '')) != '' THEN 1 ELSE 0 END) AS failed_count
       FROM entity_sync
-      ''',
-    );
+      ''');
     final blobRows = await _db.rawQuery(
       '''
       SELECT
@@ -2912,14 +3021,11 @@ class AppDatabase {
     }
 
     final placeholders = List.filled(normalized.length, '?').join(',');
-    final blobRows = await _db.rawQuery(
-      '''
+    final blobRows = await _db.rawQuery('''
       SELECT asset_id, state
       FROM blob_upload
       WHERE asset_id IN ($placeholders)
-      ''',
-      normalized.toList(growable: false),
-    );
+      ''', normalized.toList(growable: false));
     final entityRows = await _db.rawQuery(
       '''
       SELECT entity_id, last_error
@@ -2927,10 +3033,7 @@ class AppDatabase {
       WHERE entity_type = ?
         AND entity_id IN ($placeholders)
       ''',
-      [
-        SyncEntityType.asset.name,
-        ...normalized,
-      ],
+      [SyncEntityType.asset.name, ...normalized],
     );
 
     final states = <String, AssetOutboxState>{};
