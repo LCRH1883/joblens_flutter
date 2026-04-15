@@ -1,4 +1,4 @@
-package com.intagri.joblens
+package com.intagri.joblens_flutter
 
 import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity

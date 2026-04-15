@@ -169,6 +169,7 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
     List<Project> projects,
     CameraSettings settings,
   ) {
+    final launchSettings = settings.normalizedForLaunch();
     final resolved = store.resolveCaptureTarget();
     final inbox = projects.firstWhere(
       (project) => project.name == 'Inbox',
@@ -208,7 +209,7 @@ class _JoblensCameraPageState extends ConsumerState<JoblensCameraPage> {
       currentProjectId: resolved.projectId,
       currentProjectName: resolved.projectName,
       targets: targets,
-      settings: settings,
+      settings: launchSettings,
     );
   }
 

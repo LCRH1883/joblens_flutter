@@ -1,7 +1,7 @@
 name: joblens_flutter
 description: Joblens Flutter
 publish_to: 'none'
-version: 0.1.0+1000
+version: 0.1.1+1001
 
 environment:
   sdk: ^3.10.4

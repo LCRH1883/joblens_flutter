@@ -1,4 +1,4 @@
-package com.intagri.joblens
+package com.intagri.joblens_flutter
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -29,7 +29,10 @@ import androidx.appcompat.content.res.AppCompatResources
 import androidx.appcompat.widget.AppCompatButton
 import androidx.appcompat.widget.AppCompatEditText
 import androidx.appcompat.widget.AppCompatImageButton
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.Camera
+import androidx.camera.core.CameraFilter
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -326,9 +329,7 @@ class NativeCameraActivity : AppCompatActivity() {
     }
 
     private fun bindCameraUseCases(provider: ProcessCameraProvider) {
-        val selector = CameraSelector.Builder()
-            .requireLensFacing(currentLensFacing)
-            .build()
+        val selector = buildCameraSelector(provider)
         if (!provider.safeHasCamera(selector)) {
             if (currentLensFacing == CameraSelector.LENS_FACING_FRONT) {
                 currentLensFacing = CameraSelector.LENS_FACING_BACK
@@ -381,6 +382,15 @@ class NativeCameraActivity : AppCompatActivity() {
         }
     }
 
+    private fun buildCameraSelector(provider: ProcessCameraProvider): CameraSelector {
+        val builder = CameraSelector.Builder()
+            .requireLensFacing(currentLensFacing)
+        if (currentLensFacing == CameraSelector.LENS_FACING_BACK) {
+            builder.addCameraFilter(PreferredBackCameraFilter(provider))
+        }
+        return builder.build()
+    }
+
     private fun observeZoomState() {
         zoomObserver?.let { observer ->
             camera?.cameraInfo?.zoomState?.removeObserver(observer)
@@ -421,13 +431,7 @@ class NativeCameraActivity : AppCompatActivity() {
     }
 
     private fun rebuildZoomButtons(minZoom: Float, maxZoom: Float) {
-        val stops = mutableListOf<Float>()
-        for (candidate in listOf(0.5f, 1f, 2f, 3f, 5f)) {
-            val clamped = candidate.coerceIn(minZoom, maxZoom)
-            if (stops.none { abs(it - clamped) < 0.05f }) {
-                stops.add(clamped)
-            }
-        }
+        val stops = buildZoomStops(minZoom, maxZoom)
         if (stops.isEmpty()) {
             stops.add(currentZoomRatio.coerceIn(minZoom, maxZoom))
         }
@@ -447,6 +451,29 @@ class NativeCameraActivity : AppCompatActivity() {
             }
             zoomButtonsContainer.addView(button)
         }
+    }
+
+    private fun buildZoomStops(minZoom: Float, maxZoom: Float): MutableList<Float> {
+        val stops = mutableListOf<Float>()
+
+        fun addStop(value: Float) {
+            val clamped = value.coerceIn(minZoom, maxZoom)
+            if (stops.none { abs(it - clamped) < 0.05f }) {
+                stops.add(clamped)
+            }
+        }
+
+        if (minZoom < 1f) {
+            addStop(minZoom)
+        }
+        addStop(1f)
+        for (candidate in listOf(2f, 3f, 5f)) {
+            if (candidate in minZoom..maxZoom) {
+                addStop(candidate)
+            }
+        }
+
+        return stops
     }
 
     private fun capturePhoto() {
@@ -1252,5 +1279,33 @@ private fun ProcessCameraProvider.safeHasCamera(selector: CameraSelector): Boole
         hasCamera(selector)
     } catch (_: Exception) {
         false
+    }
+}
+
+private class PreferredBackCameraFilter(
+    private val provider: ProcessCameraProvider,
+) : CameraFilter {
+    override fun filter(cameraInfos: List<CameraInfo>): List<CameraInfo> {
+        if (cameraInfos.size <= 1) {
+            return cameraInfos
+        }
+
+        val preferred = cameraInfos.minWithOrNull(
+            compareBy<CameraInfo>(
+                { info ->
+                    val minZoom = info.zoomState.value?.minZoomRatio ?: 1f
+                    if (minZoom < 1f) 0 else 1
+                },
+                { info -> info.zoomState.value?.minZoomRatio ?: 1f },
+                { info ->
+                    val cameraId = Camera2CameraInfo.from(info).cameraId
+                    provider.availableCameraInfos.indexOfFirst { candidate ->
+                        Camera2CameraInfo.from(candidate).cameraId == cameraId
+                    }
+                },
+            ),
+        ) ?: return cameraInfos
+
+        return listOf(preferred)
     }
 }

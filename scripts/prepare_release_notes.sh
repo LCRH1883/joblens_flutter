@@ -74,7 +74,7 @@ while IFS= read -r fragment; do
       echo "Skipping invalid fragment platforms in $fragment"
       ;;
   esac
-done < <(find "$FRAGMENTS_DIR" -maxdepth 1 -type f -name '*.md' | sort)
+done < <(find "$FRAGMENTS_DIR" -maxdepth 1 -type f -name '*.md' ! -name 'README.md' | sort)
 
 prepend_section() {
   local changelog_file="$1"

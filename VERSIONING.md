@@ -4,10 +4,10 @@ This file is the source of truth for Joblens mobile app versioning across Flutte
 
 ## Current release
 
-- first shared Android/iOS release: `v0.1.0`
-- Flutter version string: `0.1.0+1000`
-- numeric release code: `1000`
-- zero-padded release code representation: `0001000`
+- current shared Android/iOS release: `v0.1.1`
+- Flutter version string: `0.1.1+1001`
+- numeric release code: `1001`
+- zero-padded release code representation: `0001001`
 
 ## Format
 
@@ -38,20 +38,20 @@ When writing human-facing release notes, you can omit leading zeroes:
 Flutter drives both platform versions from `pubspec.yaml`:
 
 ```yaml
-version: 0.1.0+1000
+version: 0.1.1+1001
 ```
 
 Rules:
 
-- `0.1.0` is the user-facing app version
-- `1000` is the numeric build/release code
+- `0.1.1` is the user-facing app version
+- `1001` is the numeric build/release code
 - update `pubspec.yaml` first for every release
 
 Use the helper script to do that automatically:
 
 ```bash
 cd /Volumes/ExData/Projects/Joblens/joblens_flutter
-bash scripts/set_mobile_version.sh v0.1.0
+bash scripts/set_mobile_version.sh v0.1.1
 ```
 
 ## Mapping to Android
@@ -63,8 +63,8 @@ Android uses:
 
 That means:
 
-- `versionName` becomes `0.1.0`
-- `versionCode` becomes `1000`
+- `versionName` becomes `0.1.1`
+- `versionCode` becomes `1001`
 
 Android requirement:
 
@@ -79,8 +79,8 @@ iOS uses:
 
 That means:
 
-- `CFBundleShortVersionString` becomes `0.1.0`
-- `CFBundleVersion` becomes `1000`
+- `CFBundleShortVersionString` becomes `0.1.1`
+- `CFBundleVersion` becomes `1001`
 
 iOS requirement:
 
@@ -98,6 +98,7 @@ If one platform needs a platform-specific follow-up build:
 Examples:
 
 - shared release `v0.1.0` -> `0.1.0+1000`
+- shared release `v0.1.1` -> `0.1.1+1001`
 - Android-only rebuild for the same release -> `0.1.0+1001`
 - iOS-only rebuild for the same release -> `0.1.0+1002`
 - next user-facing patch release `v0.1.1` -> `0.1.1+1001` is not allowed if `1001` was already used
@@ -140,7 +141,7 @@ For `pubspec.yaml`, use the integer form after `+`.
 2. Update `pubspec.yaml` with:
 
 ```bash
-bash scripts/set_mobile_version.sh v0.1.0
+bash scripts/set_mobile_version.sh v0.1.1
 ```
 
 3. Run:
@@ -158,7 +159,7 @@ bash scripts/set_mobile_version.sh v0.1.0
 6. Generate release notes:
 
 ```bash
-bash scripts/prepare_release_notes.sh v0.1.0
+bash scripts/prepare_release_notes.sh v0.1.1
 ```
 
 7. Review:

@@ -90,6 +90,13 @@ class CameraSettings {
     );
   }
 
+  CameraSettings normalizedForLaunch() {
+    if (lensDirection == CameraLensDirection.back) {
+      return copyWith(zoomStop: 1.0);
+    }
+    return this;
+  }
+
   Map<String, Object?> toJson() {
     return {
       'rapidCaptureMode': rapidCaptureMode,
@@ -111,9 +118,9 @@ class CameraSettings {
         (json['zoomStop'] as num?)?.toDouble() ??
         (json['zoomLevel'] as num?)?.toDouble() ??
         1.0;
-    // Older native-camera sessions could persist 0.5x on the back camera,
-    // which reopens into the ultra-wide perspective on iPhone. Treat 1.0x
-    // as the minimum persisted rear-camera default.
+    // Older native-camera sessions could persist sub-1.0x values on the back
+    // camera, which reopens into the ultra-wide perspective on some devices.
+    // Treat 1.0x as the minimum persisted rear-camera value.
     if (lensDirection == CameraLensDirection.back && zoomStop < 1.0) {
       zoomStop = 1.0;
     }

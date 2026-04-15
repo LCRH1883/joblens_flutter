@@ -593,13 +593,19 @@ private final class NativeCameraViewController: UIViewController {
       maxZoom = max(device.activeFormat.videoMaxZoomFactor, 1)
     }
 
-    let preferredStops: [CGFloat] = [0.5, 1, 2, 3, 5]
     var stops: [CGFloat] = []
-    for raw in preferredStops {
-      let clamped = max(minZoom, min(raw, maxZoom))
+    func addStop(_ value: CGFloat) {
+      let clamped = max(minZoom, min(value, maxZoom))
       if stops.contains(where: { abs($0 - clamped) < 0.05 }) == false {
         stops.append(clamped)
       }
+    }
+    if minZoom < 1 {
+      addStop(minZoom)
+    }
+    addStop(1)
+    for candidate: CGFloat in [2, 3, 5] where candidate >= minZoom && candidate <= maxZoom {
+      addStop(candidate)
     }
     if stops.isEmpty {
       stops = [currentZoomFactor]
@@ -1094,13 +1100,16 @@ private final class NativeCameraViewController: UIViewController {
     case .front:
       preferredTypes = [.builtInTrueDepthCamera, .builtInWideAngleCamera]
     default:
-      // Prefer the standard rear wide camera. Falling back to ultra-wide by
-      // default produces the distorted perspective the app should avoid.
+      // Prefer the virtual multi-camera device when available so phones like
+      // iPhone 13 can expose 0.5x wide-angle while still opening at 1.0x.
+      // The Flutter launch settings already normalize rear-camera startup to
+      // 1.0x, so selecting a dual/triple camera here does not reopen into the
+      // distorted ultra-wide view by default.
       preferredTypes = [
-        .builtInWideAngleCamera,
-        .builtInDualCamera,
         .builtInDualWideCamera,
         .builtInTripleCamera,
+        .builtInDualCamera,
+        .builtInWideAngleCamera,
         .builtInUltraWideCamera,
       ]
     }

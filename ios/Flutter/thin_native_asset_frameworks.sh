@@ -3,6 +3,8 @@ set -eu
 
 APP_FRAMEWORKS_DIR="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
 ARCH_LIST="${ARCHS:-}"
+DEBUG_INFO_FORMAT="${DEBUG_INFORMATION_FORMAT:-}"
+DWARF_OUTPUT_DIR="${DWARF_DSYM_FOLDER_PATH:-}"
 
 if [ -z "${ARCH_LIST}" ] || [ ! -d "${APP_FRAMEWORKS_DIR}" ]; then
   exit 0
@@ -46,5 +48,35 @@ thin_framework_binary() {
   trap - EXIT HUP INT TERM
 }
 
-thin_framework_binary "${APP_FRAMEWORKS_DIR}/objective_c.framework/objective_c"
-thin_framework_binary "${APP_FRAMEWORKS_DIR}/sqlite3.framework/sqlite3"
+generate_framework_dsym() {
+  framework_name="$1"
+  binary_name="$2"
+  binary_path="${APP_FRAMEWORKS_DIR}/${framework_name}.framework/${binary_name}"
+
+  if [ "${DEBUG_INFO_FORMAT}" != "dwarf-with-dsym" ] || [ -z "${DWARF_OUTPUT_DIR}" ] || [ ! -f "${binary_path}" ]; then
+    return 0
+  fi
+
+  dsym_path="${DWARF_OUTPUT_DIR}/${framework_name}.framework.dSYM"
+  log_file="$(mktemp)"
+
+  rm -rf "${dsym_path}"
+  if ! dsymutil "${binary_path}" -o "${dsym_path}" 2>"${log_file}"; then
+    cat "${log_file}" >&2
+    rm -rf "${dsym_path}"
+    rm -f "${log_file}"
+    return 1
+  fi
+
+  rm -f "${log_file}"
+}
+
+process_framework() {
+  framework_name="$1"
+  binary_name="$2"
+  thin_framework_binary "${APP_FRAMEWORKS_DIR}/${framework_name}.framework/${binary_name}"
+  generate_framework_dsym "${framework_name}" "${binary_name}"
+}
+
+process_framework "objective_c" "objective_c"
+process_framework "sqlite3" "sqlite3"
