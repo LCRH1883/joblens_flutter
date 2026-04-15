@@ -4,10 +4,10 @@ This file is the source of truth for Joblens mobile app versioning across Flutte
 
 ## Current release
 
-- current shared Android/iOS release: `v0.1.2`
-- Flutter version string: `0.1.2+1002`
-- numeric release code: `1002`
-- zero-padded release code representation: `0001002`
+- current shared Android/iOS release: `v0.1.3`
+- Flutter version string: `0.1.3+1003`
+- numeric release code: `1003`
+- zero-padded release code representation: `0001003`
 
 ## Format
 
@@ -38,20 +38,20 @@ When writing human-facing release notes, you can omit leading zeroes:
 Flutter drives both platform versions from `pubspec.yaml`:
 
 ```yaml
-version: 0.1.2+1002
+version: 0.1.3+1003
 ```
 
 Rules:
 
-- `0.1.2` is the user-facing app version
-- `1002` is the numeric build/release code
+- `0.1.3` is the user-facing app version
+- `1003` is the numeric build/release code
 - update `pubspec.yaml` first for every release
 
 Use the helper script to do that automatically:
 
 ```bash
 cd /Volumes/ExData/Projects/Joblens/joblens_flutter
-bash scripts/set_mobile_version.sh v0.1.2
+bash scripts/set_mobile_version.sh v0.1.3
 ```
 
 ## Mapping to Android
@@ -63,8 +63,8 @@ Android uses:
 
 That means:
 
-- `versionName` becomes `0.1.2`
-- `versionCode` becomes `1002`
+- `versionName` becomes `0.1.3`
+- `versionCode` becomes `1003`
 
 Android requirement:
 
@@ -79,8 +79,8 @@ iOS uses:
 
 That means:
 
-- `CFBundleShortVersionString` becomes `0.1.2`
-- `CFBundleVersion` becomes `1002`
+- `CFBundleShortVersionString` becomes `0.1.3`
+- `CFBundleVersion` becomes `1003`
 
 iOS requirement:
 
@@ -100,6 +100,7 @@ Examples:
 - shared release `v0.1.0` -> `0.1.0+1000`
 - shared release `v0.1.1` -> `0.1.1+1001`
 - shared release `v0.1.2` -> `0.1.2+1002`
+- shared release `v0.1.3` -> `0.1.3+1003`
 - Android-only rebuild for the same release -> `0.1.0+1001`
 - iOS-only rebuild for the same release -> `0.1.0+1002`
 - next user-facing patch release `v0.1.1` -> `0.1.1+1001` is not allowed if `1001` was already used
@@ -142,7 +143,7 @@ For `pubspec.yaml`, use the integer form after `+`.
 2. Update `pubspec.yaml` with:
 
 ```bash
-bash scripts/set_mobile_version.sh v0.1.2
+bash scripts/set_mobile_version.sh v0.1.3
 ```
 
 3. Run:
