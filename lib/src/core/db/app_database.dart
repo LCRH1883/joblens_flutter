@@ -2453,7 +2453,6 @@ class AppDatabase {
           AND a.exists_in_phone_storage = 1
           AND (
             TRIM(COALESCE(a.remote_asset_id, '')) = ''
-            OR m.asset_id IS NULL
             OR m.status = 'pending'
             OR (m.status = 'failed' AND COALESCE(m.last_error, '') = 'needs_client_upload')
           )

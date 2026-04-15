@@ -479,10 +479,10 @@ class SyncService {
     final needsActiveProviderUpload =
         hasCanonicalRemoteAsset &&
         activeProviderConnectionId != null &&
-        (activeMirror == null ||
-            activeMirror.status == 'pending' ||
-            (activeMirror.status == 'failed' &&
-                activeMirror.lastError == 'needs_client_upload'));
+        (activeMirror != null &&
+            (activeMirror.status == 'pending' ||
+                (activeMirror.status == 'failed' &&
+                    activeMirror.lastError == 'needs_client_upload')));
     if (hasCanonicalRemoteAsset && !needsActiveProviderUpload) {
       await _db.completeBlobUpload(task.assetId, task.uploadGeneration);
       await _db.completeEntitySync(SyncEntityType.asset, task.assetId);

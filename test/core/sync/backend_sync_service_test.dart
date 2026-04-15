@@ -845,6 +845,70 @@ void main() {
     },
   );
 
+  test(
+    'imported asset with canonical remote id does not re-upload when mirror metadata is missing',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(projectId: 'remote-project-1');
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
+
+      final project = await harness.createProject('Library');
+      await harness.database.markProjectSynced(
+        project.id,
+        remoteProjectId: 'remote-project-1',
+        remoteRev: 1,
+      );
+      await harness.database.updateProviderAccountStatus(
+        CloudProviderType.dropbox,
+        connectionStatus: ProviderConnectionStatus.ready,
+        connectionId: 'conn-dropbox',
+        displayName: 'Dropbox',
+        accountIdentifier: 'jane@example.com',
+        isActive: true,
+      );
+
+      final asset = await harness.ingestAsset(projectId: project.id, seed: 57);
+      await harness.database.updateAssetLocalMedia(
+        assetId: asset.id,
+        localPath: asset.localPath,
+        thumbPath: asset.thumbPath,
+        hash: asset.hash,
+        cloudState: AssetCloudState.localAndCloud,
+        existsInPhoneStorage: true,
+      );
+      await harness.database.updateAssetCloudMetadata(
+        assetId: asset.id,
+        remoteAssetId: 'asset-remote-imported',
+        remoteProvider: CloudProviderType.dropbox.key,
+        remoteFileId: 'provider-file-imported',
+        uploadPath: 'Joblens/Library/imported.jpg',
+        cloudState: AssetCloudState.localAndCloud,
+        lastSyncErrorCode: null,
+        remoteRev: 2,
+      );
+      await harness.database.completeBlobUpload(
+        asset.id,
+        asset.uploadGeneration,
+      );
+
+      await harness.database.markBootstrapCompleted();
+      await syncService.kick(forceBootstrap: false);
+
+      final updated = await harness.database.getAssetById(asset.id);
+      final uploads = await harness.database.getAllBlobUploadTasks();
+      expect(fakeClient.uploadCalls, 0);
+      expect(updated?.remoteAssetId, 'asset-remote-imported');
+      expect(updated?.cloudState, AssetCloudState.localAndCloud);
+      expect(uploads.where((task) => task.assetId == asset.id), isEmpty);
+    },
+  );
+
   test('existing remote asset moves directly without re-uploading', () async {
     final harness = await _createHarness();
     addTearDown(harness.dispose);
