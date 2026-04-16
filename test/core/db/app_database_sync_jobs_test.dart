@@ -6,6 +6,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:joblens_flutter/src/core/db/app_database.dart';
 import 'package:joblens_flutter/src/core/models/cloud_provider.dart';
+import 'package:joblens_flutter/src/core/models/entity_sync_record.dart';
 import 'package:joblens_flutter/src/core/models/photo_asset.dart';
 import 'package:joblens_flutter/src/core/models/provider_account.dart';
 import 'package:joblens_flutter/src/core/models/sync_job.dart';
@@ -255,6 +256,63 @@ void main() {
       expect(tasks.single.assetId, 'asset-1');
       expect(tasks.single.uploadGeneration, 1);
       expect(tasks.single.localUri, '/tmp/asset-1.jpg');
+    },
+  );
+
+  test(
+    'completeEntitySync does not clear a newer project move record',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_db_entity_sync_guard_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      addTearDown(database.close);
+
+      final inboxId = await database.ensureDefaultProject();
+      final libraryId = await database.createProject('Library');
+      await database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-1',
+        projectId: inboxId,
+        remoteAssetId: 'remote-1',
+        sha256: 'e' * 64,
+        createdAt: DateTime(2026, 4, 16),
+      );
+      await database.enqueueSyncJob(
+        assetId: 'asset-1',
+        projectId: inboxId,
+        provider: CloudProviderType.backend,
+      );
+
+      final originalRecord = (await database.getAllEntitySyncRecords())
+          .where((record) => record.entityType == SyncEntityType.asset)
+          .single;
+      await database.moveAssetToProject('asset-1', libraryId);
+
+      await database.completeEntitySync(
+        SyncEntityType.asset,
+        'asset-1',
+        upToLocalSeq: originalRecord.localSeq,
+      );
+
+      final remainingRecords = (await database.getAllEntitySyncRecords())
+          .where((record) => record.entityType == SyncEntityType.asset)
+          .toList(growable: false);
+      final updatedAsset = await database.getAssetById('asset-1');
+
+      expect(remainingRecords, hasLength(1));
+      expect(
+        remainingRecords.single.localSeq,
+        greaterThan(originalRecord.localSeq),
+      );
+      expect(updatedAsset?.projectId, libraryId);
+      expect((await database.getSyncJobs()).single.projectId, libraryId);
     },
   );
 }

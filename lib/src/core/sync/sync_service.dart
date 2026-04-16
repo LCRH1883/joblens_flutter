@@ -363,13 +363,21 @@ class SyncService {
   Future<void> _pushProjectRecord(EntitySyncRecord record) async {
     final projectId = int.tryParse(record.entityId);
     if (projectId == null) {
-      await _db.completeEntitySync(record.entityType, record.entityId);
+      await _db.completeEntitySync(
+        record.entityType,
+        record.entityId,
+        upToLocalSeq: record.localSeq,
+      );
       return;
     }
 
     final project = await _db.getProjectById(projectId);
     if (project == null) {
-      await _db.completeEntitySync(record.entityType, record.entityId);
+      await _db.completeEntitySync(
+        record.entityType,
+        record.entityId,
+        upToLocalSeq: record.localSeq,
+      );
       return;
     }
 
@@ -383,27 +391,43 @@ class SyncService {
         remoteProjectId: project.remoteProjectId,
         remoteRev: project.remoteRev,
       );
-      await _db.completeEntitySync(record.entityType, record.entityId);
+      await _db.completeEntitySync(
+        record.entityType,
+        record.entityId,
+        upToLocalSeq: record.localSeq,
+      );
       return;
     }
 
     final remoteProjectId = await syncProject(project);
     if (remoteProjectId != null && remoteProjectId.isNotEmpty) {
-      await _db.completeEntitySync(record.entityType, record.entityId);
+      await _db.completeEntitySync(
+        record.entityType,
+        record.entityId,
+        upToLocalSeq: record.localSeq,
+      );
     }
   }
 
   Future<void> _pushAssetRecord(EntitySyncRecord record) async {
     final asset = await _db.getAssetById(record.entityId);
     if (asset == null) {
-      await _db.completeEntitySync(record.entityType, record.entityId);
+      await _db.completeEntitySync(
+        record.entityType,
+        record.entityId,
+        upToLocalSeq: record.localSeq,
+      );
       return;
     }
 
     if (asset.status == AssetStatus.deleted || asset.deletedAt != null) {
       final remoteAssetId = asset.remoteAssetId?.trim();
       if (remoteAssetId == null || remoteAssetId.isEmpty) {
-        await _db.completeEntitySync(record.entityType, record.entityId);
+        await _db.completeEntitySync(
+          record.entityType,
+          record.entityId,
+          upToLocalSeq: record.localSeq,
+        );
         return;
       }
 
@@ -414,13 +438,21 @@ class SyncService {
         lastSyncErrorCode: null,
         dirtyFields: const [],
       );
-      await _db.completeEntitySync(record.entityType, record.entityId);
+      await _db.completeEntitySync(
+        record.entityType,
+        record.entityId,
+        upToLocalSeq: record.localSeq,
+      );
       return;
     }
 
     final remoteAssetId = asset.remoteAssetId?.trim();
     if (remoteAssetId == null || remoteAssetId.isEmpty) {
-      await _db.completeEntitySync(record.entityType, record.entityId);
+      await _db.completeEntitySync(
+        record.entityType,
+        record.entityId,
+        upToLocalSeq: record.localSeq,
+      );
       return;
     }
 
@@ -441,7 +473,11 @@ class SyncService {
       remoteRev: moved.revision,
       dirtyFields: const [],
     );
-    await _db.completeEntitySync(record.entityType, record.entityId);
+    await _db.completeEntitySync(
+      record.entityType,
+      record.entityId,
+      upToLocalSeq: record.localSeq,
+    );
   }
 
   Future<bool> _advanceBlobUploads() async {
@@ -489,7 +525,11 @@ class SyncService {
                     activeMirror.lastError == 'needs_client_upload')));
     if (hasCanonicalRemoteAsset && !needsActiveProviderUpload) {
       await _db.completeBlobUpload(task.assetId, task.uploadGeneration);
-      await _db.completeEntitySync(SyncEntityType.asset, task.assetId);
+      await _db.completeEntitySync(
+        SyncEntityType.asset,
+        task.assetId,
+        upToLocalSeq: asset.localSeq,
+      );
       await _db.updateAssetCloudMetadata(
         assetId: asset.id,
         cloudState: AssetCloudState.localAndCloud,
@@ -525,7 +565,11 @@ class SyncService {
             remoteProjectId: remoteProjectId,
           );
           await _db.completeBlobUpload(task.assetId, task.uploadGeneration);
-          await _db.completeEntitySync(SyncEntityType.asset, task.assetId);
+          await _db.completeEntitySync(
+            SyncEntityType.asset,
+            task.assetId,
+            upToLocalSeq: asset.localSeq,
+          );
           await _db.updateAssetCloudMetadata(
             assetId: asset.id,
             cloudState: AssetCloudState.localAndCloud,
@@ -552,7 +596,11 @@ class SyncService {
         dirtyFields: const [],
       );
       await _db.completeBlobUpload(task.assetId, task.uploadGeneration);
-      await _db.completeEntitySync(SyncEntityType.asset, task.assetId);
+      await _db.completeEntitySync(
+        SyncEntityType.asset,
+        task.assetId,
+        upToLocalSeq: asset.localSeq,
+      );
       await _db.updateAssetSyncError(asset.id, null);
       await _logInfo(
         'upload_completed',
@@ -568,7 +616,11 @@ class SyncService {
       );
       if (recovered) {
         await _db.completeBlobUpload(task.assetId, task.uploadGeneration);
-        await _db.completeEntitySync(SyncEntityType.asset, task.assetId);
+        await _db.completeEntitySync(
+          SyncEntityType.asset,
+          task.assetId,
+          upToLocalSeq: asset.localSeq,
+        );
         await _db.updateAssetCloudMetadata(
           assetId: asset.id,
           cloudState: AssetCloudState.localAndCloud,

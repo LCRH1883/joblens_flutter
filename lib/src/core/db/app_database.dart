@@ -2485,12 +2485,21 @@ class AppDatabase {
 
   Future<void> completeEntitySync(
     SyncEntityType entityType,
-    String entityId,
-  ) async {
+    String entityId, {
+    int? upToLocalSeq,
+  }) async {
+    if (upToLocalSeq == null) {
+      await _db.delete(
+        'entity_sync',
+        where: 'entity_type = ? AND entity_id = ?',
+        whereArgs: [entityType.name, entityId],
+      );
+      return;
+    }
     await _db.delete(
       'entity_sync',
-      where: 'entity_type = ? AND entity_id = ?',
-      whereArgs: [entityType.name, entityId],
+      where: 'entity_type = ? AND entity_id = ? AND local_seq <= ?',
+      whereArgs: [entityType.name, entityId, upToLocalSeq],
     );
   }
 
