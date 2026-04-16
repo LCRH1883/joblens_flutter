@@ -30,7 +30,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
   @override
   Widget build(BuildContext context) {
     final store = ref.watch(joblensStoreListenableProvider);
-    final assets = store.assets;
+    final assets = store.galleryAssets;
     _normalizeSelectionState(assets);
 
     final grouped = _groupByDay(assets);
@@ -74,21 +74,24 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                   tooltip: 'Archive selected',
                   onPressed: store.isBusy || _selectedAssetIds.isEmpty
                       ? null
-                      : () => _archiveSelectedToCloudOnly(context, store, assets),
+                      : () =>
+                            _archiveSelectedToCloudOnly(context, store, assets),
                   icon: const Icon(Icons.archive_outlined),
                 ),
                 IconButton(
                   tooltip: 'Download selected',
                   onPressed: store.isBusy || _selectedAssetIds.isEmpty
                       ? null
-                      : () => _downloadSelectedToJoblens(context, store, assets),
+                      : () =>
+                            _downloadSelectedToJoblens(context, store, assets),
                   icon: const Icon(Icons.download_outlined),
                 ),
                 IconButton(
                   tooltip: 'Copy selected to phone gallery',
                   onPressed: store.isBusy || _selectedAssetIds.isEmpty
                       ? null
-                      : () => _copySelectedToPhoneGallery(context, store, assets),
+                      : () =>
+                            _copySelectedToPhoneGallery(context, store, assets),
                   icon: const Icon(Icons.add_to_photos_outlined),
                 ),
                 IconButton(
@@ -112,10 +115,10 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                   onPressed: store.isBusy
                       ? null
                       : () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const PhotoLibraryImportPage(),
-                            ),
+                          MaterialPageRoute<void>(
+                            builder: (_) => const PhotoLibraryImportPage(),
                           ),
+                        ),
                   icon: const Icon(Icons.add_photo_alternate_outlined),
                 ),
               ],
@@ -139,7 +142,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
         padding: const EdgeInsets.all(24),
         child: Center(
           child: Text(
-            'No photos yet. Capture with Joblens or import from your phone gallery.',
+            'No photos on this device yet. Capture with Joblens or import from your phone gallery.',
             style: Theme.of(context).textTheme.bodyLarge,
             textAlign: TextAlign.center,
           ),
@@ -443,9 +446,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     final copied = result.copiedCount;
     final skipped = result.skippedCount;
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
 
@@ -479,15 +480,11 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     }
 
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
 
-    messenger.showSnackBar(
-      SnackBar(content: Text(result.summaryMessage())),
-    );
+    messenger.showSnackBar(SnackBar(content: Text(result.summaryMessage())));
   }
 
   Future<void> _archiveSelectedToCloudOnly(
@@ -509,15 +506,11 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     }
 
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
 
-    messenger.showSnackBar(
-      SnackBar(content: Text(result.summaryMessage())),
-    );
+    messenger.showSnackBar(SnackBar(content: Text(result.summaryMessage())));
   }
 
   void _clearSelection() {
@@ -642,9 +635,7 @@ class _AssetTile extends StatelessWidget {
           Positioned(
             left: 4,
             bottom: 4,
-            child: AssetSyncBadge(
-              status: store.assetSyncStatusFor(asset.id),
-            ),
+            child: AssetSyncBadge(status: store.assetSyncStatusFor(asset.id)),
           ),
         ],
       ),

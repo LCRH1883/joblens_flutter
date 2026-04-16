@@ -114,6 +114,61 @@ void main() {
     expect(find.text('1 selected'), findsOneWidget);
   });
 
+  testWidgets('GalleryPage hides cloud-only assets', (tester) async {
+    final harness = (await tester.runAsync(_createHarness))!;
+    addTearDown(harness.dispose);
+
+    final projectId = await tester.runAsync(
+      () => harness.database.ensureDefaultProject(),
+    );
+    await tester.runAsync(
+      () => harness.database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-cloud-only',
+        projectId: projectId!,
+        remoteAssetId: 'remote-cloud-only',
+        sha256: 'a' * 64,
+        createdAt: DateTime(2026, 4, 14),
+        remotePath: 'Joblens/Inbox/cloud-only.jpg',
+      ),
+    );
+    await tester.runAsync(harness.store.refresh);
+
+    await tester.pumpWidget(_wrapWithStore(harness.store, const GalleryPage()));
+    await tester.pump();
+
+    expect(find.byType(Image), findsNothing);
+    expect(
+      find.text(
+        'No photos on this device yet. Capture with Joblens or import from your phone gallery.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('GalleryPage shows assets with a valid local original', (
+    tester,
+  ) async {
+    final harness = (await tester.runAsync(_createHarness))!;
+    addTearDown(harness.dispose);
+
+    final source = File(p.join(harness.tempDir.path, 'gallery-local.jpg'));
+    await tester.runAsync(() => source.writeAsBytes(List<int>.filled(128, 4)));
+    await tester.runAsync(
+      () => harness.store.ingestCapturedFile(source, processSyncNow: true),
+    );
+
+    await tester.pumpWidget(_wrapWithStore(harness.store, const GalleryPage()));
+    await tester.pump();
+
+    expect(find.byType(Image), findsOneWidget);
+    expect(
+      find.text(
+        'No photos on this device yet. Capture with Joblens or import from your phone gallery.',
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets('ProjectDetailPage supports selecting multiple photos', (
     tester,
   ) async {
@@ -197,29 +252,32 @@ void main() {
     expect(find.byTooltip('Archive in Joblens'), findsNothing);
   });
 
-  testWidgets('PhotoViewerPage shows archive action for assets with a local original', (
-    tester,
-  ) async {
-    final harness = (await tester.runAsync(_createHarness))!;
-    addTearDown(harness.dispose);
+  testWidgets(
+    'PhotoViewerPage shows archive action for assets with a local original',
+    (tester) async {
+      final harness = (await tester.runAsync(_createHarness))!;
+      addTearDown(harness.dispose);
 
-    final source = File(p.join(harness.tempDir.path, 'viewer-archive.jpg'));
-    await tester.runAsync(() => source.writeAsBytes(List<int>.filled(128, 6)));
-    await tester.runAsync(
-      () => harness.store.ingestCapturedFile(source, processSyncNow: true),
-    );
+      final source = File(p.join(harness.tempDir.path, 'viewer-archive.jpg'));
+      await tester.runAsync(
+        () => source.writeAsBytes(List<int>.filled(128, 6)),
+      );
+      await tester.runAsync(
+        () => harness.store.ingestCapturedFile(source, processSyncNow: true),
+      );
 
-    final asset = harness.store.assets.single;
-    await tester.pumpWidget(
-      _wrapWithStore(
-        harness.store,
-        PhotoViewerPage(assets: [asset], initialIndex: 0),
-      ),
-    );
-    await tester.pump();
+      final asset = harness.store.assets.single;
+      await tester.pumpWidget(
+        _wrapWithStore(
+          harness.store,
+          PhotoViewerPage(assets: [asset], initialIndex: 0),
+        ),
+      );
+      await tester.pump();
 
-    expect(find.byTooltip('Archive in Joblens'), findsOneWidget);
-  });
+      expect(find.byTooltip('Archive in Joblens'), findsOneWidget);
+    },
+  );
 
   testWidgets('GalleryPage selection toolbar shows download action', (
     tester,
@@ -245,44 +303,137 @@ void main() {
     expect(find.byTooltip('Download selected'), findsOneWidget);
   });
 
-  testWidgets('ProjectDetailPage shows project and selection download actions', (
-    tester,
-  ) async {
-    final harness = (await tester.runAsync(_createHarness))!;
-    addTearDown(harness.dispose);
+  testWidgets(
+    'GalleryPage hides archived cloud-only assets and shows them again after download',
+    (tester) async {
+      final harness = (await tester.runAsync(_createHarness))!;
+      addTearDown(harness.dispose);
 
-    await tester.runAsync(
-      () => harness.store.createProject('Download Project'),
-    );
-    final project = harness.store.projects.firstWhere(
-      (item) => item.name == 'Download Project',
-    );
+      final source = File(
+        p.join(harness.tempDir.path, 'gallery-lifecycle.jpg'),
+      );
+      await tester.runAsync(
+        () => source.writeAsBytes(List<int>.filled(128, 11)),
+      );
+      await tester.runAsync(
+        () => harness.store.ingestCapturedFile(source, processSyncNow: true),
+      );
 
-    final source = File(p.join(harness.tempDir.path, 'project-download.jpg'));
-    await tester.runAsync(() => source.writeAsBytes(List<int>.filled(128, 5)));
-    await tester.runAsync(
-      () => harness.store.ingestCapturedFile(source, projectId: project.id),
-    );
+      final asset = harness.store.assets.single;
+      await tester.runAsync(
+        () => harness.database.updateAssetCloudMetadata(
+          assetId: asset.id,
+          remoteAssetId: 'remote-gallery-lifecycle',
+          uploadPath: 'Joblens/Inbox/gallery-lifecycle.jpg',
+          cloudState: AssetCloudState.localAndCloud,
+        ),
+      );
+      await tester.runAsync(harness.store.refresh);
 
-    final latestProject = harness.store.projects.firstWhere(
-      (item) => item.id == project.id,
-    );
-    await tester.pumpWidget(
-      _wrapWithStore(harness.store, ProjectDetailPage(project: latestProject)),
-    );
-    await tester.pump();
+      await tester.pumpWidget(
+        _wrapWithStore(harness.store, const GalleryPage()),
+      );
+      await tester.pump();
+      expect(find.byType(Image), findsOneWidget);
 
-    expect(find.byTooltip('Archive project photos'), findsOneWidget);
-    expect(find.byTooltip('Download missing photos'), findsOneWidget);
+      await tester.runAsync(
+        () => harness.database.updateAssetLocalMedia(
+          assetId: asset.id,
+          localPath: '',
+          thumbPath: '',
+          hash: asset.hash,
+          cloudState: AssetCloudState.cloudOnly,
+        ),
+      );
+      await tester.runAsync(harness.store.refresh);
+      await tester.pump();
 
-    await tester.tap(find.byTooltip('Select photos'));
-    await tester.pump();
-    await tester.tap(find.byType(Image).first);
-    await tester.pump();
+      expect(find.byType(Image), findsNothing);
+      expect(
+        find.text(
+          'No photos on this device yet. Capture with Joblens or import from your phone gallery.',
+        ),
+        findsOneWidget,
+      );
 
-    expect(find.byTooltip('Archive selected'), findsOneWidget);
-    expect(find.byTooltip('Download selected'), findsOneWidget);
-  });
+      final downloadedOriginal = File(
+        p.join(harness.tempDir.path, 'gallery-downloaded.jpg'),
+      );
+      final downloadedThumb = File(
+        p.join(harness.tempDir.path, 'gallery-downloaded-thumb.jpg'),
+      );
+      await tester.runAsync(
+        () => downloadedOriginal.writeAsBytes(List<int>.filled(128, 12)),
+      );
+      await tester.runAsync(
+        () => downloadedThumb.writeAsBytes(List<int>.filled(64, 13)),
+      );
+      await tester.runAsync(
+        () => harness.database.updateAssetLocalMedia(
+          assetId: asset.id,
+          localPath: downloadedOriginal.path,
+          thumbPath: downloadedThumb.path,
+          hash: asset.hash,
+          cloudState: AssetCloudState.localAndCloud,
+        ),
+      );
+      await tester.runAsync(harness.store.refresh);
+      await tester.pump();
+
+      expect(find.byType(Image), findsOneWidget);
+      expect(
+        find.text(
+          'No photos on this device yet. Capture with Joblens or import from your phone gallery.',
+        ),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'ProjectDetailPage shows project and selection download actions',
+    (tester) async {
+      final harness = (await tester.runAsync(_createHarness))!;
+      addTearDown(harness.dispose);
+
+      await tester.runAsync(
+        () => harness.store.createProject('Download Project'),
+      );
+      final project = harness.store.projects.firstWhere(
+        (item) => item.name == 'Download Project',
+      );
+
+      final source = File(p.join(harness.tempDir.path, 'project-download.jpg'));
+      await tester.runAsync(
+        () => source.writeAsBytes(List<int>.filled(128, 5)),
+      );
+      await tester.runAsync(
+        () => harness.store.ingestCapturedFile(source, projectId: project.id),
+      );
+
+      final latestProject = harness.store.projects.firstWhere(
+        (item) => item.id == project.id,
+      );
+      await tester.pumpWidget(
+        _wrapWithStore(
+          harness.store,
+          ProjectDetailPage(project: latestProject),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byTooltip('Archive project photos'), findsOneWidget);
+      expect(find.byTooltip('Download missing photos'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Select photos'));
+      await tester.pump();
+      await tester.tap(find.byType(Image).first);
+      await tester.pump();
+
+      expect(find.byTooltip('Archive selected'), findsOneWidget);
+      expect(find.byTooltip('Download selected'), findsOneWidget);
+    },
+  );
 }
 
 Widget _wrapWithStore(JoblensStore store, Widget child) {

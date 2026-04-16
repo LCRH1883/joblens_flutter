@@ -1,6 +1,8 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'src/app/app.dart';
@@ -16,11 +18,23 @@ import 'src/core/sync/sync_service.dart';
 import 'src/features/auth/auth_state.dart';
 import 'src/features/camera/camera_providers.dart';
 
+const _kSentryDsn =
+    'https://3852b737679f3634c9720dcff660a462@o4511228065087488.ingest.us.sentry.io/4511228254814208';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final config = await AppRuntimeConfiguration.load();
-  await _runJoblensApp(config);
+  await SentryFlutter.init((options) {
+    options.dsn = _kSentryDsn;
+    options.environment = kReleaseMode ? 'production' : 'debug';
+    options.enableAutoSessionTracking = false;
+    options.tracesSampleRate = 0;
+    options.attachScreenshot = false;
+    options.debug = kDebugMode;
+  }, appRunner: () async {
+    await _runJoblensApp(config);
+  });
 }
 
 Future<void> _runJoblensApp(AppRuntimeConfiguration config) async {

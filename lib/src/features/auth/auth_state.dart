@@ -11,8 +11,6 @@ final appRuntimeConfigurationProvider = Provider<AppRuntimeConfiguration>(
     supabaseUrl: '',
     supabaseAnonKey: '',
     apiBaseUrlOverride: '',
-    sentryDsn: '',
-    sentryEnvironment: '',
   ),
 );
 

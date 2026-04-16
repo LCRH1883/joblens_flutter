@@ -57,20 +57,6 @@ The app accepts either:
 
 If `API_BASE_URL` is omitted, the app defaults to `${SUPABASE_URL}/functions/v1/api/v1`.
 
-Optional crash reporting values:
-
-- `SENTRY_DSN`
-- `SENTRY_ENVIRONMENT`
-
-For the current GlitchTip setup, the DSN host should use the public ingest domain, for example:
-
-```text
-SENTRY_DSN=https://9e4622265d264012a6843834b22d5005@glitch.joblens.xyz/2
-SENTRY_ENVIRONMENT=production
-```
-
-The Flutter app uses `sentry_flutter` only. There are no AndroidManifest or iOS plist crash-reporting overrides required for basic setup.
-
 ## Auth Notes
 
 - Joblens app login uses Supabase Auth email/password sessions.
@@ -86,6 +72,7 @@ The Flutter app uses `sentry_flutter` only. There are no AndroidManifest or iOS 
 /Users/lcrh/Tools/flutter/bin/flutter analyze
 /Users/lcrh/Tools/flutter/bin/flutter test
 ```
+
 
 ## Versioning
 

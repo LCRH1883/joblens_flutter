@@ -305,6 +305,8 @@ class JoblensStore extends ChangeNotifier {
   int get forcedSignOutNoticeCount => _forcedSignOutNoticeCount;
   String? get forcedSignOutMessage => _forcedSignOutMessage;
   List<PhotoAsset> get assets => _assets;
+  List<PhotoAsset> get galleryAssets =>
+      _assets.where(_hasValidLocalOriginal).toList(growable: false);
   List<PhotoAsset> get deletedAssets => _deletedAssets;
   AssetSyncStatus assetSyncStatusFor(String assetId) =>
       _assetSyncStatuses[assetId] ?? AssetSyncStatus.local;

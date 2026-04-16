@@ -37,6 +37,154 @@ target 'Runner' do
 end
 
 post_install do |installer|
+  plugin_source_patches = {
+    File.join(__dir__, '.symlinks', 'plugins', 'sentry_flutter', 'ios', 'sentry_flutter', 'Sources', 'sentry_flutter', 'SentryFlutterPlugin.swift') => [
+      [/
+\s*if\s+let\s+integrations\s*=\s*PrivateSentrySDKOnly\.options\.integrations\s*\{\n
+\s*infos\["integrations"\]\s*=\s*integrations\.filter\s*\{\s*\$0\s*!=\s*"SentrySessionReplayIntegration"\s*\}\n
+\s*\}\n
+/mx, ''],
+    ],
+    File.join(__dir__, '.symlinks', 'plugins', 'sentry_flutter', 'macos', 'sentry_flutter', 'Sources', 'sentry_flutter', 'SentryFlutterPlugin.swift') => [
+      [/
+\s*if\s+let\s+integrations\s*=\s*PrivateSentrySDKOnly\.options\.integrations\s*\{\n
+\s*infos\["integrations"\]\s*=\s*integrations\.filter\s*\{\s*\$0\s*!=\s*"SentrySessionReplayIntegration"\s*\}\n
+\s*\}\n
+/mx, ''],
+    ],
+    File.join(__dir__, '.symlinks', 'plugins', 'sentry_flutter', 'ios', 'sentry_flutter', 'Sources', 'sentry_flutter_objc', 'SentryFlutterReplayScreenshotProvider.m') => [
+      [/kCGBitmapByteOrderDefault \| kCGImageAlphaPremultipliedLast/, 'kCGBitmapByteOrderDefault | (CGBitmapInfo)kCGImageAlphaPremultipliedLast'],
+    ],
+    File.join(__dir__, '.symlinks', 'plugins', 'device_info_plus', 'ios', 'device_info_plus', 'Sources', 'device_info_plus', 'FPPDeviceInfoPlusPlugin.m') => [
+      [/natural_t mem_free = vm_stat\.free_count \* page_size;\n    return mem_free \/ 1048576;/, "uint64_t mem_free = ((uint64_t)vm_stat.free_count) * ((uint64_t)page_size);\n    return (int)(mem_free / 1048576ULL);"],
+    ],
+    File.join(__dir__, '.symlinks', 'plugins', 'share_plus', 'ios', 'share_plus', 'Sources', 'share_plus', 'FPPSharePlusPlugin.m') => [
+      [/
+static UIViewController \*RootViewController\(void\) \{\n
+\s*if \(@available\(iOS 13, \*\)\) \{ \/\/ UIApplication\.keyWindow is deprecated\n
+\s*NSSet \*scenes = \[\[UIApplication sharedApplication\] connectedScenes\];\n
+\s*for \(UIScene \*scene in scenes\) \{\n
+\s*if \(\[scene isKindOfClass:\[UIWindowScene class\]\]\) \{\n
+\s*NSArray \*windows = \(\(UIWindowScene \*\)scene\)\.windows;\n
+\s*for \(UIWindow \*window in windows\) \{\n
+\s*if \(window\.isKeyWindow\) \{\n
+\s*return window\.rootViewController;\n
+\s*\}\n
+\s*\}\n
+\s*\}\n
+\s*\}\n
+\s*return nil;\n
+\s*\} else \{\n
+\s*return \[UIApplication sharedApplication\]\.keyWindow\.rootViewController;\n
+\s*\}\n
+\}\n
+/mx, %q~static UIViewController *RootViewController(void) {
+  NSSet *scenes = [[UIApplication sharedApplication] connectedScenes];
+  for (UIScene *scene in scenes) {
+    if (![scene isKindOfClass:[UIWindowScene class]]) {
+      continue;
+    }
+    for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+      if (window.isKeyWindow) {
+        return window.rootViewController;
+      }
+    }
+  }
+  return nil;
+}
+~],
+    ],
+    File.join(__dir__, '.symlinks', 'plugins', 'photo_manager', 'darwin', 'photo_manager', 'Sources', 'photo_manager', 'PMPlugin.m') => [
+      [/
+- \(UIViewController \*\)getCurrentViewController \{\n
+\s*UIViewController \*controller = UIApplication\.sharedApplication\.keyWindow\.rootViewController;\n
+\s*if \(controller\) \{\n
+\s*UIViewController \*result = controller;\n
+\s*while \(1\) \{\n
+\s*if \(result\.presentedViewController\) \{\n
+\s*result = result\.presentedViewController;\n
+\s*\} else \{\n
+\s*return result;\n
+\s*\}\n
+\s*\}\n
+\s*\}\n
+\s*return nil;\n
+\}\n
+/mx, %q~- (UIViewController *)getCurrentViewController {
+    NSSet *scenes = [[UIApplication sharedApplication] connectedScenes];
+    for (UIScene *scene in scenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) {
+            continue;
+        }
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (!window.isKeyWindow) {
+                continue;
+            }
+            UIViewController *result = window.rootViewController;
+            while (result.presentedViewController) {
+                result = result.presentedViewController;
+            }
+            return result;
+        }
+    }
+    return nil;
+}
+~],
+    ],
+    File.join(__dir__, '.symlinks', 'plugins', 'photo_manager', 'darwin', 'photo_manager', 'Sources', 'photo_manager', 'core', 'PMManager.m') => [
+      [/
+\+ \(void\)openSetting:\(PMResultHandler\*\)result \{\n
+\s*if \(@available\(iOS 10, \*\)\) \{\n
+\s*\[\[UIApplication sharedApplication\] openURL:\[NSURL URLWithString:UIApplicationOpenSettingsURLString\]\n
+\s*options:\[\[NSDictionary alloc\] init\]\n
+\s*completionHandler:\^\(BOOL success\) \{\n
+\s*\[result reply:@\(success\)\];\n
+\s*\}\];\n
+\s*\} else if \(@available\(iOS 8\.0, \*\)\) \{\n
+\s*BOOL success = \[\[UIApplication sharedApplication\] openURL:\[NSURL URLWithString:UIApplicationOpenSettingsURLString\]\];\n
+\s*\[result reply:@\(success\)\];\n
+\s*\} else \{\n
+\s*\[result reply:@false\];\n
+\s*\}\n
+\}\n
+/mx, %q~+ (void)openSetting:(PMResultHandler*)result {
+    [[UIApplication sharedApplication] openURL:[NSURL URLWithString:UIApplicationOpenSettingsURLString]
+                                       options:@{}
+                             completionHandler:^(BOOL success) {
+        [result reply:@(success)];
+    }];
+}
+~],
+      [/
+- \(void\) cancelAllRequest \{\n
+\s*\/\/ PHImageManager methods must be called on the main thread to avoid crashes\n
+\s*dispatch_async\(dispatch_get_main_queue\(\), \^\{\n
+\s*for \(NSString \*key in requestIdMap\) \{\n
+\s*NSNumber \*requestId = requestIdMap\[key\];\n
+\s*\[self\.cachingManager cancelImageRequest:requestId\.intValue\];\n
+\s*\}\n
+\s*\}\);\n
+\s*\[requestIdMap removeAllObjects\];\n
+\}\n
+/mx, %q~- (void) cancelAllRequest {
+    NSDictionary<NSString *, NSNumber *> *pendingRequestIds = [requestIdMap copy];
+    PHCachingImageManager *cachingManager = self.cachingManager;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (NSString *key in pendingRequestIds) {
+            NSNumber *requestId = pendingRequestIds[key];
+            [cachingManager cancelImageRequest:requestId.intValue];
+        }
+    });
+    [requestIdMap removeAllObjects];
+}
+~],
+    ],
+    File.join(__dir__, '.symlinks', 'plugins', 'photo_manager', 'darwin', 'photo_manager', 'Sources', 'photo_manager', 'core', 'PMMD5Utils.m') => [
+      [/#import "PMMD5Utils\.h"\n\n@implementation PMMD5Utils/, "#import \"PMMD5Utils.h\"\n\n#pragma clang diagnostic push\n#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"\n\n@implementation PMMD5Utils"],
+      [/@end\s*\z/, "@end\n\n#pragma clang diagnostic pop\n"],
+    ],
+  }
+
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
 
@@ -44,11 +192,11 @@ post_install do |installer|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
       config.build_settings['SWIFT_VERSION'] = '5.0'
       config.build_settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-      # Xcode 26 surfaces new warnings in third-party pods that we do not own.
-      # Keep app builds unblocked while leaving Runner warnings intact.
       config.build_settings['GCC_TREAT_WARNINGS_AS_ERRORS'] = 'NO'
       config.build_settings['SWIFT_TREAT_WARNINGS_AS_ERRORS'] = 'NO'
-      config.build_settings['GCC_WARN_INHIBIT_ALL_WARNINGS'] = 'YES'
+      if target.name == 'Sentry'
+        config.build_settings['BUILD_LIBRARY_FOR_DISTRIBUTION'] = 'YES'
+      end
     end
 
     next unless target.respond_to?(:source_build_phase) && target.source_build_phase
@@ -59,5 +207,18 @@ post_install do |installer|
 
       target.source_build_phase.remove_build_file(build_file)
     end
+  end
+
+  plugin_source_patches.each do |plugin_path, replacements|
+    next unless File.exist?(plugin_path)
+
+    plugin_source = File.read(plugin_path)
+    patched_source = plugin_source.dup
+    replacements.each do |pattern, replacement|
+      patched_source = patched_source.sub(pattern, replacement)
+    end
+    next if patched_source == plugin_source
+
+    File.write(plugin_path, patched_source)
   end
 end

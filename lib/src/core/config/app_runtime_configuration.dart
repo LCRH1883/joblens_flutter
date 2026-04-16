@@ -8,15 +8,11 @@ class AppRuntimeConfiguration {
     required this.supabaseUrl,
     required this.supabaseAnonKey,
     required this.apiBaseUrlOverride,
-    required this.sentryDsn,
-    required this.sentryEnvironment,
   });
 
   final String supabaseUrl;
   final String supabaseAnonKey;
   final String apiBaseUrlOverride;
-  final String sentryDsn;
-  final String sentryEnvironment;
 
   static Future<AppRuntimeConfiguration> load() async {
     final compileTimeConfig = AppRuntimeConfiguration(
@@ -29,15 +25,7 @@ class AppRuntimeConfiguration {
         const String.fromEnvironment('JOBLENS_SUPABASE_ANON_KEY'),
       ),
       apiBaseUrlOverride: const String.fromEnvironment('API_BASE_URL').trim(),
-      sentryDsn: const String.fromEnvironment('SENTRY_DSN').trim(),
-      sentryEnvironment: const String.fromEnvironment(
-        'SENTRY_ENVIRONMENT',
-      ).trim(),
     );
-
-    if (compileTimeConfig.isFullyConfigured) {
-      return compileTimeConfig;
-    }
 
     final assetValues = await _tryLoadDotEnvAsset();
     if (assetValues.isEmpty) {
@@ -63,14 +51,6 @@ class AppRuntimeConfiguration {
         compileTimeConfig.apiBaseUrlOverride,
         assetValues['API_BASE_URL'] ?? '',
       ),
-      sentryDsn: _firstNonEmpty(
-        compileTimeConfig.sentryDsn,
-        assetValues['SENTRY_DSN'] ?? '',
-      ),
-      sentryEnvironment: _firstNonEmpty(
-        compileTimeConfig.sentryEnvironment,
-        assetValues['SENTRY_ENVIRONMENT'] ?? '',
-      ),
     );
   }
 
@@ -78,8 +58,6 @@ class AppRuntimeConfiguration {
       supabaseUrl.trim().isNotEmpty && supabaseAnonKey.trim().isNotEmpty;
 
   bool get isFullyConfigured => isConfigured && apiBaseUrl.trim().isNotEmpty;
-
-  bool get isSentryConfigured => sentryDsn.trim().isNotEmpty;
 
   String get apiBaseUrl => apiBaseUrlOverride.trim().isNotEmpty
       ? apiBaseUrlOverride.trim()

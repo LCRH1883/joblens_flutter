@@ -28,11 +28,6 @@ The Flutter app needs these runtime values in `.env`:
 - `SUPABASE_ANON_KEY`
 - `API_BASE_URL`
 
-Optional crash-reporting values:
-
-- `SENTRY_DSN`
-- `SENTRY_ENVIRONMENT`
-
 For the standard Joblens setup:
 
 - `SUPABASE_URL` should match backend `SUPABASE_URL`
@@ -45,8 +40,6 @@ Example:
 SUPABASE_URL=https://api.joblens.xyz
 SUPABASE_ANON_KEY=...
 API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
-SENTRY_DSN=https://9e4622265d264012a6843834b22d5005@glitch.joblens.xyz/2
-SENTRY_ENVIRONMENT=production
 ```
 
 ## Secrets that must not be in Flutter
