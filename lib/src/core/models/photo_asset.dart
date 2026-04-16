@@ -17,6 +17,68 @@ class AssetCloudState {
   static const deleted = 'deleted';
 }
 
+// Shared local/cloud presence rules used by sync reconciliation and UI badges.
+class AssetPresence {
+  static String canonicalCloudState({
+    required bool deleted,
+    required bool hasLocalOriginal,
+    required bool hasConfirmedCloudSource,
+  }) {
+    if (deleted) {
+      return AssetCloudState.deleted;
+    }
+    if (hasLocalOriginal && hasConfirmedCloudSource) {
+      return AssetCloudState.localAndCloud;
+    }
+    if (hasConfirmedCloudSource) {
+      return AssetCloudState.cloudOnly;
+    }
+    if (hasLocalOriginal) {
+      return AssetCloudState.localOnly;
+    }
+    return AssetCloudState.cloudOnly;
+  }
+
+  static bool hasConfirmedRemoteFileSource({
+    String? remoteFileId,
+    String? remotePath,
+  }) {
+    final fileId = remoteFileId?.trim() ?? '';
+    if (fileId.isNotEmpty) {
+      return true;
+    }
+    final path = remotePath?.trim() ?? '';
+    return path.isNotEmpty;
+  }
+
+  static bool hasConfirmedCloudSource(
+    PhotoAsset asset, {
+    String? mirrorStatus,
+  }) {
+    if (asset.status == AssetStatus.deleted || asset.deletedAt != null) {
+      return false;
+    }
+    if (!asset.hasRemoteIdentity) {
+      return false;
+    }
+
+    if (mirrorStatus?.trim() == 'mirrored') {
+      return true;
+    }
+
+    switch (asset.cloudState.trim()) {
+      case AssetCloudState.localAndCloud:
+      case AssetCloudState.cloudOnly:
+        return true;
+    }
+
+    return hasConfirmedRemoteFileSource(
+      remoteFileId: asset.remoteFileId,
+      remotePath: asset.uploadPath,
+    );
+  }
+}
+
 class PhotoAsset {
   const PhotoAsset({
     required this.id,
@@ -71,6 +133,10 @@ class PhotoAsset {
   final String? uploadSessionId;
   final String? uploadPath;
   final String? lastSyncErrorCode;
+
+  bool get hasLocalOriginal => localPath.trim().isNotEmpty;
+
+  bool get hasRemoteIdentity => (remoteAssetId?.trim().isNotEmpty ?? false);
 
   String get dayLabel => DateFormat('EEE, MMM d, y').format(createdAt);
 
@@ -182,10 +248,11 @@ class PhotoAsset {
           : DateTime.parse(map['purge_requested_at']! as String),
       remoteRev: map['remote_rev'] as int?,
       localSeq: (map['local_seq'] as int?) ?? 0,
-      dirtyFields: ((jsonDecode((map['dirty_fields'] as String?) ?? '[]')
-              as List<dynamic>))
-          .map((item) => item.toString())
-          .toList(growable: false),
+      dirtyFields:
+          ((jsonDecode((map['dirty_fields'] as String?) ?? '[]')
+                  as List<dynamic>))
+              .map((item) => item.toString())
+              .toList(growable: false),
       uploadGeneration: (map['upload_generation'] as int?) ?? 1,
       ingestState: AssetIngestState.values.byName(
         (map['ingest_state'] as String?) ?? AssetIngestState.ready.name,

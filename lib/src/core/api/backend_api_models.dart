@@ -293,7 +293,9 @@ class SignedInDevice {
       lastSeenAt: _asNullableDateTime(map['lastSeenAt'] ?? map['last_seen_at']),
       lastSyncAt: _asNullableDateTime(map['lastSyncAt'] ?? map['last_sync_at']),
       revokedAt: _asNullableDateTime(map['revokedAt'] ?? map['revoked_at']),
-      revokeReason: _asNullableString(map['revokeReason'] ?? map['revoke_reason']),
+      revokeReason: _asNullableString(
+        map['revokeReason'] ?? map['revoke_reason'],
+      ),
       endedAt: _asNullableDateTime(map['endedAt'] ?? map['ended_at']),
       endReason: _asNullableString(map['endReason'] ?? map['end_reason']),
       isCurrent: _asBool(map['isCurrent'] ?? map['is_current']),
@@ -853,6 +855,7 @@ class BackendAssetRecord {
     this.remoteFileId,
     this.remotePath,
     this.storageState,
+    this.cloudAvailable,
     this.revision,
     this.deleted = false,
     this.softDeletedAt,
@@ -874,6 +877,7 @@ class BackendAssetRecord {
   final String? remoteFileId;
   final String? remotePath;
   final String? storageState;
+  final bool? cloudAvailable;
   final int? revision;
   final bool deleted;
   final DateTime? softDeletedAt;
@@ -922,6 +926,11 @@ class BackendAssetRecord {
       storageState:
           _asNullableString(map['storageState']) ??
           _asNullableString(map['storage_state']),
+      cloudAvailable:
+          map.containsKey('cloudAvailable') ||
+              map.containsKey('cloud_available')
+          ? _asBool(map['cloudAvailable'] ?? map['cloud_available'])
+          : null,
       revision:
           _asNullableInt(map['revision']) ?? _asNullableInt(map['remote_rev']),
       deleted:

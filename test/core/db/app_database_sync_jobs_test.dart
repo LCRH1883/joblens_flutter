@@ -195,7 +195,7 @@ void main() {
   );
 
   test(
-    'backfillEligibleBlobUploads queues active-provider reupload for needs_client_upload mirror',
+    'backfillEligibleBlobUploads queues active-provider reupload for needs_client_upload mirror without phone-gallery presence',
     () async {
       final tempDir = await Directory.systemTemp.createTemp(
         'joblens_db_provider_backfill_',
@@ -236,7 +236,7 @@ void main() {
         thumbPath: '/tmp/asset-1-thumb.jpg',
         hash: 'd' * 64,
         cloudState: AssetCloudState.localAndCloud,
-        existsInPhoneStorage: true,
+        existsInPhoneStorage: false,
       );
       await database.upsertAssetProviderMirror(
         assetId: 'asset-1',

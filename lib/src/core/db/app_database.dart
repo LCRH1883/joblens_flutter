@@ -1651,11 +1651,11 @@ class AppDatabase {
         'upload_path': remotePath,
         'cloud_state':
             cloudState ??
-            (deleted
-                ? AssetCloudState.deleted
-                : existing.localPath.isEmpty
-                ? AssetCloudState.cloudOnly
-                : AssetCloudState.localAndCloud),
+            AssetPresence.canonicalCloudState(
+              deleted: deleted,
+              hasLocalOriginal: existing.hasLocalOriginal,
+              hasConfirmedCloudSource: !deleted,
+            ),
         'status': deleted ? AssetStatus.deleted.name : AssetStatus.active.name,
         'deleted_at': deleted
             ? (softDeletedAt ?? DateTime.now()).toIso8601String()
@@ -2559,7 +2559,6 @@ class AppDatabase {
           AND a.deleted_at IS NULL
           AND a.ingest_state = ?
           AND TRIM(COALESCE(a.local_path, '')) != ''
-          AND a.exists_in_phone_storage = 1
           AND (
             TRIM(COALESCE(a.remote_asset_id, '')) = ''
             OR m.status = 'pending'

@@ -95,4 +95,20 @@ void main() {
     expect(replay.idempotentReplay, isTrue);
     expect(replay.committed, isTrue);
   });
+
+  test('parses backend asset cloud availability explicitly', () {
+    final asset = BackendAssetRecord.fromMap({
+      'assetId': 'asset-1',
+      'sha256': 'a' * 64,
+      'provider': 'google_drive',
+      'remoteFileId': 'provider-file-1',
+      'remotePath': 'Joblens/Inbox/file.jpg',
+      'storageState': 'local_and_cloud',
+      'cloudAvailable': false,
+    });
+
+    expect(asset.assetId, 'asset-1');
+    expect(asset.provider, CloudProviderType.googleDrive);
+    expect(asset.cloudAvailable, isFalse);
+  });
 }

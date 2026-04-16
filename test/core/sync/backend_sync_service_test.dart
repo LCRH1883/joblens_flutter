@@ -1042,6 +1042,158 @@ void main() {
   );
 
   test(
+    'mergeRemoteAssets normalizes local_only snapshots to local_and_cloud when both local and remote sources exist',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-library',
+        listAssetsResponses: {
+          'remote-library': ListAssetsResponse(
+            assets: [
+              BackendAssetRecord(
+                assetId: 'asset-remote-normalized-1',
+                sha256: 'c' * 64,
+                projectId: 'remote-library',
+                filename: 'normalized.jpg',
+                createdAt: DateTime(2026, 1, 2),
+                provider: CloudProviderType.googleDrive,
+                remoteFileId: 'provider-file-normalized-1',
+                remotePath: 'Joblens/Library/normalized.jpg',
+                storageState: AssetCloudState.localOnly,
+                revision: 4,
+                deleted: false,
+              ),
+            ],
+            nextCursor: null,
+          ),
+        },
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
+
+      final project = await harness.createProject('Library');
+      await harness.database.updateProjectRemoteId(
+        project.id,
+        'remote-library',
+      );
+      await harness.database.updateProviderAccountStatus(
+        CloudProviderType.googleDrive,
+        connectionStatus: ProviderConnectionStatus.ready,
+        connectionId: 'conn-1',
+        connectedAt: DateTime(2026, 1, 2),
+        isActive: true,
+      );
+      final asset = await harness.ingestAsset(
+        projectId: project.id,
+        seed: 77,
+        hashOverride: 'c' * 64,
+      );
+      await harness.database.updateAssetCloudMetadata(
+        assetId: asset.id,
+        remoteAssetId: 'asset-remote-normalized-1',
+        remoteProvider: CloudProviderType.googleDrive.key,
+        remoteFileId: 'provider-file-normalized-1',
+        uploadPath: 'Joblens/Library/normalized.jpg',
+        cloudState: AssetCloudState.localOnly,
+        lastSyncErrorCode: null,
+        remoteRev: 3,
+      );
+      await harness.database.completeBlobUpload(
+        asset.id,
+        asset.uploadGeneration,
+      );
+      await harness.database.upsertAssetProviderMirror(
+        assetId: asset.id,
+        providerConnectionId: 'conn-1',
+        status: 'failed',
+        lastError: 'needs_client_upload',
+      );
+
+      final syncedProject = await harness.database.getProjectById(project.id);
+      await syncService.mergeRemoteAssets([syncedProject!]);
+
+      final updated = await harness.database.getAssetById(asset.id);
+      expect(updated, isNotNull);
+      expect(updated!.cloudState, AssetCloudState.localAndCloud);
+      expect(updated.localPath.trim(), isNotEmpty);
+      expect(updated.remoteAssetId, 'asset-remote-normalized-1');
+      expect(updated.remoteFileId, 'provider-file-normalized-1');
+    },
+  );
+
+  test(
+    'mergeRemoteAssets trusts cloudAvailable over legacy storageState when cloud availability is false',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-library',
+        listAssetsResponses: {
+          'remote-library': ListAssetsResponse(
+            assets: [
+              BackendAssetRecord(
+                assetId: 'asset-remote-explicit-unavailable',
+                sha256: 'd' * 64,
+                projectId: 'remote-library',
+                filename: 'unavailable.jpg',
+                createdAt: DateTime(2026, 1, 3),
+                provider: CloudProviderType.googleDrive,
+                remoteFileId: 'provider-file-unavailable-1',
+                remotePath: 'Joblens/Library/unavailable.jpg',
+                storageState: AssetCloudState.localAndCloud,
+                cloudAvailable: false,
+                revision: 5,
+                deleted: false,
+              ),
+            ],
+            nextCursor: null,
+          ),
+        },
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
+
+      final project = await harness.createProject('Library');
+      await harness.database.updateProjectRemoteId(
+        project.id,
+        'remote-library',
+      );
+      final asset = await harness.ingestAsset(
+        projectId: project.id,
+        seed: 78,
+        hashOverride: 'd' * 64,
+      );
+      await harness.database.updateAssetCloudMetadata(
+        assetId: asset.id,
+        remoteAssetId: 'asset-remote-explicit-unavailable',
+        remoteProvider: CloudProviderType.googleDrive.key,
+        remoteFileId: 'provider-file-unavailable-1',
+        uploadPath: 'Joblens/Library/unavailable.jpg',
+        cloudState: AssetCloudState.localAndCloud,
+        lastSyncErrorCode: null,
+        remoteRev: 4,
+      );
+
+      final syncedProject = await harness.database.getProjectById(project.id);
+      await syncService.mergeRemoteAssets([syncedProject!]);
+
+      final updated = await harness.database.getAssetById(asset.id);
+      expect(updated, isNotNull);
+      expect(updated!.cloudState, AssetCloudState.localOnly);
+      expect(updated.localPath.trim(), isNotEmpty);
+    },
+  );
+
+  test(
     'sync events apply project and asset snapshots without full list refresh',
     () async {
       final harness = await _createHarness();
@@ -1428,6 +1580,68 @@ void main() {
 
       final restored = await harness.database.getAssetByRemoteId(
         'asset-remote-restore-1',
+      );
+      expect(restored, isNotNull);
+      expect(restored?.status, AssetStatus.active);
+      expect(restored?.deletedAt, isNull);
+      expect(restored?.cloudState, AssetCloudState.localAndCloud);
+      expect(restored?.localPath.trim(), isNotEmpty);
+
+      final shadowAfter = await harness.database.getAssetById(shadow.id);
+      expect(shadowAfter, isNull);
+    },
+  );
+
+  test(
+    'restore keeps local_only when the remote provider source is missing',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final fakeClient = _FakeBackendApiClient(
+        projectId: 'remote-library',
+        listAssetsResponses: {
+          'remote-library': ListAssetsResponse(
+            assets: [
+              BackendAssetRecord(
+                assetId: 'asset-remote-restore-local-only',
+                sha256: '1' * 64,
+                projectId: 'remote-library',
+                filename: 'local-only.jpg',
+                createdAt: DateTime(2026, 1, 2),
+                revision: 4,
+                deleted: false,
+              ),
+            ],
+            nextCursor: null,
+          ),
+        },
+      );
+      final syncService = SyncService(
+        harness.database,
+        backendApiClient: fakeClient,
+        mediaStorage: harness.mediaStorage,
+      );
+
+      final project = await harness.createProject('Library');
+      await harness.database.updateProjectRemoteId(
+        project.id,
+        'remote-library',
+      );
+      final shadow = await harness.ingestAsset(
+        projectId: project.id,
+        seed: 113,
+        hashOverride: '1' * 64,
+      );
+      await harness.database.softDeleteAsset(shadow.id);
+
+      final deletedBefore = await harness.database.getDeletedAssets();
+      expect(deletedBefore.map((asset) => asset.id), contains(shadow.id));
+
+      await syncService.restoreAsset(deletedBefore.single);
+
+      final restored = await harness.database.getAssetByRemoteId(
+        'asset-remote-restore-local-only',
       );
       expect(restored, isNotNull);
       expect(restored?.status, AssetStatus.active);

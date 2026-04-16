@@ -69,6 +69,10 @@ class SyncService {
           );
         }
         await _runVoidLaneSafely(
+          'local_cloud_state_normalize_failed',
+          () => _normalizeLocalAssetCloudStates(),
+        );
+        await _runVoidLaneSafely(
           'local_sync_backfill_failed',
           () => _backfillLocalSyncState(),
         );
@@ -468,9 +472,9 @@ class SyncService {
     }
     final hasCanonicalRemoteAsset =
         asset.remoteAssetId != null && asset.remoteAssetId!.trim().isNotEmpty;
-    final activeProviderConnectionId = await _db.getActiveProviderConnectionId();
-    final activeMirror =
-        activeProviderConnectionId == null
+    final activeProviderConnectionId = await _db
+        .getActiveProviderConnectionId();
+    final activeMirror = activeProviderConnectionId == null
         ? null
         : await _db.getAssetProviderMirrorSnapshot(
             assetId: asset.id,
@@ -896,24 +900,29 @@ class SyncService {
     BackendAssetRecord remoteAsset, {
     required bool hasLocalPath,
   }) {
+    return AssetPresence.canonicalCloudState(
+      deleted: remoteAsset.deleted,
+      hasLocalOriginal: hasLocalPath,
+      hasConfirmedCloudSource: _remoteAssetHasConfirmedCloudSource(remoteAsset),
+    );
+  }
+
+  bool _remoteAssetHasConfirmedCloudSource(BackendAssetRecord remoteAsset) {
     if (remoteAsset.deleted) {
-      return AssetCloudState.deleted;
+      return false;
+    }
+    if (remoteAsset.cloudAvailable != null) {
+      return remoteAsset.cloudAvailable!;
     }
     switch (remoteAsset.storageState?.trim()) {
-      case AssetCloudState.localOnly:
-        return hasLocalPath
-            ? AssetCloudState.localOnly
-            : AssetCloudState.cloudOnly;
-      case AssetCloudState.cloudOnly:
-        return AssetCloudState.cloudOnly;
       case AssetCloudState.localAndCloud:
-        return hasLocalPath
-            ? AssetCloudState.localAndCloud
-            : AssetCloudState.cloudOnly;
+      case AssetCloudState.cloudOnly:
+        return true;
     }
-    return hasLocalPath
-        ? AssetCloudState.localAndCloud
-        : AssetCloudState.cloudOnly;
+    return AssetPresence.hasConfirmedRemoteFileSource(
+      remoteFileId: remoteAsset.remoteFileId,
+      remotePath: remoteAsset.remotePath,
+    );
   }
 
   String? _payloadString(Map<String, Object?> payload, List<String> keys) {
@@ -1515,7 +1524,13 @@ class SyncService {
             localPath: asset.localPath,
             thumbPath: asset.thumbPath,
             hash: asset.hash,
-            cloudState: AssetCloudState.localOnly,
+            cloudState: AssetPresence.canonicalCloudState(
+              deleted: false,
+              hasLocalOriginal: true,
+              hasConfirmedCloudSource: _remoteAssetHasConfirmedCloudSource(
+                resolved,
+              ),
+            ),
             existsInPhoneStorage: asset.existsInPhoneStorage,
           );
         }
@@ -1956,6 +1971,47 @@ class SyncService {
         remoteAssetId: remoteAssetId,
         sha256: asset.hash,
         localProjectId: asset.projectId,
+      );
+    }
+  }
+
+  Future<void> _normalizeLocalAssetCloudStates() async {
+    final assets = await _db.getRemoteLinkedAssets(includeDeleted: false);
+    if (assets.isEmpty) {
+      return;
+    }
+
+    final activeConnectionId = await _db.getActiveProviderConnectionId();
+    final mirrorStatuses =
+        activeConnectionId == null || activeConnectionId.trim().isEmpty
+        ? const <String, String>{}
+        : await _db.getAssetProviderMirrorStatuses(
+            assetIds: assets.map((asset) => asset.id),
+            providerConnectionId: activeConnectionId,
+          );
+
+    for (final asset in assets) {
+      if (asset.cloudState != AssetCloudState.localOnly ||
+          asset.localPath.trim().isEmpty) {
+        continue;
+      }
+
+      final normalizedCloudState = AssetPresence.canonicalCloudState(
+        deleted: false,
+        hasLocalOriginal: true,
+        hasConfirmedCloudSource: AssetPresence.hasConfirmedCloudSource(
+          asset,
+          mirrorStatus: mirrorStatuses[asset.id],
+        ),
+      );
+      if (normalizedCloudState != AssetCloudState.localAndCloud) {
+        continue;
+      }
+
+      await _db.updateAssetCloudMetadata(
+        assetId: asset.id,
+        cloudState: normalizedCloudState,
+        lastSyncErrorCode: asset.lastSyncErrorCode,
       );
     }
   }

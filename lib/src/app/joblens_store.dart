@@ -1266,6 +1266,7 @@ class JoblensStore extends ChangeNotifier {
     var downloadedCount = 0;
     var skippedCount = 0;
     var failedCount = 0;
+    var shouldForceRemoteRefresh = false;
 
     await _runBusy(() async {
       await _enqueueLocalIngest(() async {
@@ -1368,6 +1369,11 @@ class JoblensStore extends ChangeNotifier {
               final message = error is ApiException
                   ? error.message
                   : error.toString();
+              if (error is ApiException &&
+                  (error.code == 'asset_cloud_validation_pending' ||
+                      error.code == 'asset_cloud_unavailable')) {
+                shouldForceRemoteRefresh = true;
+              }
               await _database.addSyncLog(
                 level: SyncLogLevel.error,
                 event: 'download_failed',
@@ -1383,6 +1389,9 @@ class JoblensStore extends ChangeNotifier {
               failedCount: failedCount,
             );
             _notifyListenersIfActive();
+          }
+          if (shouldForceRemoteRefresh) {
+            await _syncService.kick(forceBootstrap: true);
           }
         } finally {
           _assetDownloadProgress = null;
@@ -1454,7 +1463,9 @@ class JoblensStore extends ChangeNotifier {
             } catch (error, stackTrace) {
               await _handleError(error);
               if (kDebugMode) {
-                debugPrint('Archive preflight sync failed: $error\n$stackTrace');
+                debugPrint(
+                  'Archive preflight sync failed: $error\n$stackTrace',
+                );
               }
             }
             await _hydrateLocalState(includeDiagnostics: false);
@@ -1466,9 +1477,10 @@ class JoblensStore extends ChangeNotifier {
 
           final activeProvider = _activeProviderAccount;
           final activeConnectionId = activeProvider?.connectionId?.trim() ?? '';
-          final outboxStates = await _database.getAssetOutboxStates(requestedIds);
-          final mirrorStatuses =
-              activeConnectionId.isNotEmpty
+          final outboxStates = await _database.getAssetOutboxStates(
+            requestedIds,
+          );
+          final mirrorStatuses = activeConnectionId.isNotEmpty
               ? await _database.getAssetProviderMirrorStatuses(
                   assetIds: requestedIds,
                   providerConnectionId: activeConnectionId,
@@ -1703,9 +1715,7 @@ class JoblensStore extends ChangeNotifier {
     required List<String> requestedIds,
   }) async {
     final persistedAssets = await _database.getAssetsByIds(requestedIds);
-    final assetsById = {
-      for (final asset in persistedAssets) asset.id: asset,
-    };
+    final assetsById = {for (final asset in persistedAssets) asset.id: asset};
     for (final asset in requestedAssets) {
       assetsById.putIfAbsent(asset.id, () => asset);
     }
@@ -1723,8 +1733,7 @@ class JoblensStore extends ChangeNotifier {
         .toSet()
         .toList(growable: false);
     final outboxStates = await _database.getAssetOutboxStates(requestedIds);
-    final mirrorStatuses =
-        activeConnectionId.isNotEmpty
+    final mirrorStatuses = activeConnectionId.isNotEmpty
         ? await _database.getAssetProviderMirrorStatuses(
             assetIds: requestedIds,
             providerConnectionId: activeConnectionId,
@@ -1811,8 +1820,8 @@ class JoblensStore extends ChangeNotifier {
     await _refreshAssetSyncStatuses();
     await _refreshSyncActivitySummary();
     _projectSortMode = await _database.getProjectSortMode();
-    final storedAppLaunchDestination =
-        await _database.getStoredAppLaunchDestination();
+    final storedAppLaunchDestination = await _database
+        .getStoredAppLaunchDestination();
     _hasStoredAppLaunchDestination = storedAppLaunchDestination != null;
     _appLaunchDestination =
         storedAppLaunchDestination ?? AppLaunchDestination.camera;
@@ -1827,7 +1836,9 @@ class JoblensStore extends ChangeNotifier {
   Future<void> _refreshProviderBackfillProgress() async {
     final activeProvider = _activeProviderAccount;
     final connectionId = activeProvider?.connectionId?.trim();
-    if (activeProvider == null || connectionId == null || connectionId.isEmpty) {
+    if (activeProvider == null ||
+        connectionId == null ||
+        connectionId.isEmpty) {
       _providerBackfillProgress = null;
       return;
     }
@@ -1936,8 +1947,8 @@ class JoblensStore extends ChangeNotifier {
   }) async {
     final normalizedUserId = userId?.trim();
     final storedUserId = await _database.getStoredAuthUserId();
-    final storedLaunchDestination =
-        await _database.getStoredAppLaunchDestination();
+    final storedLaunchDestination = await _database
+        .getStoredAppLaunchDestination();
     final shouldResetForUserSwitch =
         storedUserId != null &&
         normalizedUserId != null &&
@@ -2327,8 +2338,6 @@ class JoblensStore extends ChangeNotifier {
     String? activeMirrorStatus,
   }) {
     final activeProvider = _activeProviderAccount;
-    final remoteProvider = asset.remoteProvider?.trim();
-    final remoteAssetId = asset.remoteAssetId?.trim();
     if (asset.ingestState == AssetIngestState.failed ||
         (asset.lastSyncErrorCode?.trim().isNotEmpty ?? false)) {
       return AssetSyncStatus.failed;
@@ -2336,49 +2345,36 @@ class JoblensStore extends ChangeNotifier {
     if (outboxState == AssetOutboxState.failed) {
       return AssetSyncStatus.failed;
     }
-    if (asset.cloudState == AssetCloudState.cloudOnly) {
+    final hasLocalOriginal = asset.hasLocalOriginal;
+    final hasConfirmedCloudSource = AssetPresence.hasConfirmedCloudSource(
+      asset,
+      mirrorStatus: activeMirrorStatus,
+    );
+    if (!hasLocalOriginal && hasConfirmedCloudSource) {
       return AssetSyncStatus.cloudOnly;
     }
     if (asset.ingestState == AssetIngestState.pending ||
         outboxState == AssetOutboxState.queued ||
-        outboxState == AssetOutboxState.uploading) {
+        outboxState == AssetOutboxState.uploading ||
+        activeMirrorStatus == 'pending') {
       return AssetSyncStatus.syncing;
     }
-    switch (activeMirrorStatus) {
-      case 'failed':
-        return AssetSyncStatus.failed;
-      case 'pending':
-        return AssetSyncStatus.syncing;
-      case 'mirrored':
-        if (asset.localPath.trim().isNotEmpty) {
-          return AssetSyncStatus.synced;
-        }
-        return AssetSyncStatus.cloudOnly;
-      case 'deleted':
-        return asset.localPath.trim().isNotEmpty
-            ? AssetSyncStatus.local
-            : AssetSyncStatus.cloudOnly;
-    }
-    if (asset.cloudState == AssetCloudState.localOnly) {
-      return asset.localPath.trim().isNotEmpty
-          ? AssetSyncStatus.local
-          : AssetSyncStatus.cloudOnly;
-    }
-    if ((remoteAssetId?.isNotEmpty ?? false)) {
-      if (activeProvider != null) {
-        final activeProviderKey = activeProvider.providerType.key;
-        if (remoteProvider == activeProviderKey) {
-          return asset.localPath.trim().isNotEmpty
-              ? AssetSyncStatus.synced
-              : AssetSyncStatus.cloudOnly;
-        }
+    if (hasConfirmedCloudSource && activeProvider != null) {
+      final remoteProvider = asset.remoteProvider?.trim() ?? '';
+      final activeProviderKey = activeProvider.providerType.key;
+      if (asset.hasRemoteIdentity &&
+          remoteProvider.isNotEmpty &&
+          remoteProvider != activeProviderKey) {
         return AssetSyncStatus.syncing;
       }
-      return asset.localPath.trim().isNotEmpty
-          ? AssetSyncStatus.synced
-          : AssetSyncStatus.cloudOnly;
     }
-    return AssetSyncStatus.local;
+    if (hasLocalOriginal && hasConfirmedCloudSource) {
+      return AssetSyncStatus.synced;
+    }
+    if (hasConfirmedCloudSource) {
+      return AssetSyncStatus.cloudOnly;
+    }
+    return hasLocalOriginal ? AssetSyncStatus.local : AssetSyncStatus.cloudOnly;
   }
 
   ProviderAccount? get _activeProviderAccount {

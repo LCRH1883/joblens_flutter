@@ -66,16 +66,13 @@ void main() {
       intent: 'connect',
     );
 
-    expect(
-      capturedBody,
-      {
-        'redirectUri':
-            'https://api.joblens.xyz/functions/v1/api/v1/providers/dropbox/oauth/callback',
-        'intent': 'connect',
-        'mobileReturnUrl': 'https://auth.joblens.app/mobile/provider-callback',
-        'redirectTo': 'joblens://auth-callback',
-      },
-    );
+    expect(capturedBody, {
+      'redirectUri':
+          'https://api.joblens.xyz/functions/v1/api/v1/providers/dropbox/oauth/callback',
+      'intent': 'connect',
+      'mobileReturnUrl': 'https://auth.joblens.app/mobile/provider-callback',
+      'redirectTo': 'joblens://auth-callback',
+    });
     expect(
       response.authorizationUrl,
       'https://www.dropbox.com/oauth2/authorize?state=abc',
@@ -109,10 +106,7 @@ void main() {
     expect(response.connections, hasLength(1));
     expect(response.connections.single.provider, CloudProviderType.dropbox);
     expect(response.connections.single.displayName, 'John Appleseed');
-    expect(
-      response.connections.single.accountIdentifier,
-      'john@example.com',
-    );
+    expect(response.connections.single.accountIdentifier, 'john@example.com');
   });
 
   test('project reconcile posts to the existing backend endpoint', () async {
@@ -153,9 +147,7 @@ void main() {
       httpClient: MockClient((request) async {
         return http.Response(
           jsonEncode({
-            'device': {
-              'id': 'device-1',
-            },
+            'device': {'id': 'device-1'},
             'isCurrent': true,
             'deviceSessionId': 'session-1',
           }),
@@ -176,6 +168,49 @@ void main() {
     expect(response.isCurrent, isTrue);
     expect(response.deviceSessionId, 'session-1');
   });
+
+  test(
+    'maps direct download backend errors instead of generic failure',
+    () async {
+      final client = JoblensBackendApiClient(
+        baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+        accessTokenProvider: _FakeTokenProvider('token-123'),
+        httpClient: MockClient((request) async {
+          if (request.url.path.endsWith('/assets/asset-1/download-url')) {
+            return http.Response(
+              jsonEncode({
+                'url': 'https://download.joblens.test/media/asset-1/original',
+                'ttlSec': 300,
+              }),
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'code': 'asset_cloud_unavailable',
+              'message': 'Asset is no longer available from the provider.',
+            }),
+            404,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+
+      await expectLater(
+        () => client.downloadAssetBytes('asset-1'),
+        throwsA(
+          isA<ApiException>()
+              .having((error) => error.code, 'code', 'asset_cloud_unavailable')
+              .having(
+                (error) => error.message,
+                'message',
+                'Asset is no longer available from the provider.',
+              ),
+        ),
+      );
+    },
+  );
 
   test('lists signed-in devices', () async {
     final client = JoblensBackendApiClient(
@@ -213,7 +248,10 @@ void main() {
     final response = await client.listDevices();
     expect(response.devices, hasLength(1));
     expect(response.devices.single.deviceName, 'John’s iPhone');
-    expect(response.devices.single.approxLocation?.display, 'Vancouver, BC, CA');
+    expect(
+      response.devices.single.approxLocation?.display,
+      'Vancouver, BC, CA',
+    );
     expect(response.devices.single.isCurrent, isTrue);
     expect(response.devices.single.canSignOut, isFalse);
   });
@@ -252,7 +290,9 @@ void main() {
         requestMethod = request.method;
         requestBody = jsonDecode(request.body) as Map<String, dynamic>;
         return http.Response(
-          jsonEncode({'device': {'id': 'device-1'}}),
+          jsonEncode({
+            'device': {'id': 'device-1'},
+          }),
           200,
           headers: {'content-type': 'application/json'},
         );
@@ -267,10 +307,7 @@ void main() {
 
     expect(requestMethod, 'PATCH');
     expect(requestUri.path, '/functions/v1/api/v1/devices/device-1');
-    expect(requestBody, {
-      'lastSyncEventId': 42,
-      'markSyncAt': true,
-    });
+    expect(requestBody, {'lastSyncEventId': 42, 'markSyncAt': true});
   });
 
   test('move asset omits expectedRevision when null', () async {
@@ -303,9 +340,7 @@ void main() {
 
     expect(requestMethod, 'POST');
     expect(requestUri.path, '/functions/v1/api/v1/assets/asset-1/move');
-    expect(requestBody, {
-      'projectId': 'project-2',
-    });
+    expect(requestBody, {'projectId': 'project-2'});
     expect(response.assetId, 'asset-1');
     expect(response.projectId, 'project-2');
     expect(response.revision, 7);
@@ -319,10 +354,7 @@ void main() {
       httpClient: MockClient((request) async {
         requests.add(request);
         return http.Response(
-          jsonEncode({
-            'id': 'onedrive-item-42',
-            'name': 'photo.jpg',
-          }),
+          jsonEncode({'id': 'onedrive-item-42', 'name': 'photo.jpg'}),
           201,
           headers: {'content-type': 'application/json'},
         );
@@ -441,29 +473,32 @@ void main() {
     expect(response.ttlSec, 300);
   });
 
-  test('rewrites internal backend media proxy URLs onto the public API host', () async {
-    final client = JoblensBackendApiClient(
-      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
-      accessTokenProvider: _FakeTokenProvider('token-123'),
-      httpClient: MockClient((request) async {
-        return http.Response(
-          jsonEncode({
-            'url':
-                'http://supabase_edge_runtime_backend:8081/functions/v1/api/v1/media/asset-1/thumbnail?token=abc',
-            'ttlSec': 300,
-          }),
-          200,
-          headers: {'content-type': 'application/json'},
-        );
-      }),
-    );
+  test(
+    'rewrites internal backend media proxy URLs onto the public API host',
+    () async {
+      final client = JoblensBackendApiClient(
+        baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+        accessTokenProvider: _FakeTokenProvider('token-123'),
+        httpClient: MockClient((request) async {
+          return http.Response(
+            jsonEncode({
+              'url':
+                  'http://supabase_edge_runtime_backend:8081/functions/v1/api/v1/media/asset-1/thumbnail?token=abc',
+              'ttlSec': 300,
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
 
-    final response = await client.getThumbnailUrl('asset-1');
-    expect(
-      response.url,
-      'https://api.joblens.xyz/functions/v1/api/v1/media/asset-1/thumbnail?token=abc',
-    );
-  });
+      final response = await client.getThumbnailUrl('asset-1');
+      expect(
+        response.url,
+        'https://api.joblens.xyz/functions/v1/api/v1/media/asset-1/thumbnail?token=abc',
+      );
+    },
+  );
 
   test('downloads asset bytes through normalized proxy URL', () async {
     var requestCount = 0;

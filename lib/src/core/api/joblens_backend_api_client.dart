@@ -94,10 +94,7 @@ class JoblensBackendApiClient {
   }
 
   Future<void> deleteAccount() async {
-    await _authorizedJsonRequest(
-      method: 'POST',
-      path: '/account/delete',
-    );
+    await _authorizedJsonRequest(method: 'POST', path: '/account/delete');
   }
 
   Future<RemoteProjectRecord> upsertProject(
@@ -128,8 +125,10 @@ class JoblensBackendApiClient {
       body: {
         'clientDeviceId': clientDeviceId,
         'platform': platform,
-        if (appVersion != null && appVersion.isNotEmpty) 'appVersion': appVersion,
-        if (deviceName != null && deviceName.isNotEmpty) 'deviceName': deviceName,
+        if (appVersion != null && appVersion.isNotEmpty)
+          'appVersion': appVersion,
+        if (deviceName != null && deviceName.isNotEmpty)
+          'deviceName': deviceName,
         if (osVersion != null && osVersion.isNotEmpty) 'osVersion': osVersion,
       },
     );
@@ -137,10 +136,7 @@ class JoblensBackendApiClient {
   }
 
   Future<SignedInDevicesResponse> listDevices() async {
-    final map = await _authorizedJsonRequest(
-      method: 'GET',
-      path: '/devices',
-    );
+    final map = await _authorizedJsonRequest(method: 'GET', path: '/devices');
     return SignedInDevicesResponse.fromMap(map);
   }
 
@@ -181,10 +177,7 @@ class JoblensBackendApiClient {
     final map = await _authorizedJsonRequest(
       method: 'GET',
       path: '/sync/events',
-      query: {
-        'after': '$after',
-        'limit': '$limit',
-      },
+      query: {'after': '$after', 'limit': '$limit'},
     );
     return SyncEventsResponse.fromMap(map);
   }
@@ -196,18 +189,12 @@ class JoblensBackendApiClient {
     await _authorizedJsonRequest(
       method: 'POST',
       path: '/sync/ack',
-      body: {
-        'deviceId': deviceId,
-        'upToEventId': upToEventId,
-      },
+      body: {'deviceId': deviceId, 'upToEventId': upToEventId},
     );
   }
 
   Future<ListProjectsResponse> listProjects() async {
-    final map = await _authorizedJsonRequest(
-      method: 'GET',
-      path: '/projects',
-    );
+    final map = await _authorizedJsonRequest(method: 'GET', path: '/projects');
     return ListProjectsResponse.fromMap(map);
   }
 
@@ -301,9 +288,7 @@ class JoblensBackendApiClient {
     required String projectId,
     int? expectedRevision,
   }) async {
-    final body = <String, Object?>{
-      'projectId': projectId,
-    };
+    final body = <String, Object?>{'projectId': projectId};
     if (expectedRevision != null) {
       body['expectedRevision'] = expectedRevision;
     }
@@ -321,9 +306,7 @@ class JoblensBackendApiClient {
       path: '/assets/$assetId/delete',
       body: expectedRevision == null
           ? null
-          : {
-              'expectedRevision': expectedRevision,
-            },
+          : {'expectedRevision': expectedRevision},
     );
   }
 
@@ -351,18 +334,13 @@ class JoblensBackendApiClient {
     );
   }
 
-  Future<void> purgeAsset(
-    String assetId, {
-    int? expectedRevision,
-  }) async {
+  Future<void> purgeAsset(String assetId, {int? expectedRevision}) async {
     await _authorizedJsonRequest(
       method: 'POST',
       path: '/assets/$assetId/purge',
       body: expectedRevision == null
           ? null
-          : {
-              'expectedRevision': expectedRevision,
-            },
+          : {'expectedRevision': expectedRevision},
     );
   }
 
@@ -380,7 +358,9 @@ class JoblensBackendApiClient {
       method: 'GET',
       path: '/assets/$assetId/thumbnail-url',
     );
-    return _normalizeSignedMediaUrlResponse(SignedMediaUrlResponse.fromMap(map));
+    return _normalizeSignedMediaUrlResponse(
+      SignedMediaUrlResponse.fromMap(map),
+    );
   }
 
   Future<SignedMediaUrlResponse> getDownloadUrl(String assetId) async {
@@ -388,7 +368,9 @@ class JoblensBackendApiClient {
       method: 'GET',
       path: '/assets/$assetId/download-url',
     );
-    return _normalizeSignedMediaUrlResponse(SignedMediaUrlResponse.fromMap(map));
+    return _normalizeSignedMediaUrlResponse(
+      SignedMediaUrlResponse.fromMap(map),
+    );
   }
 
   Future<Uint8List> downloadAssetBytes(String assetId) async {
@@ -400,11 +382,12 @@ class JoblensBackendApiClient {
       message: 'Timed out downloading the remote asset.',
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      final mapped = _mapDirectDownloadException(response);
       throw ApiException(
-        code: 'remote_download_failed',
-        message:
-            'Remote asset download failed with HTTP ${response.statusCode}.',
+        code: mapped.code,
+        message: mapped.message,
         statusCode: response.statusCode,
+        rawBody: response.body,
       );
     }
     return response.bodyBytes;
@@ -415,7 +398,9 @@ class JoblensBackendApiClient {
       method: 'GET',
       path: '/assets/$assetId/video-preview-url',
     );
-    return _normalizeSignedMediaUrlResponse(SignedMediaUrlResponse.fromMap(map));
+    return _normalizeSignedMediaUrlResponse(
+      SignedMediaUrlResponse.fromMap(map),
+    );
   }
 
   SignedMediaUrlResponse _normalizeSignedMediaUrlResponse(
@@ -446,8 +431,9 @@ class JoblensBackendApiClient {
         mediaUri.host == 'supabase_edge_runtime_backend' ||
         mediaUri.host == 'localhost' ||
         mediaUri.host == '127.0.0.1';
-    final isBackendMediaPath =
-        mediaUri.path.startsWith('/functions/v1/api/v1/media/');
+    final isBackendMediaPath = mediaUri.path.startsWith(
+      '/functions/v1/api/v1/media/',
+    );
 
     if (!shouldRewriteHost || !isBackendMediaPath) {
       return trimmed;
@@ -526,21 +512,13 @@ class JoblensBackendApiClient {
     };
     final response = switch (method) {
       'PUT' => await _withTimeout(
-        _httpClient.put(
-          Uri.parse(url),
-          headers: mergedHeaders,
-          body: bytes,
-        ),
+        _httpClient.put(Uri.parse(url), headers: mergedHeaders, body: bytes),
         timeout: _directUploadTimeout,
         code: 'direct_upload_timeout',
         message: 'Timed out uploading the asset to the cloud provider.',
       ),
       'POST' => await _withTimeout(
-        _httpClient.post(
-          Uri.parse(url),
-          headers: mergedHeaders,
-          body: bytes,
-        ),
+        _httpClient.post(Uri.parse(url), headers: mergedHeaders, body: bytes),
         timeout: _directUploadTimeout,
         code: 'direct_upload_timeout',
         message: 'Timed out uploading the asset to the cloud provider.',
@@ -754,7 +732,11 @@ class JoblensBackendApiClient {
 
     return _withTimeout(
       switch (method) {
-        'POST' => _httpClient.post(uri, headers: headers, body: jsonEncode(body)),
+        'POST' => _httpClient.post(
+          uri,
+          headers: headers,
+          body: jsonEncode(body),
+        ),
         'GET' => _httpClient.get(uri, headers: headers),
         'PATCH' => _httpClient.patch(
           uri,
@@ -824,6 +806,19 @@ class JoblensBackendApiClient {
       message: message,
       statusCode: response.statusCode,
       rawBody: body,
+    );
+  }
+
+  ApiException _mapDirectDownloadException(http.Response response) {
+    final mapped = _mapApiException(response);
+    if (mapped.code != 'http_${response.statusCode}') {
+      return mapped;
+    }
+    return ApiException(
+      code: 'remote_download_failed',
+      message: 'Remote asset download failed with HTTP ${response.statusCode}.',
+      statusCode: response.statusCode,
+      rawBody: response.body,
     );
   }
 }
