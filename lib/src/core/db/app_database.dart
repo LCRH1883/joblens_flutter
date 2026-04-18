@@ -1184,29 +1184,53 @@ class AppDatabase {
 
   Future<int> ensureDefaultProject() async {
     final now = DateTime.now().toIso8601String();
-    final existing = await _db.query(
-      'projects',
-      where: 'name = ?',
-      whereArgs: ['Inbox'],
-      limit: 1,
-    );
-    if (existing.isNotEmpty) {
-      return existing.first['id']! as int;
-    }
+    return _db.transaction((txn) async {
+      final existing = await txn.query(
+        'projects',
+        columns: ['id'],
+        where: 'name = ? AND deleted_at IS NULL',
+        whereArgs: ['Inbox'],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) {
+        return existing.first['id']! as int;
+      }
 
-    return _db.insert('projects', {
-      'name': 'Inbox',
-      'notes': '',
-      'start_date': null,
-      'remote_project_id': null,
-      'cover_asset_id': null,
-      'created_at': now,
-      'updated_at': now,
-      'sync_folder_map': '{}',
-      'deleted_at': null,
-      'remote_rev': null,
-      'local_seq': 0,
-      'dirty_fields': '[]',
+      try {
+        return await txn.insert('projects', {
+          'name': 'Inbox',
+          'notes': '',
+          'start_date': null,
+          'remote_project_id': null,
+          'cover_asset_id': null,
+          'created_at': now,
+          'updated_at': now,
+          'sync_folder_map': '{}',
+          'deleted_at': null,
+          'remote_rev': null,
+          'local_seq': 0,
+          'dirty_fields': '[]',
+        }, conflictAlgorithm: ConflictAlgorithm.abort);
+      } on DatabaseException catch (error) {
+        // Another auth-sync path can seed Inbox at the same time. Re-read the
+        // active row instead of surfacing a duplicate-name crash.
+        if (!error.toString().contains(
+          'UNIQUE constraint failed: projects.name',
+        )) {
+          rethrow;
+        }
+        final concurrent = await txn.query(
+          'projects',
+          columns: ['id'],
+          where: 'name = ? AND deleted_at IS NULL',
+          whereArgs: ['Inbox'],
+          limit: 1,
+        );
+        if (concurrent.isNotEmpty) {
+          return concurrent.first['id']! as int;
+        }
+        rethrow;
+      }
     });
   }
 

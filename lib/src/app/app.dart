@@ -107,7 +107,8 @@ class _JoblensAppState extends ConsumerState<JoblensApp>
       }
       _handledForcedSignOutNotice = noticeCount;
       final message =
-          next.forcedSignOutMessage ?? 'You were signed out from another device.';
+          next.forcedSignOutMessage ??
+          'You were signed out from another device.';
       _scaffoldMessengerKey.currentState?.showSnackBar(
         SnackBar(content: Text(message)),
       );
@@ -165,9 +166,7 @@ class _JoblensAppState extends ConsumerState<JoblensApp>
     }
 
     if (authState.isLoading && authState.valueOrNull == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     final session = authState.valueOrNull?.session;
@@ -271,9 +270,7 @@ class _JoblensAppState extends ConsumerState<JoblensApp>
     }
     try {
       final normalized = base64Url.normalize(parts[1]);
-      final payload = jsonDecode(
-        utf8.decode(base64Url.decode(normalized)),
-      );
+      final payload = jsonDecode(utf8.decode(base64Url.decode(normalized)));
       if (payload is Map && payload['session_id'] is String) {
         return payload['session_id'] as String;
       }
@@ -399,7 +396,9 @@ class _AppShellState extends State<AppShell> {
   @override
   void initState() {
     super.initState();
-    _nonCameraPageController = PageController(initialPage: _lastNonCameraTab - 1);
+    _nonCameraPageController = PageController(
+      initialPage: _lastNonCameraTab - 1,
+    );
   }
 
   @override
@@ -424,6 +423,7 @@ class _AppShellState extends State<AppShell> {
         child: _buildCurrentPage(),
       ),
       bottomNavigationBar: NavigationBar(
+        maintainBottomViewPadding: true,
         selectedIndex: _currentTab,
         onDestinationSelected: _selectTab,
         destinations: const [
