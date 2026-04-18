@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/joblens_store.dart';
+import '../../core/models/capture_target_preference.dart';
 import '../../core/models/photo_asset.dart';
 import '../../core/models/project.dart';
 import '../../core/ui/asset_sync_badge.dart';
 import '../../core/ui/edge_swipe_back.dart';
 import '../../core/ui/user_facing_error.dart';
+import '../camera/joblens_camera_page.dart';
 import '../gallery/photo_viewer_page.dart';
 
 enum _AssetSortOrder { newestFirst, oldestFirst }
@@ -57,6 +59,8 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
 
     final allSelected =
         assets.isNotEmpty && _selectedAssetIds.length == assets.length;
+    final showProjectCameraButton =
+        !_isSelectionMode && store.showProjectCameraButton;
 
     return Scaffold(
       appBar: _isSelectionMode
@@ -76,7 +80,10 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                     ),
                   if (store.isBusy)
                     const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 6,
+                      ),
                       child: LinearProgressIndicator(),
                     ),
                   if (userFacingStoreError(store.lastError) case final error?)
@@ -89,8 +96,9 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                           child: Text(
                             error,
                             style: TextStyle(
-                              color:
-                                  Theme.of(context).colorScheme.onErrorContainer,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onErrorContainer,
                             ),
                           ),
                         ),
@@ -101,7 +109,16 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                       physics: _isDragSelecting
                           ? const NeverScrollableScrollPhysics()
                           : const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.all(3),
+                      padding: EdgeInsets.fromLTRB(
+                        3,
+                        3,
+                        3,
+                        _isSelectionMode
+                            ? 104
+                            : showProjectCameraButton
+                            ? 88
+                            : 3,
+                      ),
                       itemCount: assets.length,
                       gridDelegate:
                           const SliverGridDelegateWithFixedCrossAxisCount(
@@ -127,7 +144,10 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                 ],
               ),
       ),
-      bottomNavigationBar: _isSelectionMode
+      floatingActionButtonLocation: _isSelectionMode
+          ? FloatingActionButtonLocation.centerFloat
+          : FloatingActionButtonLocation.endFloat,
+      floatingActionButton: _isSelectionMode
           ? _SelectionActionBar(
               hasSelection: _selectedAssetIds.isNotEmpty,
               hasProjects: store.projects.isNotEmpty,
@@ -138,6 +158,11 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
               onDownload: () =>
                   _downloadSelectedToJoblens(context, store, assets),
               onDelete: () => _confirmDeleteSelected(context, store),
+            )
+          : showProjectCameraButton
+          ? _ProjectCameraButton(
+              projectName: project.name,
+              onPressed: () => _openProjectCamera(context, project),
             )
           : null,
     );
@@ -154,19 +179,16 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
       actions: [
         IconButton(
           tooltip: 'Select photos',
-          onPressed: store.isBusy || assets.isEmpty ? null : _enableSelectionMode,
+          onPressed: store.isBusy || assets.isEmpty
+              ? null
+              : _enableSelectionMode,
           icon: const Icon(Icons.checklist_outlined),
         ),
         PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
           tooltip: 'More options',
-          onSelected: (value) => _handleProjectMenuAction(
-            context,
-            store,
-            project,
-            assets,
-            value,
-          ),
+          onSelected: (value) =>
+              _handleProjectMenuAction(context, store, project, assets, value),
           itemBuilder: (context) => [
             PopupMenuItem(
               value: 'notes',
@@ -196,7 +218,8 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
             ),
             PopupMenuItem(
               value: 'rescan',
-              enabled: !(project.remoteProjectId?.trim().isEmpty ?? true) &&
+              enabled:
+                  !(project.remoteProjectId?.trim().isEmpty ?? true) &&
                   !store.isBusy,
               child: const _MenuRow(
                 icon: Icons.travel_explore_outlined,
@@ -434,6 +457,31 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     if (moved == true && mounted) {
       setState(_exitSelectionModeState);
     }
+  }
+
+  Future<void> _openProjectCamera(BuildContext context, Project project) async {
+    final navigator = Navigator.of(context);
+    final store = ref.read(joblensStoreProvider);
+    final isInbox = project.name == 'Inbox';
+    await store.updateCaptureTargetPreference(
+      mode: isInbox ? CaptureTargetMode.inbox : CaptureTargetMode.fixedProject,
+      fixedProjectId: isInbox ? null : project.id,
+    );
+    if (!mounted) {
+      return;
+    }
+    await navigator.push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (cameraContext) => JoblensCameraPage(
+          onSessionClosed: () {
+            if (cameraContext.mounted && Navigator.of(cameraContext).canPop()) {
+              Navigator.of(cameraContext).pop();
+            }
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _confirmDeleteSelected(
@@ -718,11 +766,7 @@ class _MenuRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
-      children: [
-        Icon(icon, size: 20),
-        const SizedBox(width: 12),
-        Text(label),
-      ],
+      children: [Icon(icon, size: 20), const SizedBox(width: 12), Text(label)],
     );
   }
 }
@@ -815,44 +859,103 @@ class _SelectionActionBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canAct = hasSelection && !busy;
-    return Material(
-      elevation: 8,
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _ActionButton(
-                    icon: Icons.drive_file_move_outline,
-                    label: 'Move',
-                    onTap: canAct && hasProjects ? onMove : null,
-                  ),
-                  _ActionButton(
-                    icon: Icons.archive_outlined,
-                    label: 'Archive',
-                    onTap: canAct ? onArchive : null,
-                  ),
-                  _ActionButton(
-                    icon: Icons.download_outlined,
-                    label: 'Download',
-                    onTap: canAct ? onDownload : null,
-                  ),
-                  _ActionButton(
-                    icon: Icons.delete_outline,
-                    label: 'Delete',
-                    activeColor: Theme.of(context).colorScheme.error,
-                    onTap: canAct ? onDelete : null,
-                  ),
-                ],
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final pillColor = theme.colorScheme.surfaceContainerHigh.withValues(
+      alpha: isDark ? 0.94 : 0.96,
+    );
+    final outlineColor = theme.colorScheme.onSurface.withValues(
+      alpha: isDark ? 0.16 : 0.08,
+    );
+    final shadowColor = Colors.black.withValues(alpha: isDark ? 0.28 : 0.14);
+    final pillShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(28),
+      side: BorderSide(color: outlineColor),
+    );
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Material(
+          color: pillColor,
+          elevation: 10,
+          shadowColor: shadowColor,
+          shape: pillShape,
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ActionButton(
+                  icon: Icons.drive_file_move_outline,
+                  label: 'Move',
+                  onTap: canAct && hasProjects ? onMove : null,
+                ),
+                _ActionButton(
+                  icon: Icons.archive_outlined,
+                  label: 'Archive',
+                  onTap: canAct ? onArchive : null,
+                ),
+                _ActionButton(
+                  icon: Icons.download_outlined,
+                  label: 'Download',
+                  onTap: canAct ? onDownload : null,
+                ),
+                _ActionButton(
+                  icon: Icons.delete_outline,
+                  label: 'Delete',
+                  activeColor: theme.colorScheme.error,
+                  onTap: canAct ? onDelete : null,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProjectCameraButton extends StatelessWidget {
+  const _ProjectCameraButton({
+    required this.projectName,
+    required this.onPressed,
+  });
+
+  final String projectName;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(right: 10, bottom: 10),
+      child: Tooltip(
+        message: 'Capture into $projectName',
+        child: Semantics(
+          button: true,
+          label: 'Capture into $projectName',
+          child: Material(
+            color: theme.colorScheme.primaryContainer,
+            elevation: 6,
+            shadowColor: Colors.black.withValues(alpha: 0.18),
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onPressed,
+              customBorder: const CircleBorder(),
+              child: SizedBox.square(
+                dimension: 52,
+                child: Icon(
+                  Icons.photo_camera_outlined,
+                  color: theme.colorScheme.onPrimaryContainer,
+                  size: 25,
+                ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -881,26 +984,19 @@ class _ActionButton extends StatelessWidget {
         ? resolvedActive
         : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3);
 
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 24),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.2,
-              ),
-            ),
-          ],
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        enabled: isEnabled,
+        label: label,
+        child: InkResponse(
+          onTap: onTap,
+          radius: 22,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            child: Icon(icon, color: color, size: 22),
+          ),
         ),
       ),
     );
@@ -983,9 +1079,7 @@ class _ProjectAssetTile extends StatelessWidget {
           Positioned(
             left: 4,
             bottom: 4,
-            child: AssetSyncBadge(
-              status: store.assetSyncStatusFor(asset.id),
-            ),
+            child: AssetSyncBadge(status: store.assetSyncStatusFor(asset.id)),
           ),
         ],
       ),

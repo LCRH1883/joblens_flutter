@@ -1012,6 +1012,28 @@ class AppDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<bool> getShowProjectCameraButton() async {
+    final rows = await _db.query(
+      'app_state',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['show_project_camera_button'],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      return true;
+    }
+    final value = (rows.first['value'] as String?)?.trim().toLowerCase();
+    return value != 'false' && value != '0';
+  }
+
+  Future<void> setShowProjectCameraButton(bool enabled) async {
+    await _db.insert('app_state', {
+      'key': 'show_project_camera_button',
+      'value': enabled ? 'true' : 'false',
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   Future<AppLaunchDestination?> getStoredAppLaunchDestination() async {
     final rows = await _db.query(
       'app_state',

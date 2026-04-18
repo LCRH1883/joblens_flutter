@@ -51,7 +51,8 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
           ? _buildSelectionAppBar(context, store, assets, allSelected)
           : _buildNormalAppBar(context, store, assets),
       body: _buildBody(context, store, grouped, assets),
-      bottomNavigationBar: _isSelectionMode
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: _isSelectionMode
           ? _SelectionActionBar(
               hasSelection: _selectedAssetIds.isNotEmpty,
               hasProjects: store.projects.isNotEmpty,
@@ -77,7 +78,9 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
       actions: [
         IconButton(
           tooltip: 'Select photos',
-          onPressed: store.isBusy || assets.isEmpty ? null : _enableSelectionMode,
+          onPressed: store.isBusy || assets.isEmpty
+              ? null
+              : _enableSelectionMode,
           icon: const Icon(Icons.checklist_outlined),
         ),
         PopupMenuButton<String>(
@@ -227,22 +230,19 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               sliver: SliverGrid(
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    final asset = entry.value[index];
-                    return _AssetTile(
-                      asset: asset,
-                      store: store,
-                      selected: _selectedAssetIds.contains(asset.id),
-                      selectionMode: _isSelectionMode,
-                      onTap: () => _onAssetTap(context, asset, assets),
-                      onLongPressStart: () => _startDragSelection(asset.id),
-                      onLongPressEnd: _stopDragSelection,
-                      onDragHover: () => _dragSelectAsset(asset.id),
-                    );
-                  },
-                  childCount: entry.value.length,
-                ),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  final asset = entry.value[index];
+                  return _AssetTile(
+                    asset: asset,
+                    store: store,
+                    selected: _selectedAssetIds.contains(asset.id),
+                    selectionMode: _isSelectionMode,
+                    onTap: () => _onAssetTap(context, asset, assets),
+                    onLongPressStart: () => _startDragSelection(asset.id),
+                    onLongPressEnd: _stopDragSelection,
+                    onDragHover: () => _dragSelectAsset(asset.id),
+                  );
+                }, childCount: entry.value.length),
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 3,
                   mainAxisSpacing: 3,
@@ -251,7 +251,9 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
               ),
             ),
           ],
-          const SliverToBoxAdapter(child: SizedBox(height: 100)),
+          SliverToBoxAdapter(
+            child: SizedBox(height: _isSelectionMode ? 104 : 24),
+          ),
         ],
       ),
     );
@@ -381,7 +383,10 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                 ),
                 FilledButton(
                   onPressed: () async {
-                    await store.moveAssetsToProject(selectedIds, selectedProject);
+                    await store.moveAssetsToProject(
+                      selectedIds,
+                      selectedProject,
+                    );
                     if (context.mounted) {
                       Navigator.of(context).pop(true);
                     }
@@ -570,11 +575,7 @@ class _MenuRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
-      children: [
-        Icon(icon, size: 20),
-        const SizedBox(width: 12),
-        Text(label),
-      ],
+      children: [Icon(icon, size: 20), const SizedBox(width: 12), Text(label)],
     );
   }
 }
@@ -599,10 +600,7 @@ class _SortInfoBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 6, 8, 2),
       child: Row(
         children: [
-          Text(
-            '$assetCount photo${assetCount == 1 ? '' : 's'}',
-            style: muted,
-          ),
+          Text('$assetCount photo${assetCount == 1 ? '' : 's'}', style: muted),
           const Spacer(),
           PopupMenuButton<_SortOrder>(
             initialValue: sortOrder,
@@ -664,44 +662,59 @@ class _SelectionActionBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canAct = hasSelection && !busy;
-    return Material(
-      elevation: 8,
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _ActionButton(
-                    icon: Icons.drive_file_move_outline,
-                    label: 'Move',
-                    onTap: canAct && hasProjects ? onMove : null,
-                  ),
-                  _ActionButton(
-                    icon: Icons.archive_outlined,
-                    label: 'Archive',
-                    onTap: canAct ? onArchive : null,
-                  ),
-                  _ActionButton(
-                    icon: Icons.download_outlined,
-                    label: 'Download',
-                    onTap: canAct ? onDownload : null,
-                  ),
-                  _ActionButton(
-                    icon: Icons.delete_outline,
-                    label: 'Delete',
-                    activeColor: Theme.of(context).colorScheme.error,
-                    onTap: canAct ? onDelete : null,
-                  ),
-                ],
-              ),
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final pillColor = theme.colorScheme.surfaceContainerHigh.withValues(
+      alpha: isDark ? 0.94 : 0.96,
+    );
+    final outlineColor = theme.colorScheme.onSurface.withValues(
+      alpha: isDark ? 0.16 : 0.08,
+    );
+    final shadowColor = Colors.black.withValues(alpha: isDark ? 0.28 : 0.14);
+    final pillShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(28),
+      side: BorderSide(color: outlineColor),
+    );
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Material(
+          color: pillColor,
+          elevation: 10,
+          shadowColor: shadowColor,
+          shape: pillShape,
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ActionButton(
+                  icon: Icons.drive_file_move_outline,
+                  label: 'Move',
+                  onTap: canAct && hasProjects ? onMove : null,
+                ),
+                _ActionButton(
+                  icon: Icons.archive_outlined,
+                  label: 'Archive',
+                  onTap: canAct ? onArchive : null,
+                ),
+                _ActionButton(
+                  icon: Icons.download_outlined,
+                  label: 'Download',
+                  onTap: canAct ? onDownload : null,
+                ),
+                _ActionButton(
+                  icon: Icons.delete_outline,
+                  label: 'Delete',
+                  activeColor: theme.colorScheme.error,
+                  onTap: canAct ? onDelete : null,
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -730,25 +743,19 @@ class _ActionButton extends StatelessWidget {
         ? resolvedActive
         : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3);
 
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 24),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        enabled: isEnabled,
+        label: label,
+        child: InkResponse(
+          onTap: onTap,
+          radius: 22,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            child: Icon(icon, color: color, size: 22),
+          ),
         ),
       ),
     );
