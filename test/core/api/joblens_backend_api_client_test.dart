@@ -41,43 +41,81 @@ void main() {
     expect(capturedRequest.headers['authorization'], 'Bearer token-123');
   });
 
-  test('provider connect sends backend callback and app redirect', () async {
-    late Map<String, dynamic> capturedBody;
-    final client = JoblensBackendApiClient(
-      baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
-      accessTokenProvider: _FakeTokenProvider('token-123'),
-      httpClient: MockClient((request) async {
-        capturedBody = jsonDecode(request.body) as Map<String, dynamic>;
-        return http.Response(
-          jsonEncode({
-            'provider': 'dropbox',
-            'sessionId': 'session-123',
-            'launchUrl': 'https://www.dropbox.com/oauth2/authorize?state=abc',
-            'expiresAt': '2026-04-08T20:00:00.000Z',
-          }),
-          200,
-          headers: {'content-type': 'application/json'},
-        );
-      }),
-    );
+  test(
+    'provider connect sends backend callback and app completion redirect',
+    () async {
+      late Map<String, dynamic> capturedBody;
+      final client = JoblensBackendApiClient(
+        baseUrl: 'https://api.joblens.xyz/functions/v1/api/v1',
+        accessTokenProvider: _FakeTokenProvider('token-123'),
+        httpClient: MockClient((request) async {
+          capturedBody = jsonDecode(request.body) as Map<String, dynamic>;
+          return http.Response(
+            jsonEncode({
+              'provider': 'dropbox',
+              'sessionId': 'session-123',
+              'launchUrl': 'https://www.dropbox.com/oauth2/authorize?state=abc',
+              'expiresAt': '2026-04-08T20:00:00.000Z',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
 
-    final response = await client.beginProviderConnection(
-      CloudProviderType.dropbox,
-      intent: 'connect',
-    );
+      final response = await client.beginProviderConnection(
+        CloudProviderType.dropbox,
+        intent: 'connect',
+      );
 
-    expect(capturedBody, {
-      'redirectUri':
-          'https://api.joblens.xyz/functions/v1/api/v1/providers/dropbox/oauth/callback',
-      'intent': 'connect',
-      'mobileReturnUrl': 'https://auth.joblens.app/mobile/provider-callback',
-      'redirectTo': 'joblens://auth-callback',
-    });
-    expect(
-      response.authorizationUrl,
-      'https://www.dropbox.com/oauth2/authorize?state=abc',
-    );
-  });
+      expect(capturedBody, {
+        'redirectUri':
+            'https://api.joblens.xyz/functions/v1/api/v1/providers/dropbox/oauth/callback',
+        'intent': 'connect',
+        'completionRedirectUri': 'joblens://auth-callback',
+      });
+      expect(
+        response.authorizationUrl,
+        'https://www.dropbox.com/oauth2/authorize?state=abc',
+      );
+    },
+  );
+
+  test(
+    'provider connect resolves callback URLs from the selected backend base',
+    () async {
+      late Map<String, dynamic> capturedBody;
+      final client = JoblensBackendApiClient(
+        baseUrl: 'https://dev.joblens.xyz/functions/v1/api/v1',
+        accessTokenProvider: _FakeTokenProvider('token-123'),
+        httpClient: MockClient((request) async {
+          capturedBody = jsonDecode(request.body) as Map<String, dynamic>;
+          return http.Response(
+            jsonEncode({
+              'provider': 'google_drive',
+              'sessionId': 'session-123',
+              'launchUrl':
+                  'https://accounts.google.com/o/oauth2/v2/auth?state=abc',
+              'expiresAt': '2026-04-08T20:00:00.000Z',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+
+      await client.beginProviderConnection(
+        CloudProviderType.googleDrive,
+        intent: 'connect',
+      );
+
+      expect(
+        capturedBody['redirectUri'],
+        'https://dev.joblens.xyz/functions/v1/api/v1/providers/google_drive/oauth/callback',
+      );
+      expect(capturedBody['completionRedirectUri'], 'joblens://auth-callback');
+    },
+  );
 
   test('parses provider connection identity fields', () async {
     final client = JoblensBackendApiClient(

@@ -8,6 +8,7 @@ import '../../core/config/app_runtime_configuration.dart';
 final authConfigurationProvider = Provider<bool>((ref) => false);
 final appRuntimeConfigurationProvider = Provider<AppRuntimeConfiguration>(
   (ref) => const AppRuntimeConfiguration(
+    environment: null,
     supabaseUrl: '',
     supabaseAnonKey: '',
     apiBaseUrlOverride: '',

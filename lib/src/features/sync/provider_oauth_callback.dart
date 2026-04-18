@@ -20,11 +20,10 @@ class ProviderOAuthCallback {
   bool get isSuccess => status == 'success';
 
   static ProviderOAuthCallback? tryParse(Uri uri) {
-    final isCustomScheme = uri.scheme == 'joblens' && uri.host == 'auth-callback';
+    final isCustomScheme =
+        uri.scheme == 'joblens' && uri.host == 'auth-callback';
     final isWebCallback =
-        uri.scheme == 'https' &&
-        uri.host == 'auth.joblens.app' &&
-        uri.path == '/mobile/provider-callback';
+        uri.scheme == 'https' && uri.path == '/mobile/provider-callback';
     if (!isCustomScheme && !isWebCallback) {
       return null;
     }

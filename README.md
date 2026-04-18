@@ -33,38 +33,97 @@ Joblens is a cross-platform Flutter app (iOS + Android) for job photo capture an
 - The Flutter app does not keep provider OAuth tokens as its source of truth.
 - The backend stores provider connection secrets and refresh state.
 
-## Run
+## Environment Files
+
+Use separate local env files for explicit mobile builds:
+
+- `.env.dev`
+- `.env.prod`
+
+Start from the checked-in examples:
 
 ```bash
-infisical export --domain=https://app.infisical.com --env=prod --path=/joblens/mobile --format=dotenv --output-file=.env
-/Users/lcrh/Tools/flutter/bin/flutter pub get
-/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env
+cp .env.dev.example .env.dev
+cp .env.prod.example .env.prod
 ```
 
-The local `.env` is the runtime source of truth for development. Refresh it from Infisical manually when secrets change.
+Each file must contain:
 
-The app now supports two local-first paths:
+- `JOBLENS_ENV=dev` or `JOBLENS_ENV=prod`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `API_BASE_URL`
 
-- preferred CLI path: `flutter run --dart-define-from-file=.env`
-- IDE fallback path: if Dart defines are not passed, the app loads the bundled local `.env` asset at runtime
+The supported backend contract is fixed:
 
-That means Android Studio and Xcode debug builds can still use the local `.env` copy without contacting Infisical at launch.
+- dev: `SUPABASE_URL=https://dev.joblens.xyz`
+- dev: `API_BASE_URL=https://dev.joblens.xyz/functions/v1/api/v1`
+- prod: `SUPABASE_URL=https://api.joblens.xyz`
+- prod: `API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1`
 
-The app accepts either:
+The release scripts validate that the selected env file matches that contract before they build, so a prod build cannot silently point at dev and a dev build cannot silently point at prod.
 
-- `SUPABASE_URL` / `SUPABASE_ANON_KEY`
-- `JOBLENS_SUPABASE_URL` / `JOBLENS_SUPABASE_ANON_KEY`
+`.env` is now only an optional dev-only fallback asset for IDE launches that do not pass Dart defines. Keep `.env` on the dev backend if you use that fallback. Do not use `.env` for prod verification or release builds.
 
-If `API_BASE_URL` is omitted, the app defaults to `${SUPABASE_URL}/functions/v1/api/v1`.
+## Run
+
+Install dependencies once:
+
+```bash
+/Users/lcrh/Tools/flutter/bin/flutter pub get
+```
+
+Local dev build against the dev backend:
+
+```bash
+/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env.dev
+```
+
+Local prod verification build:
+
+```bash
+/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env.prod
+```
 
 ## Auth Notes
 
 - Joblens app login uses Supabase Auth email/password sessions.
 - The mobile app deep link for auth callbacks is `joblens://auth-callback`.
-- Email signup confirmation and forgot-password links should redirect to the public backend callback page at `https://api.joblens.xyz/functions/v1/api/v1/auth/callback`, which can hand off to `joblens://auth-callback` on phones and show a fallback page on desktop.
+- Email signup confirmation and forgot-password links are generated from the selected backend environment:
+  - dev: `https://dev.joblens.xyz/functions/v1/api/v1/auth/callback`
+  - prod: `https://api.joblens.xyz/functions/v1/api/v1/auth/callback`
 - If email confirmation is enabled in Supabase Auth, add `joblens://auth-callback` to the project's auth redirect allow-list so confirmation links can return the user to the app.
-- Forgot-password recovery uses the same deep link. Supabase password reset emails should return to `joblens://auth-callback` so the app can open the reset-password screen directly.
-- For real device testing of confirmation/reset emails, use the public `https://api.joblens.xyz` auth environment. Do not rely on a local CLI Supabase stack for those email-link flows because it can generate local `127.0.0.1` verification links.
+- Forgot-password recovery uses the same deep link after the backend callback page hands off to the app.
+- Provider OAuth starts and callback URLs are resolved from the selected backend API base URL, and provider completion now returns to `joblens://auth-callback` instead of a fixed production web host.
+- For real device testing of confirmation/reset emails, use the environment you are validating and make sure that environment's Supabase Auth redirect allow-list includes `joblens://auth-callback`.
+
+## Release Builds
+
+iOS/TestFlight build for dev:
+
+```bash
+bash scripts/build_ios_release.sh dev v0.1.0
+```
+
+iOS/TestFlight build for prod:
+
+```bash
+bash scripts/build_ios_release.sh prod v0.1.0
+```
+
+Android/Play testing build for dev:
+
+```bash
+bash scripts/build_android_release.sh dev v0.1.0
+```
+
+Android/Play testing build for prod:
+
+```bash
+bash scripts/build_android_release.sh prod v0.1.0
+```
+
+Both release scripts default to `.env.dev` or `.env.prod`, reject mismatched URLs, and write the selected environment into the artifact folder and `release-info.txt`.
 
 ## Validate
 

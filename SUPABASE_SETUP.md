@@ -12,31 +12,47 @@ Use this after the backend setup in:
 
 The intended workflow is:
 
-- keep the canonical mobile-safe secrets in Infisical at `/joblens/mobile`
-- export them into a local `.env` file in the Flutter repo
-- run Flutter with `--dart-define-from-file=.env`
+- keep separate mobile-safe values for the dev and prod backends
+- store them in local `.env.dev` and `.env.prod` files in the Flutter repo
+- run Flutter with `--dart-define-from-file=.env.dev` or `--dart-define-from-file=.env.prod`
 
-The app also bundles the local `.env` as a runtime fallback for local development, so IDE-launched Android/iOS debug builds can still read the same mobile-safe values even if the launch configuration does not pass Dart defines explicitly.
+The app still bundles `.env` as a runtime fallback for local development, but that file is now dev-only convenience. Explicit CLI and release builds should always use `.env.dev` or `.env.prod`.
 
-This means the app still runs from the local `.env` copy even if Infisical is temporarily unavailable.
+This means Android Studio and Xcode debug launches can still work locally without Dart defines, but production verification and release builds no longer depend on a generic `.env`.
 
 ## Required values
 
-The Flutter app needs these runtime values in `.env`:
+The Flutter app needs these runtime values in `.env.dev` and `.env.prod`:
 
+- `JOBLENS_ENV`
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `API_BASE_URL`
 
-For the standard Joblens setup:
+The supported environment contract is:
 
-- `SUPABASE_URL` should match backend `SUPABASE_URL`
-- `SUPABASE_ANON_KEY` should match backend `SUPABASE_ANON_KEY`
-- `API_BASE_URL` should usually be `${SUPABASE_URL}/functions/v1/api/v1`
+- dev:
+  - `JOBLENS_ENV=dev`
+  - `SUPABASE_URL=https://dev.joblens.xyz`
+  - `API_BASE_URL=https://dev.joblens.xyz/functions/v1/api/v1`
+- prod:
+  - `JOBLENS_ENV=prod`
+  - `SUPABASE_URL=https://api.joblens.xyz`
+  - `API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1`
 
-Example:
+The app validates those URLs when `JOBLENS_ENV` is set, and the release scripts refuse to build if the selected env file does not match the requested environment.
+
+Examples:
 
 ```text
+JOBLENS_ENV=dev
+SUPABASE_URL=https://dev.joblens.xyz
+SUPABASE_ANON_KEY=...
+API_BASE_URL=https://dev.joblens.xyz/functions/v1/api/v1
+```
+
+```text
+JOBLENS_ENV=prod
 SUPABASE_URL=https://api.joblens.xyz
 SUPABASE_ANON_KEY=...
 API_BASE_URL=https://api.joblens.xyz/functions/v1/api/v1
@@ -60,43 +76,49 @@ The app expects this deep link:
 
 - `joblens://auth-callback`
 
-The live Supabase Auth configuration must allow that callback for:
+Each environment's Supabase Auth configuration must allow that callback for:
 
 - sign up email confirmation
 - forgot-password recovery
 
-If the live server auth settings do not allow that deep link, sign-in-related email links will not return to the app correctly.
+If the selected environment does not allow that deep link, sign-in-related email links will not return to the app correctly.
 
-For email-link auth flows, Joblens should use the public backend callback page:
+For email-link auth flows, Joblens now uses the selected backend callback page:
 
-- `https://api.joblens.xyz/functions/v1/api/v1/auth/callback`
+- dev: `https://dev.joblens.xyz/functions/v1/api/v1/auth/callback`
+- prod: `https://api.joblens.xyz/functions/v1/api/v1/auth/callback`
 
 That page can:
 
 - hand off to `joblens://auth-callback` on phones
 - show a fallback confirmation page on desktop browsers
 
+Provider OAuth start and callback URLs also resolve from the selected backend API base URL, and completion now redirects directly back to `joblens://auth-callback` instead of using a fixed production web return page.
+
 ## Important testing split for auth emails
 
-Use the public `https://api.joblens.xyz` auth environment when testing:
+Use the environment you are actively validating when testing:
 
 - sign-up confirmation emails
 - forgot-password emails
 - any auth flow where you tap an email link on a real phone
 
-Do not treat the local CLI Supabase stack as the source of truth for those flows. In local development, confirmation/recovery links may resolve through a local `127.0.0.1` auth host, which will not work correctly on a device.
+Do not treat a local CLI Supabase stack as the source of truth for those flows. In local development, confirmation/recovery links may resolve through a local `127.0.0.1` auth host, which will not work correctly on a device.
 
-For normal app development, keep using the local exported `.env`. For email-link auth verification, point the app at the public environment and use the real `api.joblens.xyz` flow.
+For normal app development, use `.env.dev`. For production verification, use `.env.prod`.
 
-## Export local `.env` from Infisical
+## Create local env files
 
 Run from `/Volumes/ExData/Projects/Joblens/joblens_flutter`.
 
 ```bash
-infisical export --domain=https://app.infisical.com --env=prod --path=/joblens/mobile --format=dotenv --output-file=.env
+cp .env.dev.example .env.dev
+cp .env.prod.example .env.prod
 ```
 
-Re-run that command any time you change the mobile secrets in Infisical and want to refresh your local copy.
+Then fill in the correct anon key for each environment from your secret manager. Keep `.env.dev` and `.env.prod` out of source control.
+
+If you still want IDE launches without Dart defines, copy `.env.dev` to `.env` locally and keep `.env` on the dev backend only.
 
 ## Normal local development
 
@@ -104,36 +126,52 @@ Run from `/Volumes/ExData/Projects/Joblens/joblens_flutter`.
 
 ```bash
 /Users/lcrh/Tools/flutter/bin/flutter pub get
-/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env
+/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env.dev
 ```
 
-This uses the local exported `.env` file and does not require contacting Infisical on app launch.
+This uses the explicit dev env file and does not require contacting a secret manager on app launch.
 
-If you launch from Android Studio or Xcode without explicit Dart defines, the app falls back to the bundled local `.env` asset.
+To verify the production backend locally:
+
+```bash
+/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env.prod
+```
+
+If you launch from Android Studio or Xcode without explicit Dart defines, the app falls back to the bundled local `.env` asset when present.
 
 ## iOS build notes
 
-For auth and sync testing, prefer Flutter CLI builds using the local `.env` copy.
+For auth and sync testing, prefer Flutter CLI builds using `.env.dev` or `.env.prod`.
 
-Example:
+TestFlight/dev build:
 
 ```bash
-/Users/lcrh/Tools/flutter/bin/flutter build ios --simulator --dart-define-from-file=.env
+bash scripts/build_ios_release.sh dev v0.1.0
 ```
 
-If you build directly from Xcode, the same values must be injected into the iOS build configuration. Codex should not assume Xcode already has them.
+TestFlight/prod build:
+
+```bash
+bash scripts/build_ios_release.sh prod v0.1.0
+```
+
+The script validates the env file before building and writes the selected environment into the output folder metadata.
 
 ## Android build notes
 
-Use the same local `.env` copy with:
+Use the same explicit env files with:
 
 ```bash
-/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env
+bash scripts/build_android_release.sh dev v0.1.0
+```
+
+```bash
+bash scripts/build_android_release.sh prod v0.1.0
 ```
 
 ## What should work after setup
 
-With a valid local `.env` in place, the app should be able to:
+With valid `.env.dev` and `.env.prod` files in place, the app should be able to:
 
 - open the shell normally
 - sign in with Supabase Auth
@@ -161,14 +199,13 @@ Optional iOS compile check:
 
 Codex can safely:
 
-- export the mobile-safe secrets from Infisical into `.env`
-- verify `.env` contains `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `API_BASE_URL`, and optional crash-reporting values
-- run Flutter with `--dart-define-from-file=.env`
+- verify `.env.dev` and `.env.prod` contain `JOBLENS_ENV`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `API_BASE_URL`
+- run Flutter with `--dart-define-from-file=.env.dev` or `--dart-define-from-file=.env.prod`
 - verify analyze, tests, and simulator builds
 
 Codex should not:
 
 - invent missing secrets
 - copy backend-only secrets into Flutter
-- assume Xcode schemes already carry the correct Dart defines
+- assume Xcode schemes or Android Studio launchers already carry the correct Dart defines
 - change the app deep link without matching backend auth config changes

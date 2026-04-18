@@ -10,22 +10,27 @@ import 'api_exception.dart';
 import 'backend_api_models.dart';
 import 'backend_auth.dart';
 
+const _kDefaultAppAuthRedirectUri = 'joblens://auth-callback';
+
 class JoblensBackendApiClient {
   JoblensBackendApiClient({
     required String baseUrl,
     required AccessTokenProvider accessTokenProvider,
+    String appAuthRedirectUri = _kDefaultAppAuthRedirectUri,
     http.Client? httpClient,
     Duration backendRequestTimeout = const Duration(seconds: 30),
     Duration directUploadTimeout = const Duration(minutes: 2),
   }) : _baseUrl = baseUrl.endsWith('/')
            ? baseUrl.substring(0, baseUrl.length - 1)
            : baseUrl,
+       _appAuthRedirectUri = appAuthRedirectUri.trim(),
        _accessTokenProvider = accessTokenProvider,
        _httpClient = httpClient ?? http.Client(),
        _backendRequestTimeout = backendRequestTimeout,
        _directUploadTimeout = directUploadTimeout;
 
   final String _baseUrl;
+  final String _appAuthRedirectUri;
   final AccessTokenProvider _accessTokenProvider;
   final http.Client _httpClient;
   final Duration _backendRequestTimeout;
@@ -61,8 +66,7 @@ class JoblensBackendApiClient {
           'appInstallId': appInstallId,
         if (devicePlatform != null && devicePlatform.isNotEmpty)
           'devicePlatform': devicePlatform,
-        'mobileReturnUrl': 'https://auth.joblens.app/mobile/provider-callback',
-        'redirectTo': 'joblens://auth-callback',
+        'completionRedirectUri': _appAuthRedirectUri,
       },
     );
     return BeginProviderConnectionResponse.fromMap(map);

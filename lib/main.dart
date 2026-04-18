@@ -25,16 +25,21 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final config = await AppRuntimeConfiguration.load();
-  await SentryFlutter.init((options) {
-    options.dsn = _kSentryDsn;
-    options.environment = kReleaseMode ? 'production' : 'debug';
-    options.enableAutoSessionTracking = false;
-    options.tracesSampleRate = 0;
-    options.attachScreenshot = false;
-    options.debug = kDebugMode;
-  }, appRunner: () async {
-    await _runJoblensApp(config);
-  });
+  await SentryFlutter.init(
+    (options) {
+      options.dsn = _kSentryDsn;
+      options.environment = kReleaseMode
+          ? config.environmentName
+          : '${config.environmentName}-debug';
+      options.enableAutoSessionTracking = false;
+      options.tracesSampleRate = 0;
+      options.attachScreenshot = false;
+      options.debug = kDebugMode;
+    },
+    appRunner: () async {
+      await _runJoblensApp(config);
+    },
+  );
 }
 
 Future<void> _runJoblensApp(AppRuntimeConfiguration config) async {
@@ -63,6 +68,7 @@ Future<void> _runJoblensApp(AppRuntimeConfiguration config) async {
       : const NullAccessTokenProvider();
   final backendApiClient = JoblensBackendApiClient(
     baseUrl: config.apiBaseUrl,
+    appAuthRedirectUri: config.appAuthRedirectUri,
     accessTokenProvider: backendTokenProvider,
   );
   final signedMediaUrlCache = SignedMediaUrlCache();

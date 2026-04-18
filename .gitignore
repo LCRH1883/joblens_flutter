@@ -2,6 +2,8 @@
 .DS_Store
 .air/
 .env
+.env.dev
+.env.prod
 .env.local
 .claude/
 .infisical.json

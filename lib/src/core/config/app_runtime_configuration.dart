@@ -1,56 +1,89 @@
 import 'package:flutter/services.dart' show rootBundle;
 
+const _kDefaultApiBasePath = '/functions/v1/api/v1';
 const _kDefaultEmailAuthCallbackPath = '/functions/v1/api/v1/auth/callback';
 const _kAppAuthRedirectUri = 'joblens://auth-callback';
+
+enum JoblensAppEnvironment {
+  dev(name: 'dev', supabaseUrl: 'https://dev.joblens.xyz'),
+  prod(name: 'prod', supabaseUrl: 'https://api.joblens.xyz');
+
+  const JoblensAppEnvironment({required this.name, required this.supabaseUrl});
+
+  final String name;
+  final String supabaseUrl;
+
+  String get apiBaseUrl => '$supabaseUrl$_kDefaultApiBasePath';
+
+  static JoblensAppEnvironment? tryParse(String value) {
+    final normalized = value.trim().toLowerCase();
+    for (final environment in JoblensAppEnvironment.values) {
+      if (environment.name == normalized) {
+        return environment;
+      }
+    }
+    return null;
+  }
+}
 
 class AppRuntimeConfiguration {
   const AppRuntimeConfiguration({
     required this.supabaseUrl,
     required this.supabaseAnonKey,
     required this.apiBaseUrlOverride,
+    this.environment,
   });
 
+  final JoblensAppEnvironment? environment;
   final String supabaseUrl;
   final String supabaseAnonKey;
   final String apiBaseUrlOverride;
 
   static Future<AppRuntimeConfiguration> load() async {
-    final compileTimeConfig = AppRuntimeConfiguration(
-      supabaseUrl: _firstNonEmpty(
-        const String.fromEnvironment('SUPABASE_URL'),
-        const String.fromEnvironment('JOBLENS_SUPABASE_URL'),
-      ),
-      supabaseAnonKey: _firstNonEmpty(
-        const String.fromEnvironment('SUPABASE_ANON_KEY'),
-        const String.fromEnvironment('JOBLENS_SUPABASE_ANON_KEY'),
-      ),
-      apiBaseUrlOverride: const String.fromEnvironment('API_BASE_URL').trim(),
-    );
-
     final assetValues = await _tryLoadDotEnvAsset();
-    if (assetValues.isEmpty) {
-      return compileTimeConfig;
+    return fromSources(
+      compileTimeValues: _compileTimeValues(),
+      assetValues: assetValues,
+    );
+  }
+
+  static AppRuntimeConfiguration fromSources({
+    Map<String, String> compileTimeValues = const {},
+    Map<String, String> assetValues = const {},
+  }) {
+    final compileTimeEnvironment = _extractEnvironment(compileTimeValues);
+    if (compileTimeEnvironment != null) {
+      return _fromNamedEnvironment(
+        environment: compileTimeEnvironment,
+        values: compileTimeValues,
+      );
     }
 
+    final assetEnvironment = _extractEnvironment(assetValues);
+    if (assetEnvironment != null) {
+      return _fromNamedEnvironment(
+        environment: assetEnvironment,
+        values: assetValues,
+      );
+    }
+
+    final supabaseUrl = _firstNonEmpty(
+      _extractSupabaseUrl(compileTimeValues),
+      _extractSupabaseUrl(assetValues),
+    );
+    final apiBaseUrlOverride = _firstNonEmpty(
+      _extractApiBaseUrl(compileTimeValues),
+      _extractApiBaseUrl(assetValues),
+    );
+
     return AppRuntimeConfiguration(
-      supabaseUrl: _firstNonEmpty(
-        compileTimeConfig.supabaseUrl,
-        _firstNonEmpty(
-          assetValues['SUPABASE_URL'] ?? '',
-          assetValues['JOBLENS_SUPABASE_URL'] ?? '',
-        ),
-      ),
+      environment: _inferEnvironment(supabaseUrl, apiBaseUrlOverride),
+      supabaseUrl: supabaseUrl,
       supabaseAnonKey: _firstNonEmpty(
-        compileTimeConfig.supabaseAnonKey,
-        _firstNonEmpty(
-          assetValues['SUPABASE_ANON_KEY'] ?? '',
-          assetValues['JOBLENS_SUPABASE_ANON_KEY'] ?? '',
-        ),
+        _extractSupabaseAnonKey(compileTimeValues),
+        _extractSupabaseAnonKey(assetValues),
       ),
-      apiBaseUrlOverride: _firstNonEmpty(
-        compileTimeConfig.apiBaseUrlOverride,
-        assetValues['API_BASE_URL'] ?? '',
-      ),
+      apiBaseUrlOverride: apiBaseUrlOverride,
     );
   }
 
@@ -59,18 +92,20 @@ class AppRuntimeConfiguration {
 
   bool get isFullyConfigured => isConfigured && apiBaseUrl.trim().isNotEmpty;
 
+  String get environmentName => environment?.name ?? 'custom';
+
+  String get appAuthRedirectUri => _kAppAuthRedirectUri;
+
   String get apiBaseUrl => apiBaseUrlOverride.trim().isNotEmpty
       ? apiBaseUrlOverride.trim()
-      : '${supabaseUrl.trim()}/functions/v1/api/v1';
+      : '${supabaseUrl.trim()}$_kDefaultApiBasePath';
 
   String get emailAuthRedirectUri {
     if (apiBaseUrl.trim().isNotEmpty) {
-      return Uri.parse(apiBaseUrl).resolve('auth/callback').toString();
+      return _appendPath(apiBaseUrl, 'auth/callback');
     }
     if (supabaseUrl.trim().isNotEmpty) {
-      return Uri.parse(
-        supabaseUrl.trim(),
-      ).resolve(_kDefaultEmailAuthCallbackPath).toString();
+      return _replacePath(supabaseUrl.trim(), _kDefaultEmailAuthCallbackPath);
     }
     return _kAppAuthRedirectUri;
   }
@@ -82,6 +117,112 @@ class AppRuntimeConfiguration {
     } catch (_) {
       return const <String, String>{};
     }
+  }
+
+  static Map<String, String> _compileTimeValues() {
+    return {
+      'JOBLENS_ENV': const String.fromEnvironment('JOBLENS_ENV'),
+      'JOBLENS_APP_ENV': const String.fromEnvironment('JOBLENS_APP_ENV'),
+      'SUPABASE_URL': const String.fromEnvironment('SUPABASE_URL'),
+      'JOBLENS_SUPABASE_URL': const String.fromEnvironment(
+        'JOBLENS_SUPABASE_URL',
+      ),
+      'SUPABASE_ANON_KEY': const String.fromEnvironment('SUPABASE_ANON_KEY'),
+      'JOBLENS_SUPABASE_ANON_KEY': const String.fromEnvironment(
+        'JOBLENS_SUPABASE_ANON_KEY',
+      ),
+      'API_BASE_URL': const String.fromEnvironment('API_BASE_URL'),
+    };
+  }
+
+  static AppRuntimeConfiguration _fromNamedEnvironment({
+    required JoblensAppEnvironment environment,
+    required Map<String, String> values,
+  }) {
+    final resolvedSupabaseUrl = _firstNonEmpty(
+      _extractSupabaseUrl(values),
+      environment.supabaseUrl,
+    );
+    final resolvedApiBaseUrl = _firstNonEmpty(
+      _extractApiBaseUrl(values),
+      environment.apiBaseUrl,
+    );
+
+    if (!_urlsMatch(resolvedSupabaseUrl, environment.supabaseUrl)) {
+      throw StateError(
+        'JOBLENS_ENV=${environment.name} requires SUPABASE_URL=${environment.supabaseUrl}, '
+        'but found $resolvedSupabaseUrl.',
+      );
+    }
+    if (!_urlsMatch(resolvedApiBaseUrl, environment.apiBaseUrl)) {
+      throw StateError(
+        'JOBLENS_ENV=${environment.name} requires API_BASE_URL=${environment.apiBaseUrl}, '
+        'but found $resolvedApiBaseUrl.',
+      );
+    }
+
+    return AppRuntimeConfiguration(
+      environment: environment,
+      supabaseUrl: environment.supabaseUrl,
+      supabaseAnonKey: _extractSupabaseAnonKey(values),
+      apiBaseUrlOverride: environment.apiBaseUrl,
+    );
+  }
+
+  static JoblensAppEnvironment? _extractEnvironment(
+    Map<String, String> values,
+  ) {
+    return JoblensAppEnvironment.tryParse(
+      _firstNonEmpty(
+        values['JOBLENS_ENV'] ?? '',
+        values['JOBLENS_APP_ENV'] ?? '',
+      ),
+    );
+  }
+
+  static JoblensAppEnvironment? _inferEnvironment(
+    String supabaseUrl,
+    String apiBaseUrl,
+  ) {
+    for (final environment in JoblensAppEnvironment.values) {
+      final matchesSupabase =
+          supabaseUrl.isNotEmpty &&
+          _urlsMatch(supabaseUrl, environment.supabaseUrl);
+      final matchesApi =
+          apiBaseUrl.isNotEmpty &&
+          _urlsMatch(apiBaseUrl, environment.apiBaseUrl);
+      if (!matchesSupabase && !matchesApi) {
+        continue;
+      }
+      if (supabaseUrl.isNotEmpty && !matchesSupabase) {
+        continue;
+      }
+      if (apiBaseUrl.isNotEmpty && !matchesApi) {
+        continue;
+      }
+      return environment;
+    }
+    return null;
+  }
+
+  static String _extractSupabaseUrl(Map<String, String> values) {
+    return _normalizeUrl(
+      _firstNonEmpty(
+        values['SUPABASE_URL'] ?? '',
+        values['JOBLENS_SUPABASE_URL'] ?? '',
+      ),
+    );
+  }
+
+  static String _extractSupabaseAnonKey(Map<String, String> values) {
+    return _firstNonEmpty(
+      values['SUPABASE_ANON_KEY'] ?? '',
+      values['JOBLENS_SUPABASE_ANON_KEY'] ?? '',
+    );
+  }
+
+  static String _extractApiBaseUrl(Map<String, String> values) {
+    return _normalizeUrl(values['API_BASE_URL'] ?? '');
   }
 
   static Map<String, String> _parseDotEnv(String raw) {
@@ -115,6 +256,10 @@ class AppRuntimeConfiguration {
     }
     return value.trim();
   }
+
+  static bool _urlsMatch(String value, String expected) {
+    return _normalizeUrl(value) == _normalizeUrl(expected);
+  }
 }
 
 String _firstNonEmpty(String primary, String fallback) {
@@ -123,4 +268,25 @@ String _firstNonEmpty(String primary, String fallback) {
     return primaryTrimmed;
   }
   return fallback.trim();
+}
+
+String _normalizeUrl(String value) {
+  final trimmed = value.trim();
+  if (trimmed.endsWith('/')) {
+    return trimmed.substring(0, trimmed.length - 1);
+  }
+  return trimmed;
+}
+
+String _appendPath(String baseUrl, String suffix) {
+  final uri = Uri.parse(_normalizeUrl(baseUrl));
+  final normalizedPath = uri.path.endsWith('/')
+      ? '${uri.path}$suffix'
+      : '${uri.path}/$suffix';
+  return uri.replace(path: normalizedPath).toString();
+}
+
+String _replacePath(String baseUrl, String path) {
+  final uri = Uri.parse(_normalizeUrl(baseUrl));
+  return uri.replace(path: path).toString();
 }
