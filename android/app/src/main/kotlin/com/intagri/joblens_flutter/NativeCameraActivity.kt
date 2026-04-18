@@ -627,11 +627,25 @@ class NativeCameraActivity : AppCompatActivity() {
             )
         }
         val popupWidth = minOf(resources.displayMetrics.widthPixels - dp(32), dp(360))
+        val popupHeader = TextView(this).apply {
+            text = "Save to"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(dp(4), dp(2), dp(4), dp(10))
+        }
         val popupContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = dropdownPanelBackground()
-            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setPadding(dp(14), dp(14), dp(14), dp(14))
             elevation = dp(18).toFloat()
+            addView(
+                popupHeader,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
             addView(
                 searchField,
                 LinearLayout.LayoutParams(
@@ -663,7 +677,7 @@ class NativeCameraActivity : AppCompatActivity() {
 
         fun renderTargets(query: String) {
             val normalizedQuery = query.trim()
-            val matchingTargets = buildList {
+            val matchingInbox = buildList {
                 if (
                     normalizedQuery.isBlank() ||
                     "Inbox".contains(normalizedQuery, ignoreCase = true) ||
@@ -671,18 +685,15 @@ class NativeCameraActivity : AppCompatActivity() {
                 ) {
                     add(inboxTarget)
                 }
-                addAll(
-                    fixedTargets.filter { option ->
-                        normalizedQuery.isBlank() ||
-                            option.resolvedProjectName.contains(
-                                normalizedQuery,
-                                ignoreCase = true,
-                            )
-                    },
-                )
             }
+            val matchingProjects = fixedTargets.filter { option ->
+                normalizedQuery.isBlank() ||
+                    option.resolvedProjectName.contains(normalizedQuery, ignoreCase = true)
+            }
+            val showSectionHeaders = matchingInbox.isNotEmpty() && matchingProjects.isNotEmpty()
+
             dropdownList.removeAllViews()
-            if (matchingTargets.isEmpty()) {
+            if (matchingInbox.isEmpty() && matchingProjects.isEmpty()) {
                 dropdownList.addView(
                     TextView(this).apply {
                         setTextColor(0xAAFFFFFF.toInt())
@@ -692,37 +703,51 @@ class NativeCameraActivity : AppCompatActivity() {
                     },
                 )
             } else {
-                matchingTargets.forEachIndexed { index, option ->
+                if (showSectionHeaders) {
+                    dropdownList.addView(createPickerSectionHeader("Inbox"))
+                }
+                matchingInbox.forEachIndexed { index, option ->
                     dropdownList.addView(
                         createCompactTargetRow(
-                            iconRes = if (option.mode == CaptureTargetMode.INBOX) {
-                                R.drawable.ic_joblens_inbox_24
-                            } else {
-                                R.drawable.ic_joblens_folder_24
-                            },
+                            iconRes = R.drawable.ic_joblens_inbox_24,
                             title = option.resolvedProjectName,
-                            selected = when (option.mode) {
-                                CaptureTargetMode.INBOX ->
-                                    currentTarget?.mode == CaptureTargetMode.INBOX
-                                CaptureTargetMode.FIXED_PROJECT ->
-                                    currentTarget?.mode == CaptureTargetMode.FIXED_PROJECT &&
-                                        currentTarget?.fixedProjectId == option.fixedProjectId
-                                CaptureTargetMode.LAST_USED -> false
-                            },
+                            selected = currentTarget?.mode == CaptureTargetMode.INBOX,
                         ) { selectTarget(popup, option) },
                     )
-                    if (index < matchingTargets.lastIndex) {
+                    if (index < matchingInbox.lastIndex) {
                         dropdownList.addView(verticalSpace(dp(6)))
+                    }
+                }
+                if (matchingProjects.isNotEmpty()) {
+                    dropdownList.addView(
+                        verticalSpace(if (showSectionHeaders) dp(4) else dp(6)),
+                    )
+                    if (showSectionHeaders) {
+                        dropdownList.addView(createPickerSectionHeader("Projects"))
+                    }
+                    matchingProjects.forEachIndexed { index, option ->
+                        dropdownList.addView(
+                            createCompactTargetRow(
+                                iconRes = R.drawable.ic_joblens_folder_24,
+                                title = option.resolvedProjectName,
+                                selected = currentTarget?.mode == CaptureTargetMode.FIXED_PROJECT &&
+                                    currentTarget?.fixedProjectId == option.fixedProjectId,
+                            ) { selectTarget(popup, option) },
+                        )
+                        if (index < matchingProjects.lastIndex) {
+                            dropdownList.addView(verticalSpace(dp(6)))
+                        }
                     }
                 }
             }
 
+            val totalCount = matchingInbox.size + matchingProjects.size
             listScroller.layoutParams = (listScroller.layoutParams as LinearLayout.LayoutParams).apply {
                 height = minOf(
                     dp(320),
                     maxOf(
                         dp(56),
-                        matchingTargets.size.coerceAtMost(6) * dp(52),
+                        totalCount.coerceAtMost(6) * dp(52),
                     ),
                 )
             }
@@ -787,9 +812,10 @@ class NativeCameraActivity : AppCompatActivity() {
     }
 
     private fun updateTargetButton() {
+        val isInbox = currentTarget?.mode == CaptureTargetMode.INBOX
         targetButton.text = currentTarget?.resolvedProjectName ?: "Inbox"
         targetButton.setCompoundDrawablesRelativeWithIntrinsicBounds(
-            tintedDrawable(R.drawable.ic_joblens_folder_24),
+            tintedDrawable(if (isInbox) R.drawable.ic_joblens_inbox_24 else R.drawable.ic_joblens_folder_24),
             null,
             tintedDrawable(R.drawable.ic_joblens_expand_more_24),
             null,
@@ -1059,6 +1085,16 @@ class NativeCameraActivity : AppCompatActivity() {
                 },
                 FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER),
             )
+        }
+    }
+
+    private fun createPickerSectionHeader(label: String): TextView {
+        return TextView(this).apply {
+            text = label.uppercase(Locale.US)
+            setTextColor(0x88FFFFFF.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            letterSpacing = 0.08f
+            setPadding(dp(6), dp(6), dp(6), dp(4))
         }
     }
 
