@@ -11,6 +11,8 @@ import '../../core/ui/edge_swipe_back.dart';
 import '../../core/ui/user_facing_error.dart';
 import '../gallery/photo_viewer_page.dart';
 
+enum _AssetSortOrder { newestFirst, oldestFirst }
+
 class ProjectDetailPage extends ConsumerStatefulWidget {
   const ProjectDetailPage({super.key, required this.project});
 
@@ -28,6 +30,7 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
   bool _isDragSelecting = false;
   bool _dragSelectionAdds = true;
   String? _lastDraggedAssetId;
+  _AssetSortOrder _sortOrder = _AssetSortOrder.newestFirst;
 
   bool get _isSelectionMode => _selectionModeEnabled;
 
@@ -42,130 +45,38 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
       );
     }
 
-    final assets = store.assets
+    var assets = store.assets
         .where((asset) => asset.projectId == project.id)
         .toList();
+    assets.sort(
+      (a, b) => _sortOrder == _AssetSortOrder.newestFirst
+          ? b.createdAt.compareTo(a.createdAt)
+          : a.createdAt.compareTo(b.createdAt),
+    );
     _normalizeSelectionState(assets);
 
     final allSelected =
         assets.isNotEmpty && _selectedAssetIds.length == assets.length;
 
     return Scaffold(
-      appBar: AppBar(
-        leading: _isSelectionMode
-            ? IconButton(
-                tooltip: 'Exit selection',
-                onPressed: store.isBusy ? null : _clearSelection,
-                icon: const Icon(Icons.close),
-              )
-            : null,
-        title: Text(
-          _isSelectionMode
-              ? '${_selectedAssetIds.length} selected'
-              : project.name,
-        ),
-        actions: _isSelectionMode
-            ? [
-                IconButton(
-                  tooltip: allSelected ? 'Clear selection' : 'Select all',
-                  onPressed: store.isBusy
-                      ? null
-                      : () => _toggleSelectAll(assets),
-                  icon: Icon(allSelected ? Icons.clear_all : Icons.select_all),
-                ),
-                IconButton(
-                  tooltip: 'Move selected',
-                  onPressed:
-                      store.isBusy ||
-                          store.projects.isEmpty ||
-                          _selectedAssetIds.isEmpty
-                      ? null
-                      : () => _showMoveDialog(context, store),
-                  icon: const Icon(Icons.drive_file_move_outline),
-                ),
-                IconButton(
-                  tooltip: 'Archive selected',
-                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
-                      ? null
-                      : () => _archiveSelectedToCloudOnly(context, store, assets),
-                  icon: const Icon(Icons.archive_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Download selected',
-                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
-                      ? null
-                      : () => _downloadSelectedToJoblens(context, store, assets),
-                  icon: const Icon(Icons.download_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Copy selected to phone gallery',
-                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
-                      ? null
-                      : () => _copySelectedToPhoneGallery(context, store, assets),
-                  icon: const Icon(Icons.add_to_photos_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Delete selected',
-                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
-                      ? null
-                      : () => _confirmDeleteSelected(context, store),
-                  icon: const Icon(Icons.delete_outline),
-                ),
-              ]
-            : [
-                IconButton(
-                  tooltip: 'Select photos',
-                  onPressed: store.isBusy || assets.isEmpty
-                      ? null
-                      : _enableSelectionMode,
-                  icon: const Icon(Icons.checklist_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Edit notes',
-                  onPressed: store.isBusy
-                      ? null
-                      : () => _openNotesEditor(context, store, project),
-                  icon: Icon(
-                    project.notes.trim().isEmpty
-                        ? Icons.menu_book_outlined
-                        : Icons.menu_book,
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Archive project photos',
-                  onPressed: store.isBusy || assets.isEmpty
-                      ? null
-                      : () => _archiveProjectToCloudOnly(context, store, project),
-                  icon: const Icon(Icons.archive_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Download missing photos',
-                  onPressed: store.isBusy || assets.isEmpty
-                      ? null
-                      : () => _downloadProjectToJoblens(context, store, project),
-                  icon: const Icon(Icons.download_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Rescan cloud',
-                  onPressed:
-                      (project.remoteProjectId?.trim().isEmpty ?? true)
-                      ? null
-                      : () => _reconcileProject(context, store, project),
-                  icon: const Icon(Icons.travel_explore_outlined),
-                ),
-              ],
-      ),
+      appBar: _isSelectionMode
+          ? _buildSelectionAppBar(context, store, assets, allSelected)
+          : _buildNormalAppBar(context, store, project, assets),
       body: EdgeSwipeBack(
         child: assets.isEmpty
             ? const Center(child: Text('No photos in this project yet.'))
             : Column(
                 children: [
+                  if (!_isSelectionMode)
+                    _SortInfoBar(
+                      assetCount: assets.length,
+                      sortOrder: _sortOrder,
+                      onSortChanged: (order) =>
+                          setState(() => _sortOrder = order),
+                    ),
                   if (store.isBusy)
                     const Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                       child: LinearProgressIndicator(),
                     ),
                   if (userFacingStoreError(store.lastError) case final error?)
@@ -178,9 +89,8 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                           child: Text(
                             error,
                             style: TextStyle(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onErrorContainer,
+                              color:
+                                  Theme.of(context).colorScheme.onErrorContainer,
                             ),
                           ),
                         ),
@@ -191,7 +101,7 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                       physics: _isDragSelecting
                           ? const NeverScrollableScrollPhysics()
                           : const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(3),
                       itemCount: assets.length,
                       gridDelegate:
                           const SliverGridDelegateWithFixedCrossAxisCount(
@@ -217,7 +127,147 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
                 ],
               ),
       ),
+      bottomNavigationBar: _isSelectionMode
+          ? _SelectionActionBar(
+              hasSelection: _selectedAssetIds.isNotEmpty,
+              hasProjects: store.projects.isNotEmpty,
+              busy: store.isBusy,
+              onMove: () => _showMoveDialog(context, store),
+              onArchive: () =>
+                  _archiveSelectedToCloudOnly(context, store, assets),
+              onDownload: () =>
+                  _downloadSelectedToJoblens(context, store, assets),
+              onDelete: () => _confirmDeleteSelected(context, store),
+            )
+          : null,
     );
+  }
+
+  AppBar _buildNormalAppBar(
+    BuildContext context,
+    JoblensStore store,
+    Project project,
+    List<PhotoAsset> assets,
+  ) {
+    return AppBar(
+      title: Text(project.name),
+      actions: [
+        IconButton(
+          tooltip: 'Select photos',
+          onPressed: store.isBusy || assets.isEmpty ? null : _enableSelectionMode,
+          icon: const Icon(Icons.checklist_outlined),
+        ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          tooltip: 'More options',
+          onSelected: (value) => _handleProjectMenuAction(
+            context,
+            store,
+            project,
+            assets,
+            value,
+          ),
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'notes',
+              child: _MenuRow(
+                icon: project.notes.trim().isEmpty
+                    ? Icons.menu_book_outlined
+                    : Icons.menu_book,
+                label: 'Edit notes',
+              ),
+            ),
+            const PopupMenuDivider(),
+            PopupMenuItem(
+              value: 'archive',
+              enabled: assets.isNotEmpty && !store.isBusy,
+              child: const _MenuRow(
+                icon: Icons.archive_outlined,
+                label: 'Archive all photos',
+              ),
+            ),
+            PopupMenuItem(
+              value: 'download',
+              enabled: assets.isNotEmpty && !store.isBusy,
+              child: const _MenuRow(
+                icon: Icons.download_outlined,
+                label: 'Download missing photos',
+              ),
+            ),
+            PopupMenuItem(
+              value: 'rescan',
+              enabled: !(project.remoteProjectId?.trim().isEmpty ?? true) &&
+                  !store.isBusy,
+              child: const _MenuRow(
+                icon: Icons.travel_explore_outlined,
+                label: 'Rescan cloud',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  AppBar _buildSelectionAppBar(
+    BuildContext context,
+    JoblensStore store,
+    List<PhotoAsset> assets,
+    bool allSelected,
+  ) {
+    return AppBar(
+      leading: IconButton(
+        tooltip: 'Exit selection',
+        onPressed: store.isBusy ? null : _clearSelection,
+        icon: const Icon(Icons.close),
+      ),
+      title: Text('${_selectedAssetIds.length} selected'),
+      actions: [
+        IconButton(
+          tooltip: allSelected ? 'Clear selection' : 'Select all',
+          onPressed: store.isBusy ? null : () => _toggleSelectAll(assets),
+          icon: Icon(allSelected ? Icons.clear_all : Icons.select_all),
+        ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          tooltip: 'More',
+          onSelected: (value) {
+            if (value == 'copy_phone') {
+              _copySelectedToPhoneGallery(context, store, assets);
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'copy_phone',
+              enabled: _selectedAssetIds.isNotEmpty && !store.isBusy,
+              child: const _MenuRow(
+                icon: Icons.add_to_photos_outlined,
+                label: 'Copy to phone gallery',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _handleProjectMenuAction(
+    BuildContext context,
+    JoblensStore store,
+    Project project,
+    List<PhotoAsset> assets,
+    String value,
+  ) async {
+    switch (value) {
+      case 'notes':
+        await _openNotesEditor(context, store, project);
+      case 'archive':
+        await _archiveProjectToCloudOnly(context, store, project);
+      case 'download':
+        await _downloadProjectToJoblens(context, store, project);
+      case 'rescan':
+        await _reconcileProject(context, store, project);
+    }
   }
 
   Project? _currentProject(JoblensStore store) {
@@ -450,9 +500,7 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     final copied = result.copiedCount;
     final skipped = result.skippedCount;
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
 
@@ -486,15 +534,11 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     }
 
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
 
-    messenger.showSnackBar(
-      SnackBar(content: Text(result.summaryMessage())),
-    );
+    messenger.showSnackBar(SnackBar(content: Text(result.summaryMessage())));
   }
 
   Future<void> _archiveSelectedToCloudOnly(
@@ -516,15 +560,11 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     }
 
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
 
-    messenger.showSnackBar(
-      SnackBar(content: Text(result.summaryMessage())),
-    );
+    messenger.showSnackBar(SnackBar(content: Text(result.summaryMessage())));
   }
 
   Future<void> _downloadProjectToJoblens(
@@ -539,15 +579,11 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     }
 
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
 
-    messenger.showSnackBar(
-      SnackBar(content: Text(result.summaryMessage())),
-    );
+    messenger.showSnackBar(SnackBar(content: Text(result.summaryMessage())));
   }
 
   Future<void> _archiveProjectToCloudOnly(
@@ -562,15 +598,11 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
     }
 
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
 
-    messenger.showSnackBar(
-      SnackBar(content: Text(result.summaryMessage())),
-    );
+    messenger.showSnackBar(SnackBar(content: Text(result.summaryMessage())));
   }
 
   Future<void> _reconcileProject(
@@ -674,6 +706,204 @@ class _ProjectDetailPageState extends ConsumerState<ProjectDetailPage> {
       return;
     }
     messenger.showSnackBar(const SnackBar(content: Text('Notes saved.')));
+  }
+}
+
+class _MenuRow extends StatelessWidget {
+  const _MenuRow({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
+    );
+  }
+}
+
+class _SortInfoBar extends StatelessWidget {
+  const _SortInfoBar({
+    required this.assetCount,
+    required this.sortOrder,
+    required this.onSortChanged,
+  });
+
+  final int assetCount;
+  final _AssetSortOrder sortOrder;
+  final ValueChanged<_AssetSortOrder> onSortChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 8, 2),
+      child: Row(
+        children: [
+          Text(
+            '$assetCount photo${assetCount == 1 ? '' : 's'}',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const Spacer(),
+          PopupMenuButton<_AssetSortOrder>(
+            initialValue: sortOrder,
+            onSelected: onSortChanged,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.sort_rounded,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    sortOrder == _AssetSortOrder.newestFirst
+                        ? 'Newest'
+                        : 'Oldest',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _AssetSortOrder.newestFirst,
+                child: Text('Newest first'),
+              ),
+              PopupMenuItem(
+                value: _AssetSortOrder.oldestFirst,
+                child: Text('Oldest first'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectionActionBar extends StatelessWidget {
+  const _SelectionActionBar({
+    required this.hasSelection,
+    required this.hasProjects,
+    required this.busy,
+    required this.onMove,
+    required this.onArchive,
+    required this.onDownload,
+    required this.onDelete,
+  });
+
+  final bool hasSelection;
+  final bool hasProjects;
+  final bool busy;
+  final VoidCallback onMove;
+  final VoidCallback onArchive;
+  final VoidCallback onDownload;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final canAct = hasSelection && !busy;
+    return Material(
+      elevation: 8,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _ActionButton(
+                    icon: Icons.drive_file_move_outline,
+                    label: 'Move',
+                    onTap: canAct && hasProjects ? onMove : null,
+                  ),
+                  _ActionButton(
+                    icon: Icons.archive_outlined,
+                    label: 'Archive',
+                    onTap: canAct ? onArchive : null,
+                  ),
+                  _ActionButton(
+                    icon: Icons.download_outlined,
+                    label: 'Download',
+                    onTap: canAct ? onDownload : null,
+                  ),
+                  _ActionButton(
+                    icon: Icons.delete_outline,
+                    label: 'Delete',
+                    activeColor: Theme.of(context).colorScheme.error,
+                    onTap: canAct ? onDelete : null,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    this.activeColor,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color? activeColor;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isEnabled = onTap != null;
+    final resolvedActive =
+        activeColor ?? Theme.of(context).colorScheme.onSurface;
+    final color = isEnabled
+        ? resolvedActive
+        : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3);
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 24),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

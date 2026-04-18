@@ -184,6 +184,7 @@ class _SyncPageState extends ConsumerState<SyncPage>
                   return _ProviderConnectionCard(
                     providerAccount: providerAccount,
                     isFutureIntegration: isFutureIntegration,
+                    isLocked: isLocked,
                     isOpening:
                         _connectingProvider == providerAccount.providerType,
                     canConnect: canStartConnect,
@@ -793,10 +794,15 @@ Rect? _sharePositionOrigin(BuildContext context) {
   return box.localToGlobal(Offset.zero) & box.size;
 }
 
+// Green for connected, blue for not connected.
+const _kConnectedColor = Color(0xFF1E8449);
+const _kDisconnectedColor = Color(0xFF1A73E8);
+
 class _ProviderConnectionCard extends StatelessWidget {
   const _ProviderConnectionCard({
     required this.providerAccount,
     required this.isFutureIntegration,
+    required this.isLocked,
     required this.isOpening,
     required this.canConnect,
     required this.onConnect,
@@ -805,6 +811,7 @@ class _ProviderConnectionCard extends StatelessWidget {
 
   final ProviderAccount providerAccount;
   final bool isFutureIntegration;
+  final bool isLocked;
   final bool isOpening;
   final bool canConnect;
   final VoidCallback? onConnect;
@@ -813,21 +820,15 @@ class _ProviderConnectionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final accent = _providerAccent(providerAccount.providerType);
     final hasActiveConnection = providerAccount.hasActiveConnection;
     final isExpired = providerAccount.isExpired;
     final canReconnect = canConnect && hasActiveConnection;
     final canShowConnect = canConnect && !hasActiveConnection;
-    final effectiveAccent = isFutureIntegration ? scheme.outline : accent;
-    final accountLabel = providerAccount.connectedAccountLabel;
-    final rootPath = providerAccount.rootFolderPath;
-    final titleStyle = Theme.of(context).textTheme.titleMedium?.copyWith(
-      fontWeight: FontWeight.w700,
-      letterSpacing: -0.2,
-    );
     final hasConflicts = providerAccount.openConflictCount > 0;
+    final isDimmed = isFutureIntegration || isLocked;
+
     final statusText = isFutureIntegration
-        ? 'Future integration'
+        ? 'Coming soon'
         : switch (providerAccount.connectionStatus) {
             ProviderConnectionStatus.ready =>
               providerAccount.syncHealth == 'failed'
@@ -844,168 +845,146 @@ class _ProviderConnectionCard extends StatelessWidget {
             ProviderConnectionStatus.disconnected => 'Not connected',
           };
 
+    final statusColor = isFutureIntegration
+        ? scheme.onSurfaceVariant
+        : isExpired
+        ? scheme.error
+        : hasActiveConnection
+        ? _kConnectedColor
+        : _kDisconnectedColor;
+
+    final tt = Theme.of(context).textTheme;
+    final muted = tt.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
+
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Opacity(
-          opacity: isFutureIntegration ? 0.55 : 1,
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Opacity(
+        opacity: isDimmed ? 0.42 : 1,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               _ProviderLogoCircle(provider: providerAccount.providerType),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(providerAccount.providerType.label, style: titleStyle),
-                    const SizedBox(height: 3),
                     Text(
-                      statusText,
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: isFutureIntegration
-                            ? scheme.onSurfaceVariant
-                            : isExpired
-                            ? scheme.error
-                            : effectiveAccent,
+                      providerAccount.providerType.label,
+                      style: tt.titleSmall?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    if (!isFutureIntegration && hasConflicts)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          '${providerAccount.openConflictCount} provider conflict${providerAccount.openConflictCount == 1 ? '' : 's'} require review.',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: statusColor,
+                          ),
                         ),
-                      ),
-                    if (isFutureIntegration)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          'Coming later. Not available to connect yet.',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(
+                            statusText,
+                            style: tt.labelSmall?.copyWith(
+                              color: statusColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
+                      ],
+                    ),
+                    if (!isFutureIntegration && hasConflicts) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        '${providerAccount.openConflictCount} conflict${providerAccount.openConflictCount == 1 ? '' : 's'} require review.',
+                        style: muted,
                       ),
-                    if (!isFutureIntegration && accountLabel != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          accountLabel,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ),
-                    if (!isFutureIntegration && rootPath != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          rootPath,
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ),
+                    ],
                     if (!isFutureIntegration &&
+                        hasActiveConnection &&
                         !hasConflicts &&
-                        (providerAccount.lastError?.trim().isNotEmpty ?? false))
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          providerAccount.lastError!.trim(),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      ),
+                        (providerAccount.lastError?.trim().isNotEmpty ??
+                            false)) ...[
+                      const SizedBox(height: 3),
+                      Text(providerAccount.lastError!.trim(), style: muted),
+                    ],
                   ],
                 ),
               ),
+              // Right-side actions — icons for connected, button for others
               if (isFutureIntegration)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(minWidth: 110),
-                  child: FilledButton(
-                    onPressed: null,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: scheme.surfaceContainerHighest,
-                      foregroundColor: scheme.onSurfaceVariant,
-                      disabledBackgroundColor: scheme.surfaceContainerHighest,
-                      disabledForegroundColor: scheme.onSurfaceVariant,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    'Soon',
+                    style: tt.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
                     ),
-                    child: const Text('Soon'),
                   ),
                 )
-              else if (hasActiveConnection) ...[
-                ConstrainedBox(
-                  constraints: const BoxConstraints(minWidth: 110),
-                  child: FilledButton(
-                    onPressed: canReconnect ? onConnect : null,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: isExpired
-                          ? scheme.error
-                          : effectiveAccent,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
+              else if (hasActiveConnection)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'Reconnect',
+                      onPressed: canReconnect ? onConnect : null,
+                      icon: Icon(
+                        isOpening ? Icons.hourglass_top_rounded : Icons.sync_rounded,
+                        size: 20,
                       ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                    ),
-                    child: Text(isOpening ? 'Opening...' : 'Reconnect'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(minWidth: 110),
-                  child: OutlinedButton(
-                    onPressed: onDisconnect,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: isExpired
-                          ? scheme.error
-                          : effectiveAccent,
-                      side: BorderSide(
-                        color: isExpired ? scheme.error : effectiveAccent,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
+                      style: IconButton.styleFrom(
+                        foregroundColor: isExpired
+                            ? scheme.error
+                            : _kConnectedColor,
+                        visualDensity: VisualDensity.compact,
                       ),
                     ),
-                    child: const Text('Disconnect'),
-                  ),
-                ),
-              ] else
-                ConstrainedBox(
-                  constraints: const BoxConstraints(minWidth: 110),
-                  child: FilledButton(
-                    onPressed: canShowConnect ? onConnect : null,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: effectiveAccent,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
+                    IconButton(
+                      tooltip: 'Disconnect',
+                      onPressed: onDisconnect,
+                      icon: const Icon(Icons.link_off_rounded, size: 20),
+                      style: IconButton.styleFrom(
+                        foregroundColor: scheme.onSurfaceVariant,
+                        visualDensity: VisualDensity.compact,
                       ),
                     ),
-                    child: Text(isOpening ? 'Opening...' : 'Connect'),
+                  ],
+                )
+              else
+                FilledButton(
+                  onPressed: canShowConnect ? onConnect : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _kDisconnectedColor,
+                    foregroundColor: Colors.white,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 6,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    textStyle: tt.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
+                  child: Text(isOpening ? 'Opening…' : 'Connect'),
                 ),
             ],
           ),
@@ -1024,8 +1003,8 @@ class _ProviderLogoCircle extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      width: 54,
-      height: 54,
+      width: 40,
+      height: 40,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: _providerLogoBackground(provider),
@@ -1037,24 +1016,13 @@ class _ProviderLogoCircle extends StatelessWidget {
       ),
       child: Center(
         child: SizedBox(
-          width: 30,
-          height: 30,
+          width: 22,
+          height: 22,
           child: CustomPaint(painter: _ProviderLogoPainter(provider)),
         ),
       ),
     );
   }
-}
-
-Color _providerAccent(CloudProviderType provider) {
-  return switch (provider) {
-    CloudProviderType.googleDrive => const Color(0xFF1A73E8),
-    CloudProviderType.oneDrive => const Color(0xFF0078D4),
-    CloudProviderType.dropbox => const Color(0xFF0061FF),
-    CloudProviderType.nextcloud => const Color(0xFF0082C9),
-    CloudProviderType.box => const Color(0xFF0061D5),
-    CloudProviderType.backend => const Color(0xFF276749),
-  };
 }
 
 Color _providerLogoBackground(CloudProviderType provider) {
