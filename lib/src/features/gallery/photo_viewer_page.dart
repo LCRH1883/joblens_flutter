@@ -58,17 +58,9 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
       appBar: AppBar(
         title: Text('${_currentIndex + 1} / ${widget.assets.length}'),
         actions: [
-          if (canArchiveCurrent)
-            IconButton(
-              tooltip: 'Archive in Joblens',
-              onPressed: store.isBusy
-                  ? null
-                  : () => _archiveCurrentAsset(context, store, currentAsset),
-              icon: const Icon(Icons.archive_outlined),
-            ),
           if (canDownloadCurrent)
             IconButton(
-              tooltip: 'Download to Joblens',
+              tooltip: 'Download to device',
               onPressed: store.isBusy
                   ? null
                   : () => _downloadCurrentAsset(context, store, currentAsset),
@@ -104,6 +96,14 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
             );
           },
         ),
+      ),
+      bottomNavigationBar: _PhotoActionBar(
+        canArchive: canArchiveCurrent,
+        hasProjects: store.projects.isNotEmpty,
+        busy: store.isBusy,
+        onArchive: () => _archiveCurrentAsset(context, store, currentAsset),
+        onMove: () => _moveCurrentAsset(context, store, currentAsset),
+        onDelete: () => _confirmDeleteCurrent(context, store, currentAsset),
       ),
     );
   }
@@ -154,14 +154,10 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
       return;
     }
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
-    messenger.showSnackBar(
-      SnackBar(content: Text(result.summaryMessage())),
-    );
+    messenger.showSnackBar(SnackBar(content: Text(result.summaryMessage())));
   }
 
   Future<void> _archiveCurrentAsset(
@@ -175,13 +171,220 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
       return;
     }
     if (store.lastError != null) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(store.lastError!)),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
-    messenger.showSnackBar(
-      SnackBar(content: Text(result.summaryMessage())),
+    messenger.showSnackBar(SnackBar(content: Text(result.summaryMessage())));
+  }
+
+  Future<void> _moveCurrentAsset(
+    BuildContext context,
+    JoblensStore store,
+    PhotoAsset asset,
+  ) async {
+    if (store.projects.isEmpty) {
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    int selectedProjectId = store.projects.first.id;
+
+    final moved = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Move to project'),
+              content: DropdownButton<int>(
+                value: selectedProjectId,
+                isExpanded: true,
+                items: [
+                  for (final project in store.projects)
+                    DropdownMenuItem(
+                      value: project.id,
+                      child: Text(project.name),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  setDialogState(() => selectedProjectId = value);
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    await store.moveAssetsToProject(
+                      [asset.id],
+                      selectedProjectId,
+                    );
+                    if (context.mounted) {
+                      Navigator.of(context).pop(true);
+                    }
+                  },
+                  child: const Text('Move'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (moved == true && mounted) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Photo moved to project.')),
+      );
+    }
+  }
+
+  Future<void> _confirmDeleteCurrent(
+    BuildContext context,
+    JoblensStore store,
+    PhotoAsset asset,
+  ) async {
+    final navigator = Navigator.of(context);
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Move to Trash?'),
+          content: const Text(
+            'This photo will move to Trash and stay there for 30 days before permanent removal.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Move to Trash'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete != true) {
+      return;
+    }
+
+    await store.softDeleteAsset(asset.id);
+    if (!mounted) {
+      return;
+    }
+
+    navigator.pop();
+  }
+}
+
+class _PhotoActionBar extends StatelessWidget {
+  const _PhotoActionBar({
+    required this.canArchive,
+    required this.hasProjects,
+    required this.busy,
+    required this.onArchive,
+    required this.onMove,
+    required this.onDelete,
+  });
+
+  final bool canArchive;
+  final bool hasProjects;
+  final bool busy;
+  final VoidCallback onArchive;
+  final VoidCallback onMove;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Colors.black,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Divider(color: Colors.white12, height: 1, thickness: 1),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _ActionButton(
+                    icon: Icons.archive_outlined,
+                    label: 'Archive',
+                    onTap: busy || !canArchive ? null : onArchive,
+                  ),
+                  _ActionButton(
+                    icon: Icons.drive_file_move_outline,
+                    label: 'Move',
+                    onTap: busy || !hasProjects ? null : onMove,
+                  ),
+                  _ActionButton(
+                    icon: Icons.delete_outline,
+                    label: 'Delete',
+                    activeColor: Colors.red[300]!,
+                    onTap: busy ? null : onDelete,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    this.activeColor = Colors.white,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color activeColor;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isEnabled = onTap != null;
+    final color = isEnabled
+        ? activeColor
+        : Colors.white.withValues(alpha: 0.3);
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 26),
+            const SizedBox(height: 5),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

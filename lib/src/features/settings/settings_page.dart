@@ -19,81 +19,94 @@ class SettingsPage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final store = ref.watch(joblensStoreListenableProvider);
+    final muted = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
         children: [
+          _SectionLabel('ACCOUNT & SYNC'),
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.person_outline),
-              title: const Text('Account'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => _openAccountPage(context),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.person_outline),
+                  title: const Text('Account'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openAccountPage(context),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.sync_outlined),
+                  title: const Text('Cloud Sync'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openSyncPage(context),
+                ),
+              ],
             ),
           ),
+          const SizedBox(height: 24),
+          _SectionLabel('LIBRARY'),
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.sync_outlined),
-              title: const Text('Cloud sync'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => _openSyncPage(context),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.folder_outlined),
+                  title: const Text('Storage'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openStoragePage(context),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.delete_outline_rounded),
+                  title: const Text('Trash'),
+                  subtitle: store.deletedAssets.isEmpty
+                      ? null
+                      : Text('${store.deletedAssets.length} item(s)'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openTrashPage(context),
+                ),
+              ],
             ),
           ),
+          const SizedBox(height: 24),
+          _SectionLabel('GENERAL'),
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.folder_outlined),
-              title: const Text('Storage'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => _openStoragePage(context),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.palette_outlined),
+                  title: const Text('Appearance'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openAppearancePage(context),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.home_outlined),
+                  title: const Text('Start Screen'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openAppLaunchPage(context),
+                ),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.help_outline_rounded),
+                  title: const Text('Help & Symbols'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openHelpPage(context),
+                ),
+              ],
             ),
           ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.delete_outline_rounded),
-              title: const Text('Trash'),
-              subtitle: Text(
-                store.deletedAssets.isEmpty
-                    ? 'Deleted photos stay here for 30 days.'
-                    : '${store.deletedAssets.length} deleted photo(s)',
-              ),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => _openTrashPage(context),
-            ),
+          const SizedBox(height: 24),
+          Text(
+            '${store.assets.length} photos · ${store.projects.length} projects · ${store.syncActivitySummary.totalOutstanding} pending sync',
+            textAlign: TextAlign.center,
+            style: muted,
           ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.palette_outlined),
-              title: const Text('Appearance'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => _openAppearancePage(context),
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.launch_outlined),
-              title: const Text('Open app to'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => _openAppLaunchPage(context),
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.help_outline_rounded),
-              title: const Text('Help'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => _openHelpPage(context),
-            ),
-          ),
-          Card(
-            child: ListTile(
-              title: const Text('Library status'),
-              subtitle: Text(
-                '${store.assets.length} photos • ${store.projects.length} projects • ${store.syncActivitySummary.totalOutstanding} pending sync ops',
-              ),
-            ),
-          ),
+          const SizedBox(height: 8),
         ],
       ),
     );
@@ -148,6 +161,27 @@ class SettingsPage extends ConsumerWidget {
   }
 }
 
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          letterSpacing: 1.1,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
 class _AppLaunchPage extends ConsumerWidget {
   const _AppLaunchPage();
 
@@ -156,7 +190,7 @@ class _AppLaunchPage extends ConsumerWidget {
     final store = ref.watch(joblensStoreListenableProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Open app to')),
+      appBar: AppBar(title: const Text('Start Screen')),
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: [
@@ -252,60 +286,72 @@ class _AccountPage extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Account')),
       body: ListView(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
         children: [
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.alternate_email_rounded),
-              title: Text(hasEmail ? email : 'Not signed in'),
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: Icon(
-                authUser == null ? Icons.login_outlined : Icons.logout_outlined,
-              ),
-              title: Text(authUser == null ? 'Sign in' : 'Sign out'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: !isAuthConfigured
-                  ? null
-                  : authUser == null
-                  ? () => SettingsPage._openAuthPage(context)
-                  : store.isBusy
-                  ? null
-                  : () async {
-                      await store.signOut();
-                      if (context.mounted) {
-                        Navigator.of(context).pop();
-                      }
-                    },
-            ),
-          ),
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.mail_outline),
-              title: const Text('Change email'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: !isAuthConfigured || authUser == null
-                  ? null
-                  : () => _showChangeEmailDialog(context),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: ListTile(
-              title: Text(
-                'Delete account',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
-                  fontWeight: FontWeight.w700,
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.alternate_email_rounded),
+                  title: Text(hasEmail ? email : 'Not signed in'),
+                  subtitle: hasEmail
+                      ? null
+                      : const Text('Sign in to sync your photos'),
                 ),
-              ),
-              onTap: !isAuthConfigured || authUser == null || store.isBusy
-                  ? null
-                  : () => _showDeleteAccountDialog(context, store),
+                const Divider(height: 1, indent: 56),
+                ListTile(
+                  leading: Icon(
+                    authUser == null
+                        ? Icons.login_outlined
+                        : Icons.logout_outlined,
+                  ),
+                  title: Text(authUser == null ? 'Sign in' : 'Sign out'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: !isAuthConfigured
+                      ? null
+                      : authUser == null
+                      ? () => SettingsPage._openAuthPage(context)
+                      : store.isBusy
+                      ? null
+                      : () async {
+                          final navigator = Navigator.of(context);
+                          await store.signOut();
+                          if (context.mounted) {
+                            navigator.pop();
+                          }
+                        },
+                ),
+                if (authUser != null) ...[
+                  const Divider(height: 1, indent: 56),
+                  ListTile(
+                    leading: const Icon(Icons.mail_outline),
+                    title: const Text('Change Email'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: !isAuthConfigured
+                        ? null
+                        : () => _showChangeEmailDialog(context),
+                  ),
+                ],
+              ],
             ),
           ),
+          if (authUser != null) ...[
+            const SizedBox(height: 32),
+            Card(
+              child: ListTile(
+                title: Text(
+                  'Delete Account',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                onTap: !isAuthConfigured || store.isBusy
+                    ? null
+                    : () => _showDeleteAccountDialog(context, store),
+              ),
+            ),
+          ],
         ],
       ),
     );
