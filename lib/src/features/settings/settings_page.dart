@@ -262,6 +262,21 @@ class _AppearancePage extends ConsumerWidget {
                       ref.read(joblensStoreProvider).setAppThemeMode(nextMode);
                     },
                   ),
+                  const SizedBox(height: 8),
+                  const Divider(),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    value: store.showProjectCameraButton,
+                    title: const Text('Project camera button'),
+                    subtitle: const Text(
+                      'Show a compact floating camera button inside each project to capture directly into that project.',
+                    ),
+                    onChanged: (enabled) {
+                      ref
+                          .read(joblensStoreProvider)
+                          .setShowProjectCameraButton(enabled);
+                    },
+                  ),
                 ],
               ),
             ),
@@ -586,8 +601,7 @@ class _SymbolsHelpTab extends StatelessWidget {
                 _SymbolHelpRow(
                   symbol: Icon(Icons.photo_camera_outlined, size: 18),
                   title: 'Captured in Joblens',
-                  description:
-                      'This photo was taken with the in-app camera.',
+                  description: 'This photo was taken with the in-app camera.',
                 ),
                 SizedBox(height: 12),
                 _SymbolHelpRow(
@@ -683,10 +697,7 @@ class _SymbolHelpRow extends StatelessWidget {
       children: [
         ConstrainedBox(
           constraints: const BoxConstraints(minWidth: 72),
-          child: Align(
-            alignment: Alignment.topLeft,
-            child: symbol,
-          ),
+          child: Align(alignment: Alignment.topLeft, child: symbol),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -695,9 +706,9 @@ class _SymbolHelpRow extends StatelessWidget {
             children: [
               Text(
                 title,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 4),
               Text(description),

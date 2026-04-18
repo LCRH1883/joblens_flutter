@@ -193,7 +193,8 @@ private final class NativeCameraViewController: UIViewController {
   private let zoomStack = UIStackView()
   private let bottomRow = UIView()
   private let closeButton = UIButton(type: .system)
-  private let targetButton = UIButton(type: .system)
+  private let targetButton = UIButton(type: .custom)
+  private let targetChevronView = UIImageView()
   private let flashButton = UIButton(type: .system)
   private let lensButton = UIButton(type: .system)
   private let captureCountLabel = PaddingLabel()
@@ -398,15 +399,44 @@ private final class NativeCameraViewController: UIViewController {
 
   private func configureTargetButton() {
     targetButton.translatesAutoresizingMaskIntoConstraints = false
-    targetButton.backgroundColor = UIColor(white: 0, alpha: 0.55)
-    targetButton.layer.cornerRadius = 20
-    targetButton.clipsToBounds = true
-    targetButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
-    targetButton.setTitleColor(.white, for: .normal)
-    targetButton.tintColor = .white
-    targetButton.contentEdgeInsets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
-    targetButton.semanticContentAttribute = .forceLeftToRight
     targetButton.addTarget(self, action: #selector(targetTapped), for: .touchUpInside)
+
+    if #available(iOS 15.0, *) {
+      var config = UIButton.Configuration.filled()
+      config.baseBackgroundColor = UIColor(white: 0, alpha: 0.5)
+      config.baseForegroundColor = .white
+      config.cornerStyle = .capsule
+      config.imagePadding = 7
+      config.imagePlacement = .leading
+      config.contentInsets = NSDirectionalEdgeInsets(top: 9, leading: 14, bottom: 9, trailing: 28)
+      config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+        var out = incoming
+        out.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
+        return out
+      }
+      targetButton.configuration = config
+    } else {
+      targetButton.backgroundColor = UIColor(white: 0, alpha: 0.55)
+      targetButton.layer.cornerRadius = 20
+      targetButton.clipsToBounds = true
+      targetButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
+      targetButton.setTitleColor(.white, for: .normal)
+      targetButton.tintColor = .white
+      targetButton.semanticContentAttribute = .forceLeftToRight
+    }
+
+    // Trailing chevron — added once, reused across updates
+    targetChevronView.translatesAutoresizingMaskIntoConstraints = false
+    targetChevronView.tintColor = UIColor.white.withAlphaComponent(0.75)
+    targetChevronView.contentMode = .scaleAspectFit
+    targetChevronView.isUserInteractionEnabled = false
+    targetButton.addSubview(targetChevronView)
+    NSLayoutConstraint.activate([
+      targetChevronView.centerYAnchor.constraint(equalTo: targetButton.centerYAnchor),
+      targetChevronView.trailingAnchor.constraint(equalTo: targetButton.trailingAnchor, constant: -11),
+      targetChevronView.widthAnchor.constraint(equalToConstant: 11),
+      targetChevronView.heightAnchor.constraint(equalToConstant: 11),
+    ])
   }
 
   private func configureIconButton(
@@ -637,33 +667,25 @@ private final class NativeCameraViewController: UIViewController {
   }
 
   private func updateTargetButton() {
-    let folderImage = UIImage(systemName: "folder")
-    let chevronImage = UIImage(systemName: "chevron.down")
-    targetButton.setTitle(currentTarget.resolvedProjectName, for: .normal)
-    targetButton.setImage(folderImage, for: .normal)
-    targetButton.semanticContentAttribute = .forceLeftToRight
-    targetButton.imageView?.contentMode = .scaleAspectFit
-    targetButton.setNeedsLayout()
-    targetButton.layoutIfNeeded()
-    targetButton.subviews.compactMap { $0 as? UIImageView }.forEach { imageView in
-      imageView.tintColor = .white
-    }
+    let isInbox = currentTarget.mode == .inbox
+    let symbolName = isInbox ? "tray.fill" : "folder.fill"
+    let projectName = currentTarget.resolvedProjectName
 
-    let trailingChevron = UIImageView(image: chevronImage)
-    trailingChevron.translatesAutoresizingMaskIntoConstraints = false
-    trailingChevron.tintColor = .white
-    trailingChevron.isUserInteractionEnabled = false
-    targetButton.subviews.filter { $0.tag == 9001 }.forEach { $0.removeFromSuperview() }
-    trailingChevron.tag = 9001
-    targetButton.addSubview(trailingChevron)
-    NSLayoutConstraint.activate([
-      trailingChevron.centerYAnchor.constraint(equalTo: targetButton.centerYAnchor),
-      trailingChevron.trailingAnchor.constraint(equalTo: targetButton.trailingAnchor, constant: -12),
-      trailingChevron.widthAnchor.constraint(equalToConstant: 12),
-      trailingChevron.heightAnchor.constraint(equalToConstant: 12),
-    ])
-    targetButton.contentEdgeInsets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 30)
-    targetButton.titleEdgeInsets = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
+    let chevronConfig = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+    targetChevronView.image = UIImage(systemName: "chevron.down", withConfiguration: chevronConfig)
+
+    if #available(iOS 15.0, *) {
+      let imageConfig = UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+      targetButton.configuration?.image = UIImage(systemName: symbolName, withConfiguration: imageConfig)
+      targetButton.configuration?.title = projectName
+    } else {
+      let folderImage = UIImage(systemName: symbolName)
+      targetButton.setTitle(projectName, for: .normal)
+      targetButton.setImage(folderImage, for: .normal)
+      targetButton.semanticContentAttribute = .forceLeftToRight
+      targetButton.contentEdgeInsets = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 30)
+      targetButton.titleEdgeInsets = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
+    }
   }
 
   private func updateFlashButton() {
@@ -1134,22 +1156,34 @@ private final class NativeCameraViewController: UIViewController {
 }
 
 private final class NativeCameraTargetPickerViewController: UIViewController, UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate {
-  private let options: [NativeCameraTargetOption]
+  private let inboxOptions: [NativeCameraTargetOption]
+  private let projectOptions: [NativeCameraTargetOption]
   private let selectedTarget: NativeCameraTargetOption
   private let onSelect: (NativeCameraTargetOption) -> Void
 
   private let searchBar = UISearchBar()
-  private let tableView = UITableView(frame: .zero, style: .plain)
-  private var filteredOptions: [NativeCameraTargetOption]
+  private let tableView = UITableView(frame: .zero, style: .insetGrouped)
+  private var filteredInbox: [NativeCameraTargetOption]
+  private var filteredProjects: [NativeCameraTargetOption]
+
+  private var sections: [[NativeCameraTargetOption]] {
+    var result: [[NativeCameraTargetOption]] = []
+    if !filteredInbox.isEmpty { result.append(filteredInbox) }
+    if !filteredProjects.isEmpty { result.append(filteredProjects) }
+    return result
+  }
 
   init(
     options: [NativeCameraTargetOption],
     selectedTarget: NativeCameraTargetOption,
     onSelect: @escaping (NativeCameraTargetOption) -> Void
   ) {
-    self.options = options.sorted { $0.resolvedProjectName.localizedCaseInsensitiveCompare($1.resolvedProjectName) == .orderedAscending }
+    let sorted = options.sorted { $0.resolvedProjectName.localizedCaseInsensitiveCompare($1.resolvedProjectName) == .orderedAscending }
+    self.inboxOptions = sorted.filter { $0.mode == .inbox }
+    self.projectOptions = sorted.filter { $0.mode != .inbox }
     self.selectedTarget = selectedTarget
-    self.filteredOptions = self.options
+    self.filteredInbox = self.inboxOptions
+    self.filteredProjects = self.projectOptions
     self.onSelect = onSelect
     super.init(nibName: nil, bundle: nil)
   }
@@ -1161,12 +1195,12 @@ private final class NativeCameraTargetPickerViewController: UIViewController, UI
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    view.backgroundColor = .systemBackground
-    title = "Capture target"
+    view.backgroundColor = .systemGroupedBackground
+    title = "Save to"
 
     let navBar = UINavigationBar()
     navBar.translatesAutoresizingMaskIntoConstraints = false
-    let navItem = UINavigationItem(title: "Capture target")
+    let navItem = UINavigationItem(title: "Save to")
     navItem.rightBarButtonItem = UIBarButtonItem(
       barButtonSystemItem: .close,
       target: self,
@@ -1185,7 +1219,7 @@ private final class NativeCameraTargetPickerViewController: UIViewController, UI
     tableView.dataSource = self
     tableView.delegate = self
     tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
-    tableView.tableFooterView = UIView()
+    tableView.backgroundColor = .systemGroupedBackground
     view.addSubview(tableView)
 
     NSLayoutConstraint.activate([
@@ -1193,11 +1227,11 @@ private final class NativeCameraTargetPickerViewController: UIViewController, UI
       navBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       navBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
-      searchBar.topAnchor.constraint(equalTo: navBar.bottomAnchor, constant: 8),
+      searchBar.topAnchor.constraint(equalTo: navBar.bottomAnchor, constant: 4),
       searchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
       searchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
 
-      tableView.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 8),
+      tableView.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 4),
       tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
       tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -1211,34 +1245,57 @@ private final class NativeCameraTargetPickerViewController: UIViewController, UI
   func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
     let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     if query.isEmpty {
-      filteredOptions = options
+      filteredInbox = inboxOptions
+      filteredProjects = projectOptions
     } else {
-      filteredOptions = options.filter { option in
-        option.resolvedProjectName.localizedCaseInsensitiveContains(query) ||
-          (option.mode == .inbox && "Inbox".localizedCaseInsensitiveContains(query))
-      }
+      filteredInbox = inboxOptions.filter { $0.resolvedProjectName.localizedCaseInsensitiveContains(query) || "Inbox".localizedCaseInsensitiveContains(query) }
+      filteredProjects = projectOptions.filter { $0.resolvedProjectName.localizedCaseInsensitiveContains(query) }
     }
     tableView.reloadData()
   }
 
+  func numberOfSections(in tableView: UITableView) -> Int {
+    sections.count
+  }
+
   func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-    filteredOptions.count
+    sections[section].count
+  }
+
+  func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+    guard sections.count > 1 else { return nil }
+    return sections[section].first?.mode == .inbox ? "Inbox" : "Projects"
   }
 
   func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-    let option = filteredOptions[indexPath.row]
+    let option = sections[indexPath.section][indexPath.row]
     let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
-    cell.textLabel?.text = option.resolvedProjectName
-    cell.textLabel?.textColor = .label
-    cell.imageView?.image = UIImage(systemName: option.mode == .inbox ? "tray" : "folder")
-    cell.imageView?.tintColor = .label
-    cell.accessoryType = option == selectedTarget ? .checkmark : .none
-    cell.backgroundColor = .clear
+    let isInbox = option.mode == .inbox
+    let isSelected = option == selectedTarget
+
+    if #available(iOS 14.0, *) {
+      var content = cell.defaultContentConfiguration()
+      content.text = option.resolvedProjectName
+      content.image = UIImage(systemName: isInbox ? "tray.fill" : "folder.fill")
+      content.imageProperties.tintColor = isSelected
+        ? cell.tintColor
+        : .secondaryLabel
+      content.textProperties.color = .label
+      content.textProperties.font = .systemFont(ofSize: 16, weight: isSelected ? .semibold : .regular)
+      cell.contentConfiguration = content
+    } else {
+      cell.textLabel?.text = option.resolvedProjectName
+      cell.textLabel?.textColor = .label
+      cell.imageView?.image = UIImage(systemName: isInbox ? "tray.fill" : "folder.fill")
+      cell.imageView?.tintColor = isSelected ? cell.tintColor : .secondaryLabel
+    }
+
+    cell.accessoryType = isSelected ? .checkmark : .none
     return cell
   }
 
   func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-    let option = filteredOptions[indexPath.row]
+    let option = sections[indexPath.section][indexPath.row]
     onSelect(option)
     dismiss(animated: true)
   }

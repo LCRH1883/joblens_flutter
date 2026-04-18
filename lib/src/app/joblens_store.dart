@@ -273,6 +273,7 @@ class JoblensStore extends ChangeNotifier {
   ProjectSortMode _projectSortMode = ProjectSortMode.name;
   AppLaunchDestination _appLaunchDestination = AppLaunchDestination.camera;
   AppThemeMode _appThemeMode = AppThemeMode.system;
+  bool _showProjectCameraButton = true;
   LibraryImportMode _libraryImportMode = LibraryImportMode.copy;
   CaptureTargetPreference _captureTargetPreference =
       CaptureTargetPreference.defaults;
@@ -318,6 +319,7 @@ class JoblensStore extends ChangeNotifier {
   ProjectSortMode get projectSortMode => _projectSortMode;
   AppLaunchDestination get appLaunchDestination => _appLaunchDestination;
   AppThemeMode get appThemeMode => _appThemeMode;
+  bool get showProjectCameraButton => _showProjectCameraButton;
   LibraryImportMode get libraryImportMode => _libraryImportMode;
   CaptureTargetPreference get captureTargetPreference =>
       _captureTargetPreference;
@@ -1108,6 +1110,15 @@ class JoblensStore extends ChangeNotifier {
     _notifyListenersIfActive();
   }
 
+  Future<void> setShowProjectCameraButton(bool enabled) async {
+    if (_showProjectCameraButton == enabled) {
+      return;
+    }
+    _showProjectCameraButton = enabled;
+    await _database.setShowProjectCameraButton(enabled);
+    _notifyListenersIfActive();
+  }
+
   Future<void> setAppLaunchDestination(AppLaunchDestination destination) async {
     if (_hasStoredAppLaunchDestination &&
         _appLaunchDestination == destination) {
@@ -1828,6 +1839,7 @@ class JoblensStore extends ChangeNotifier {
     _appLaunchDestination =
         storedAppLaunchDestination ?? AppLaunchDestination.camera;
     _appThemeMode = await _database.getAppThemeMode();
+    _showProjectCameraButton = await _database.getShowProjectCameraButton();
     _libraryImportMode = await _database.getLibraryImportMode();
     _captureTargetPreference = await _database.getCaptureTargetPreference();
     if (includeDiagnostics) {

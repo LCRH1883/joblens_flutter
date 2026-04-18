@@ -10,6 +10,8 @@ import '../../core/ui/user_facing_error.dart';
 import '../library_import/photo_library_import_page.dart';
 import 'photo_viewer_page.dart';
 
+enum _SortOrder { newestFirst, oldestFirst }
+
 class GalleryPage extends ConsumerStatefulWidget {
   const GalleryPage({super.key});
 
@@ -20,17 +22,24 @@ class GalleryPage extends ConsumerStatefulWidget {
 class _GalleryPageState extends ConsumerState<GalleryPage> {
   final Set<String> _selectedAssetIds = <String>{};
   bool _selectionModeEnabled = false;
-
   bool _isDragSelecting = false;
   bool _dragSelectionAdds = true;
   String? _lastDraggedAssetId;
+  _SortOrder _sortOrder = _SortOrder.newestFirst;
 
   bool get _isSelectionMode => _selectionModeEnabled;
 
   @override
   Widget build(BuildContext context) {
     final store = ref.watch(joblensStoreListenableProvider);
-    final assets = store.galleryAssets;
+
+    final assets = store.galleryAssets.toList()
+      ..sort(
+        (a, b) => _sortOrder == _SortOrder.newestFirst
+            ? b.createdAt.compareTo(a.createdAt)
+            : a.createdAt.compareTo(b.createdAt),
+      );
+
     _normalizeSelectionState(assets);
 
     final grouped = _groupByDay(assets);
@@ -38,92 +47,108 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
         assets.isNotEmpty && _selectedAssetIds.length == assets.length;
 
     return Scaffold(
-      appBar: AppBar(
-        leading: _isSelectionMode
-            ? IconButton(
-                tooltip: 'Exit selection',
-                onPressed: store.isBusy ? null : _clearSelection,
-                icon: const Icon(Icons.close),
-              )
-            : null,
-        title: Text(
-          _isSelectionMode
-              ? '${_selectedAssetIds.length} selected'
-              : 'Joblens Gallery',
-        ),
-        actions: _isSelectionMode
-            ? [
-                IconButton(
-                  tooltip: allSelected ? 'Clear selection' : 'Select all',
-                  onPressed: store.isBusy
-                      ? null
-                      : () => _toggleSelectAll(assets),
-                  icon: Icon(allSelected ? Icons.clear_all : Icons.select_all),
-                ),
-                IconButton(
-                  tooltip: 'Move selected',
-                  onPressed:
-                      store.isBusy ||
-                          store.projects.isEmpty ||
-                          _selectedAssetIds.isEmpty
-                      ? null
-                      : () => _showMoveDialog(context, store),
-                  icon: const Icon(Icons.drive_file_move_outline),
-                ),
-                IconButton(
-                  tooltip: 'Archive selected',
-                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
-                      ? null
-                      : () =>
-                            _archiveSelectedToCloudOnly(context, store, assets),
-                  icon: const Icon(Icons.archive_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Download selected',
-                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
-                      ? null
-                      : () =>
-                            _downloadSelectedToJoblens(context, store, assets),
-                  icon: const Icon(Icons.download_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Copy selected to phone gallery',
-                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
-                      ? null
-                      : () =>
-                            _copySelectedToPhoneGallery(context, store, assets),
-                  icon: const Icon(Icons.add_to_photos_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Delete selected',
-                  onPressed: store.isBusy || _selectedAssetIds.isEmpty
-                      ? null
-                      : () => _confirmDeleteSelected(context, store),
-                  icon: const Icon(Icons.delete_outline),
-                ),
-              ]
-            : [
-                IconButton(
-                  tooltip: 'Select photos',
-                  onPressed: store.isBusy || assets.isEmpty
-                      ? null
-                      : _enableSelectionMode,
-                  icon: const Icon(Icons.checklist_outlined),
-                ),
-                IconButton(
-                  tooltip: 'Import photos',
-                  onPressed: store.isBusy
-                      ? null
-                      : () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => const PhotoLibraryImportPage(),
-                          ),
-                        ),
-                  icon: const Icon(Icons.add_photo_alternate_outlined),
-                ),
-              ],
-      ),
+      appBar: _isSelectionMode
+          ? _buildSelectionAppBar(context, store, assets, allSelected)
+          : _buildNormalAppBar(context, store, assets),
       body: _buildBody(context, store, grouped, assets),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: _isSelectionMode
+          ? _SelectionActionBar(
+              hasSelection: _selectedAssetIds.isNotEmpty,
+              hasProjects: store.projects.isNotEmpty,
+              busy: store.isBusy,
+              onMove: () => _showMoveDialog(context, store),
+              onArchive: () =>
+                  _archiveSelectedToCloudOnly(context, store, assets),
+              onDownload: () =>
+                  _downloadSelectedToJoblens(context, store, assets),
+              onDelete: () => _confirmDeleteSelected(context, store),
+            )
+          : null,
+    );
+  }
+
+  AppBar _buildNormalAppBar(
+    BuildContext context,
+    JoblensStore store,
+    List<PhotoAsset> assets,
+  ) {
+    return AppBar(
+      title: const Text('Gallery'),
+      actions: [
+        IconButton(
+          tooltip: 'Select photos',
+          onPressed: store.isBusy || assets.isEmpty
+              ? null
+              : _enableSelectionMode,
+          icon: const Icon(Icons.checklist_outlined),
+        ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          tooltip: 'More options',
+          onSelected: (value) {
+            if (value == 'import') {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const PhotoLibraryImportPage(),
+                ),
+              );
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'import',
+              enabled: !store.isBusy,
+              child: const _MenuRow(
+                icon: Icons.add_photo_alternate_outlined,
+                label: 'Import from phone',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  AppBar _buildSelectionAppBar(
+    BuildContext context,
+    JoblensStore store,
+    List<PhotoAsset> assets,
+    bool allSelected,
+  ) {
+    return AppBar(
+      leading: IconButton(
+        tooltip: 'Exit selection',
+        onPressed: store.isBusy ? null : _clearSelection,
+        icon: const Icon(Icons.close),
+      ),
+      title: Text('${_selectedAssetIds.length} selected'),
+      actions: [
+        IconButton(
+          tooltip: allSelected ? 'Clear selection' : 'Select all',
+          onPressed: store.isBusy ? null : () => _toggleSelectAll(assets),
+          icon: Icon(allSelected ? Icons.clear_all : Icons.select_all),
+        ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          tooltip: 'More',
+          onSelected: (value) {
+            if (value == 'copy_phone') {
+              _copySelectedToPhoneGallery(context, store, assets);
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'copy_phone',
+              enabled: _selectedAssetIds.isNotEmpty && !store.isBusy,
+              child: const _MenuRow(
+                icon: Icons.add_to_photos_outlined,
+                label: 'Copy to phone gallery',
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -157,7 +182,14 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
             ? const NeverScrollableScrollPhysics()
             : const AlwaysScrollableScrollPhysics(),
         slivers: [
-          const SliverPadding(padding: EdgeInsets.only(top: 12)),
+          if (!_isSelectionMode)
+            SliverToBoxAdapter(
+              child: _SortInfoBar(
+                assetCount: assets.length,
+                sortOrder: _sortOrder,
+                onSortChanged: (order) => setState(() => _sortOrder = order),
+              ),
+            ),
           if (store.isBusy)
             const SliverToBoxAdapter(
               child: Padding(
@@ -219,7 +251,9 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
               ),
             ),
           ],
-          const SliverToBoxAdapter(child: SizedBox(height: 100)),
+          SliverToBoxAdapter(
+            child: SizedBox(height: _isSelectionMode ? 104 : 24),
+          ),
         ],
       ),
     );
@@ -289,7 +323,6 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     if (!_isDragSelecting) {
       return;
     }
-
     setState(() {
       _isDragSelecting = false;
       _lastDraggedAssetId = null;
@@ -297,14 +330,9 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
   }
 
   void _dragSelectAsset(String assetId) {
-    if (!_isDragSelecting) {
+    if (!_isDragSelecting || assetId == _lastDraggedAssetId) {
       return;
     }
-
-    if (assetId == _lastDraggedAssetId) {
-      return;
-    }
-
     setState(() {
       if (_dragSelectionAdds) {
         _selectedAssetIds.add(assetId);
@@ -312,7 +340,6 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
         _selectedAssetIds.remove(assetId);
       }
       _lastDraggedAssetId = assetId;
-
       if (_selectedAssetIds.isEmpty) {
         _isDragSelecting = false;
       }
@@ -331,7 +358,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
       context: context,
       builder: (context) {
         return StatefulBuilder(
-          builder: (context, setState) {
+          builder: (context, setDialogState) {
             return AlertDialog(
               title: Text('Move ${selectedIds.length} photo(s) to project'),
               content: DropdownButton<int>(
@@ -345,12 +372,8 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
                     ),
                 ],
                 onChanged: (value) {
-                  if (value == null) {
-                    return;
-                  }
-                  setState(() {
-                    selectedProject = value;
-                  });
+                  if (value == null) return;
+                  setDialogState(() => selectedProject = value);
                 },
               ),
               actions: [
@@ -386,9 +409,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     BuildContext context,
     JoblensStore store,
   ) async {
-    if (_selectedAssetIds.isEmpty) {
-      return;
-    }
+    if (_selectedAssetIds.isEmpty) return;
 
     final selectedIds = _selectedAssetIds.toList(growable: false);
     final shouldDelete = await showDialog<bool>(
@@ -413,14 +434,10 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
       },
     );
 
-    if (shouldDelete != true) {
-      return;
-    }
+    if (shouldDelete != true) return;
 
     await store.softDeleteAssets(selectedIds);
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     setState(_exitSelectionModeState);
   }
@@ -434,27 +451,23 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     final selectedAssets = assets
         .where((asset) => _selectedAssetIds.contains(asset.id))
         .toList(growable: false);
-    if (selectedAssets.isEmpty) {
-      return;
-    }
+    if (selectedAssets.isEmpty) return;
 
     final result = await store.copyAssetsToPhoneStorage(selectedAssets);
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
-    final copied = result.copiedCount;
-    final skipped = result.skippedCount;
     if (store.lastError != null) {
       messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
       return;
     }
 
+    final copied = result.copiedCount;
+    final skipped = result.skippedCount;
     messenger.showSnackBar(
       SnackBar(
         content: Text(
           skipped > 0
-              ? 'Copied $copied photo(s) to phone gallery. Skipped $skipped already on phone storage.'
+              ? 'Copied $copied photo(s). Skipped $skipped already on device.'
               : 'Copied $copied photo(s) to phone gallery.',
         ),
       ),
@@ -470,14 +483,10 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     final selectedAssets = assets
         .where((asset) => _selectedAssetIds.contains(asset.id))
         .toList(growable: false);
-    if (selectedAssets.isEmpty) {
-      return;
-    }
+    if (selectedAssets.isEmpty) return;
 
     final result = await store.downloadAssetsToDevice(selectedAssets);
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     if (store.lastError != null) {
       messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
@@ -496,14 +505,10 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     final selectedAssets = assets
         .where((asset) => _selectedAssetIds.contains(asset.id))
         .toList(growable: false);
-    if (selectedAssets.isEmpty) {
-      return;
-    }
+    if (selectedAssets.isEmpty) return;
 
     final result = await store.archiveAssetsToCloudOnly(selectedAssets);
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     if (store.lastError != null) {
       messenger.showSnackBar(SnackBar(content: Text(store.lastError!)));
@@ -536,7 +541,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
 
   void _normalizeSelectionState(List<PhotoAsset> assets) {
     final assetIds = assets.map((asset) => asset.id).toSet();
-    _selectedAssetIds.removeWhere((assetId) => !assetIds.contains(assetId));
+    _selectedAssetIds.removeWhere((id) => !assetIds.contains(id));
 
     if (assets.isEmpty) {
       _exitSelectionModeState();
@@ -558,6 +563,206 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     return map;
   }
 }
+
+// ── Shared UI components ─────────────────────────────────────────────────────
+
+class _MenuRow extends StatelessWidget {
+  const _MenuRow({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [Icon(icon, size: 20), const SizedBox(width: 12), Text(label)],
+    );
+  }
+}
+
+class _SortInfoBar extends StatelessWidget {
+  const _SortInfoBar({
+    required this.assetCount,
+    required this.sortOrder,
+    required this.onSortChanged,
+  });
+
+  final int assetCount;
+  final _SortOrder sortOrder;
+  final ValueChanged<_SortOrder> onSortChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 8, 2),
+      child: Row(
+        children: [
+          Text('$assetCount photo${assetCount == 1 ? '' : 's'}', style: muted),
+          const Spacer(),
+          PopupMenuButton<_SortOrder>(
+            initialValue: sortOrder,
+            onSelected: onSortChanged,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.sort_rounded,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    sortOrder == _SortOrder.newestFirst ? 'Newest' : 'Oldest',
+                    style: muted,
+                  ),
+                ],
+              ),
+            ),
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _SortOrder.newestFirst,
+                child: Text('Newest first'),
+              ),
+              PopupMenuItem(
+                value: _SortOrder.oldestFirst,
+                child: Text('Oldest first'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectionActionBar extends StatelessWidget {
+  const _SelectionActionBar({
+    required this.hasSelection,
+    required this.hasProjects,
+    required this.busy,
+    required this.onMove,
+    required this.onArchive,
+    required this.onDownload,
+    required this.onDelete,
+  });
+
+  final bool hasSelection;
+  final bool hasProjects;
+  final bool busy;
+  final VoidCallback onMove;
+  final VoidCallback onArchive;
+  final VoidCallback onDownload;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final canAct = hasSelection && !busy;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final pillColor = theme.colorScheme.surfaceContainerHigh.withValues(
+      alpha: isDark ? 0.94 : 0.96,
+    );
+    final outlineColor = theme.colorScheme.onSurface.withValues(
+      alpha: isDark ? 0.16 : 0.08,
+    );
+    final shadowColor = Colors.black.withValues(alpha: isDark ? 0.28 : 0.14);
+    final pillShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(28),
+      side: BorderSide(color: outlineColor),
+    );
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Material(
+          color: pillColor,
+          elevation: 10,
+          shadowColor: shadowColor,
+          shape: pillShape,
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ActionButton(
+                  icon: Icons.drive_file_move_outline,
+                  label: 'Move',
+                  onTap: canAct && hasProjects ? onMove : null,
+                ),
+                _ActionButton(
+                  icon: Icons.archive_outlined,
+                  label: 'Archive',
+                  onTap: canAct ? onArchive : null,
+                ),
+                _ActionButton(
+                  icon: Icons.download_outlined,
+                  label: 'Download',
+                  onTap: canAct ? onDownload : null,
+                ),
+                _ActionButton(
+                  icon: Icons.delete_outline,
+                  label: 'Delete',
+                  activeColor: theme.colorScheme.error,
+                  onTap: canAct ? onDelete : null,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    this.activeColor,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color? activeColor;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isEnabled = onTap != null;
+    final resolvedActive =
+        activeColor ?? Theme.of(context).colorScheme.onSurface;
+    final color = isEnabled
+        ? resolvedActive
+        : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3);
+
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        enabled: isEnabled,
+        label: label,
+        child: InkResponse(
+          onTap: onTap,
+          radius: 22,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            child: Icon(icon, color: color, size: 22),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Tile & thumbnail ─────────────────────────────────────────────────────────
 
 class _AssetTile extends StatelessWidget {
   const _AssetTile({
@@ -695,9 +900,7 @@ class _AssetThumbnailState extends State<_AssetThumbnail> {
         errorBuilder: (context, error, stackTrace) {
           if (!_localThumbFailed) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) {
-                return;
-              }
+              if (!mounted) return;
               setState(() {
                 _localThumbFailed = true;
               });
@@ -727,9 +930,7 @@ class _AssetThumbnailState extends State<_AssetThumbnail> {
           errorBuilder: (context, error, stackTrace) {
             if (!_forceRefresh) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (!mounted) {
-                  return;
-                }
+                if (!mounted) return;
                 setState(() {
                   _forceRefresh = true;
                 });
