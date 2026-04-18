@@ -29,6 +29,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
   CameraController? _controller;
   late final CameraSettingsRepository _settingsRepository;
   CameraSettings _settings = CameraSettings.defaults;
+  List<CameraDescription> _availableCameras = const [];
   List<double> _zoomStops = const [1.0];
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
@@ -70,9 +71,13 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
       _error = null;
     });
 
-    final cameras = ref.read(availableCamerasProvider);
+    final cameras = await ref
+        .read(availableCamerasProvider)
+        .load()
+        .timeout(_cameraInitializationTimeout);
     if (cameras.isEmpty) {
       setState(() {
+        _availableCameras = const [];
         _isInitializing = false;
         _error = 'No camera found on this device.';
       });
@@ -144,6 +149,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
       }
 
       setState(() {
+        _availableCameras = cameras;
         _controller = controller;
         _isInitializing = false;
         _minZoom = minZoom;
@@ -164,6 +170,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
         return;
       }
       setState(() {
+        _availableCameras = cameras;
         _isInitializing = false;
         _error = _cameraErrorMessage(error);
       });
@@ -265,7 +272,7 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
                       horizontal: 16,
                       vertical: 12,
                     ),
-                        child: Row(
+                    child: Row(
                       children: [
                         _controlButton(
                           icon: Icons.arrow_back_rounded,
@@ -474,11 +481,10 @@ class _CameraCapturePageState extends ConsumerState<CameraCapturePage>
   }
 
   bool get _canSwitchLens {
-    final cameras = ref.read(availableCamerasProvider);
-    final hasBack = cameras.any(
+    final hasBack = _availableCameras.any(
       (camera) => camera.lensDirection == CameraLensDirection.back,
     );
-    final hasFront = cameras.any(
+    final hasFront = _availableCameras.any(
       (camera) => camera.lensDirection == CameraLensDirection.front,
     );
     return hasBack && hasFront;

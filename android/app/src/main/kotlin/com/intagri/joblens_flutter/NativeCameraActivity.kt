@@ -41,6 +41,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.activity.addCallback
 import androidx.lifecycle.Observer
 import org.json.JSONObject
@@ -99,6 +102,7 @@ class NativeCameraActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.enableEdgeToEdge(window)
 
         val payload = intent.getStringExtra(EXTRA_CONFIG)
         if (payload.isNullOrBlank()) {
@@ -313,6 +317,23 @@ class NativeCameraActivity : AppCompatActivity() {
             Gravity.BOTTOM,
         )
         root.addView(bottomContainer, bottomParams)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            topBar.setPadding(
+                dp(16),
+                systemBars.top + dp(12),
+                dp(16),
+                dp(8),
+            )
+            bottomContainer.setPadding(
+                dp(16),
+                dp(12),
+                dp(16),
+                systemBars.bottom + dp(16),
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
         return root
     }
 
