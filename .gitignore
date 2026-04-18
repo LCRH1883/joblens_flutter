@@ -9,8 +9,10 @@ infisical.json
 .env.release
 /release/android/*
 !/release/android/.gitkeep
+!/release/android/CHANGELOG.md
 /release/ios/*
 !/release/ios/.gitkeep
+!/release/ios/CHANGELOG.md
 *.swp
 *.swo
 *.log

@@ -236,7 +236,7 @@ private final class NativeCameraViewController: UIViewController {
 
   override func viewDidDisappear(_ animated: Bool) {
     super.viewDidDisappear(animated)
-    if isBeingDismissed || navigationController?.isBeingDismissed == true {
+    if (isBeingDismissed || navigationController?.isBeingDismissed == true) && isClosing == false {
       emitSessionClosedIfNeeded()
       bridge?.didCloseCamera(self)
     }
@@ -1033,10 +1033,10 @@ private final class NativeCameraViewController: UIViewController {
         captureSession.stopRunning()
       }
     }
-    emitSessionClosedIfNeeded()
-    bridge?.didCloseCamera(self)
     dismiss(animated: true) {
       self.captureDelegates.removeAll()
+      self.emitSessionClosedIfNeeded()
+      self.bridge?.didCloseCamera(self)
     }
   }
 

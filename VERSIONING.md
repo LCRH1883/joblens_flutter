@@ -4,10 +4,10 @@ This file is the source of truth for Joblens mobile app versioning across Flutte
 
 ## Current release
 
-- current shared Android/iOS release: `v0.1.4`
-- Flutter version string: `0.1.4+1004`
-- numeric release code: `1004`
-- zero-padded release code representation: `0001004`
+- current shared Android/iOS release: `v0.2.0`
+- Flutter version string: `0.2.0+2000`
+- numeric release code: `2000`
+- zero-padded release code representation: `0002000`
 
 ## Format
 
@@ -38,20 +38,20 @@ When writing human-facing release notes, you can omit leading zeroes:
 Flutter drives both platform versions from `pubspec.yaml`:
 
 ```yaml
-version: 0.1.4+1004
+version: 0.2.0+2000
 ```
 
 Rules:
 
-- `0.1.4` is the user-facing app version
-- `1004` is the numeric build/release code
+- `0.2.0` is the user-facing app version
+- `2000` is the numeric build/release code
 - update `pubspec.yaml` first for every release
 
 Use the helper script to do that automatically:
 
 ```bash
 cd /Volumes/ExData/Projects/Joblens/joblens_flutter
-bash scripts/set_mobile_version.sh v0.1.4
+bash scripts/set_mobile_version.sh v0.2.0
 ```
 
 ## Mapping to Android
@@ -63,8 +63,8 @@ Android uses:
 
 That means:
 
-- `versionName` becomes `0.1.4`
-- `versionCode` becomes `1004`
+- `versionName` becomes `0.2.0`
+- `versionCode` becomes `2000`
 
 Android requirement:
 
@@ -79,8 +79,8 @@ iOS uses:
 
 That means:
 
-- `CFBundleShortVersionString` becomes `0.1.4`
-- `CFBundleVersion` becomes `1004`
+- `CFBundleShortVersionString` becomes `0.2.0`
+- `CFBundleVersion` becomes `2000`
 
 iOS requirement:
 
@@ -100,11 +100,11 @@ Examples:
 - shared release `v0.1.0` -> `0.1.0+1000`
 - shared release `v0.1.1` -> `0.1.1+1001`
 - shared release `v0.1.2` -> `0.1.2+1002`
-- shared release `v0.1.4` -> `0.1.4+1004`
+- shared release `v0.2.0` -> `0.2.0+2000`
 - Android-only rebuild for the same release -> `0.1.0+1001`
 - iOS-only rebuild for the same release -> `0.1.0+1002`
 - next user-facing patch release `v0.1.1` -> `0.1.1+1001` is not allowed if `1001` was already used
-- next user-facing patch release should use a higher code, for example `0.1.1+1004`
+- next user-facing patch release should use a higher code, for example `0.2.1+2001`
 
 Rule:
 
@@ -143,7 +143,7 @@ For `pubspec.yaml`, use the integer form after `+`.
 2. Update `pubspec.yaml` with:
 
 ```bash
-bash scripts/set_mobile_version.sh v0.1.4
+bash scripts/set_mobile_version.sh v0.2.0
 ```
 
 3. Run:
@@ -161,7 +161,7 @@ bash scripts/set_mobile_version.sh v0.1.4
 6. Generate release notes:
 
 ```bash
-bash scripts/prepare_release_notes.sh v0.1.2
+bash scripts/prepare_release_notes.sh v0.2.0
 ```
 
 7. Review:

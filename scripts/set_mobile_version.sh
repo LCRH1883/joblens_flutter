@@ -58,6 +58,16 @@ awk -v version="$FLUTTER_VERSION" '
 
 mv "$PUBSPEC_FILE.tmp" "$PUBSPEC_FILE"
 
+if command -v flutter >/dev/null 2>&1; then
+  echo "Regenerating Flutter build metadata..."
+  (
+    cd "$ROOT_DIR"
+    flutter pub get
+  )
+else
+  echo "warning: flutter command not found; run 'flutter pub get' manually to refresh generated platform build metadata" >&2
+fi
+
 echo "Set Flutter version:"
 echo "  semantic_version=v$SEMVER"
 echo "  zero_padded_release_code=$PADDED_CODE"
