@@ -268,8 +268,17 @@ class JoblensStore extends ChangeNotifier {
   int _forcedSignOutNoticeCount = 0;
   String? _forcedSignOutMessage;
   bool _isRecoveringMissingDeviceSession = false;
+  Future<void> _pendingAuthSync = Future.value();
   Future<void> _pendingBackgroundSync = Future.value();
   Future<void> _pendingLocalIngest = Future.value();
+  Future<void> _pendingThumbnailHydration = Future.value();
+  Future<void>? _pendingForcedSignOut;
+  Future<bool>? _pendingDeviceRegistration;
+  Future<void>? _activeAuthSyncRequest;
+  String? _activeAuthSyncUserId;
+  bool _activeAuthSyncAllowsClearingForNull = false;
+  final Map<String, Future<String?>> _pendingPersistentThumbnails =
+      <String, Future<String?>>{};
   ProjectSortMode _projectSortMode = ProjectSortMode.name;
   AppLaunchDestination _appLaunchDestination = AppLaunchDestination.camera;
   AppThemeMode _appThemeMode = AppThemeMode.system;
@@ -376,48 +385,79 @@ class JoblensStore extends ChangeNotifier {
         : (currentUserId != null && currentUserId.isNotEmpty)
         ? currentUserId
         : null;
-    if (effectiveUserId != null) {
-      _lastError = null;
+    final allowClearingForNull = effectiveUserId == null;
+    final activeRequest = _activeAuthSyncRequest;
+    if (activeRequest != null &&
+        _activeAuthSyncUserId == effectiveUserId &&
+        _activeAuthSyncAllowsClearingForNull == allowClearingForNull) {
+      return activeRequest;
     }
-    await _synchronizeAuthUser(
-      effectiveUserId,
-      allowClearingForNull: effectiveUserId == null,
-    );
-    if (effectiveUserId != null) {
-      await registerCurrentDeviceSession(refreshDevicesAfterRegister: true);
-    } else {
-      _signedInDevices = const [];
-      _notifyListenersIfActive();
-    }
+
+    final request = _enqueueAuthSync(() async {
+      if (effectiveUserId != null) {
+        _lastError = null;
+      }
+      await _synchronizeAuthUser(
+        effectiveUserId,
+        allowClearingForNull: allowClearingForNull,
+      );
+      if (effectiveUserId != null) {
+        await registerCurrentDeviceSession(refreshDevicesAfterRegister: true);
+      } else {
+        _signedInDevices = const [];
+        _notifyListenersIfActive();
+      }
+    });
+    _activeAuthSyncRequest = request;
+    _activeAuthSyncUserId = effectiveUserId;
+    _activeAuthSyncAllowsClearingForNull = allowClearingForNull;
+    return request.whenComplete(() {
+      if (identical(_activeAuthSyncRequest, request)) {
+        _activeAuthSyncRequest = null;
+        _activeAuthSyncUserId = null;
+        _activeAuthSyncAllowsClearingForNull = false;
+      }
+    });
   }
 
   Future<bool> registerCurrentDeviceSession({
     bool refreshDevicesAfterRegister = false,
   }) async {
+    final pendingRegistration = _pendingDeviceRegistration;
+    if (pendingRegistration != null) {
+      final registered = await pendingRegistration;
+      if (registered && refreshDevicesAfterRegister) {
+        await _refreshSignedInDevicesFromBackend();
+        _notifyListenersIfActive();
+      }
+      return registered;
+    }
+
     final authUserId = _currentAuthUserIdProvider?.call();
     if (authUserId == null || authUserId.trim().isEmpty) {
       return false;
     }
+    final registration = _registerCurrentDeviceSession(
+      refreshDevicesAfterRegister: refreshDevicesAfterRegister,
+    );
+    _pendingDeviceRegistration = registration;
+    return registration.whenComplete(() {
+      if (identical(_pendingDeviceRegistration, registration)) {
+        _pendingDeviceRegistration = null;
+      }
+    });
+  }
+
+  Future<bool> _registerCurrentDeviceSession({
+    required bool refreshDevicesAfterRegister,
+  }) async {
     var registered = false;
     try {
       await _syncService.registerCurrentDevice();
       registered = true;
       _lastError = null;
       if (refreshDevicesAfterRegister) {
-        final response = await _syncService.listSignedInDevices();
-        final devices = response.devices.toList(growable: false)
-          ..sort((a, b) {
-            if (a.isCurrent != b.isCurrent) {
-              return a.isCurrent ? -1 : 1;
-            }
-            if (a.isActive != b.isActive) {
-              return a.isActive ? -1 : 1;
-            }
-            final aSeen = a.lastSeenAt?.millisecondsSinceEpoch ?? 0;
-            final bSeen = b.lastSeenAt?.millisecondsSinceEpoch ?? 0;
-            return bSeen.compareTo(aSeen);
-          });
-        _signedInDevices = devices;
+        await _refreshSignedInDevicesFromBackend();
       }
     } catch (error, stackTrace) {
       await _handleError(error);
@@ -470,6 +510,23 @@ class JoblensStore extends ChangeNotifier {
     });
   }
 
+  Future<void> _refreshSignedInDevicesFromBackend() async {
+    final response = await _syncService.listSignedInDevices();
+    final devices = response.devices.toList(growable: false)
+      ..sort((a, b) {
+        if (a.isCurrent != b.isCurrent) {
+          return a.isCurrent ? -1 : 1;
+        }
+        if (a.isActive != b.isActive) {
+          return a.isActive ? -1 : 1;
+        }
+        final aSeen = a.lastSeenAt?.millisecondsSinceEpoch ?? 0;
+        final bSeen = b.lastSeenAt?.millisecondsSinceEpoch ?? 0;
+        return bSeen.compareTo(aSeen);
+      });
+    _signedInDevices = devices;
+  }
+
   Future<void> refreshSignedInDevices() async {
     final authUserId = _currentAuthUserIdProvider?.call();
     if (authUserId == null || authUserId.trim().isEmpty) {
@@ -480,20 +537,7 @@ class JoblensStore extends ChangeNotifier {
 
     try {
       await registerCurrentDeviceSession(refreshDevicesAfterRegister: false);
-      final response = await _syncService.listSignedInDevices();
-      final devices = response.devices.toList(growable: false)
-        ..sort((a, b) {
-          if (a.isCurrent != b.isCurrent) {
-            return a.isCurrent ? -1 : 1;
-          }
-          if (a.isActive != b.isActive) {
-            return a.isActive ? -1 : 1;
-          }
-          final aSeen = a.lastSeenAt?.millisecondsSinceEpoch ?? 0;
-          final bSeen = b.lastSeenAt?.millisecondsSinceEpoch ?? 0;
-          return bSeen.compareTo(aSeen);
-        });
-      _signedInDevices = devices;
+      await _refreshSignedInDevicesFromBackend();
       _lastError = null;
     } catch (error, stackTrace) {
       await _handleError(error);
@@ -1255,6 +1299,85 @@ class JoblensStore extends ChangeNotifier {
     return _syncService.getThumbnailUrl(asset, forceRefresh: forceRefresh);
   }
 
+  Future<String?> ensurePersistentThumbnail(PhotoAsset asset) {
+    final currentAsset = assetById(asset.id) ?? asset;
+    final currentThumbPath = currentAsset.thumbPath.trim();
+    if (currentThumbPath.isNotEmpty && File(currentThumbPath).existsSync()) {
+      return Future.value(currentThumbPath);
+    }
+
+    final remoteAssetId = currentAsset.remoteAssetId?.trim() ?? '';
+    if (remoteAssetId.isEmpty) {
+      return Future.value(null);
+    }
+
+    return _pendingPersistentThumbnails.putIfAbsent(currentAsset.id, () {
+      return _enqueueThumbnailHydration(() async {
+        try {
+          final latestAsset = assetById(currentAsset.id) ?? currentAsset;
+          final latestThumbPath = latestAsset.thumbPath.trim();
+          if (latestThumbPath.isNotEmpty &&
+              File(latestThumbPath).existsSync()) {
+            return latestThumbPath;
+          }
+
+          final bytes = await _syncService.downloadThumbnailBytes(latestAsset);
+          final storedThumbPath = await _mediaStorage.storeThumbnailBytes(
+            assetId: latestAsset.id,
+            bytes: bytes,
+          );
+          await _database.updateAssetThumbPath(
+            assetId: latestAsset.id,
+            thumbPath: storedThumbPath,
+          );
+          final updated = await _database.getAssetById(latestAsset.id);
+          if (updated != null) {
+            _replaceAssetInState(updated);
+            _notifyListenersIfActive();
+            return updated.thumbPath.trim().isEmpty
+                ? storedThumbPath
+                : updated.thumbPath;
+          }
+          return storedThumbPath;
+        } catch (_) {
+          return null;
+        }
+      }).whenComplete(() {
+        _pendingPersistentThumbnails.remove(currentAsset.id);
+      });
+    });
+  }
+
+  Future<void> _enqueueAuthSync(Future<void> Function() action) {
+    final completer = Completer<void>();
+    final queued = _pendingAuthSync.catchError((_) {}).then((_) async {
+      try {
+        await action();
+        completer.complete();
+      } catch (error, stackTrace) {
+        await _recordForegroundError(error, stackTrace);
+        completer.complete();
+      }
+    });
+    _pendingAuthSync = queued.catchError((_) {});
+    return completer.future;
+  }
+
+  Future<T> _enqueueThumbnailHydration<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    final queued = _pendingThumbnailHydration.catchError((_) {}).then((
+      _,
+    ) async {
+      try {
+        completer.complete(await action());
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    _pendingThumbnailHydration = queued.catchError((_) {});
+    return completer.future;
+  }
+
   Future<String?> resolveDownloadUrl(
     PhotoAsset asset, {
     bool forceRefresh = false,
@@ -1951,8 +2074,12 @@ class JoblensStore extends ChangeNotifier {
 
   @visibleForTesting
   Future<void> waitForIdle() async {
+    await _pendingAuthSync;
     await _pendingLocalIngest;
+    await _pendingThumbnailHydration;
     await _pendingBackgroundSync;
+    await (_pendingDeviceRegistration ?? Future.value(false));
+    await (_pendingForcedSignOut ?? Future.value());
   }
 
   Future<void> _synchronizeAuthUser(
@@ -2066,21 +2193,34 @@ class JoblensStore extends ChangeNotifier {
   }
 
   Future<void> _forceLocalSignOut(String message) async {
-    final signOutAction = _signOutAction;
-    if (signOutAction != null) {
-      try {
-        await signOutAction();
-      } catch (error) {
-        if (kDebugMode) {
-          debugPrint('Forced local sign-out failed: $error');
+    final pendingSignOut = _pendingForcedSignOut;
+    if (pendingSignOut != null) {
+      return pendingSignOut;
+    }
+
+    final forcedSignOut = () async {
+      final signOutAction = _signOutAction;
+      if (signOutAction != null) {
+        try {
+          await signOutAction();
+        } catch (error) {
+          if (kDebugMode) {
+            debugPrint('Forced local sign-out failed: $error');
+          }
         }
       }
-    }
-    _forcedSignOutMessage = message;
-    _forcedSignOutNoticeCount += 1;
-    _lastError = null;
-    await _synchronizeAuthUser(null, allowClearingForNull: true);
-    _notifyListenersIfActive();
+      _forcedSignOutMessage = message;
+      _forcedSignOutNoticeCount += 1;
+      _lastError = null;
+      await _synchronizeAuthUser(null, allowClearingForNull: true);
+      _notifyListenersIfActive();
+    }();
+    _pendingForcedSignOut = forcedSignOut;
+    return forcedSignOut.whenComplete(() {
+      if (identical(_pendingForcedSignOut, forcedSignOut)) {
+        _pendingForcedSignOut = null;
+      }
+    });
   }
 
   Future<File?> _resolveLibraryAssetFile(

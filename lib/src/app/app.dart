@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -39,6 +38,8 @@ class _JoblensAppState extends ConsumerState<JoblensApp>
   RealtimeChannel? _deviceSessionChannel;
   String? _lastHandledProviderCallback;
   String? _listeningAuthSessionId;
+  String? _lastHandledAuthFingerprint;
+  bool _skippedInitialResumeMaintenance = false;
 
   @override
   void initState() {
@@ -60,6 +61,10 @@ class _JoblensAppState extends ConsumerState<JoblensApp>
     if (!mounted || state != AppLifecycleState.resumed) {
       return;
     }
+    if (!_skippedInitialResumeMaintenance) {
+      _skippedInitialResumeMaintenance = true;
+      return;
+    }
     unawaited(_handleAppResume());
   }
 
@@ -70,6 +75,11 @@ class _JoblensAppState extends ConsumerState<JoblensApp>
         return;
       }
       final authState = next.valueOrNull;
+      final authFingerprint = authEventFingerprint(authState);
+      if (_lastHandledAuthFingerprint == authFingerprint) {
+        return;
+      }
+      _lastHandledAuthFingerprint = authFingerprint;
       debugPrint(
         'Joblens auth event: ${authState?.event.name ?? 'none'} '
         'user=${authState?.session?.user.id ?? 'none'}',
@@ -217,7 +227,7 @@ class _JoblensAppState extends ConsumerState<JoblensApp>
   Future<void> _syncDeviceSessionChannel(Session? session) async {
     final authSessionId = session == null
         ? null
-        : _extractAuthSessionId(session.accessToken);
+        : extractAuthSessionId(session.accessToken);
     if (authSessionId == _listeningAuthSessionId) {
       return;
     }
@@ -261,23 +271,6 @@ class _JoblensAppState extends ConsumerState<JoblensApp>
       return;
     }
     await Supabase.instance.client.removeChannel(channel);
-  }
-
-  String? _extractAuthSessionId(String accessToken) {
-    final parts = accessToken.split('.');
-    if (parts.length < 2) {
-      return null;
-    }
-    try {
-      final normalized = base64Url.normalize(parts[1]);
-      final payload = jsonDecode(utf8.decode(base64Url.decode(normalized)));
-      if (payload is Map && payload['session_id'] is String) {
-        return payload['session_id'] as String;
-      }
-    } catch (_) {
-      // Ignore malformed access tokens and skip realtime subscription.
-    }
-    return null;
   }
 
   Future<void> _handleIncomingUri(Uri uri, {required String source}) async {

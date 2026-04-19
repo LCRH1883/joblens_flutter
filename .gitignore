@@ -37,11 +37,15 @@ migrate_working_dir/
 
 # Flutter / Dart
 .dart_tool/
+.fvm/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
 .pub/
 .pub-cache/
+**/.cxx/
+**/.gradle/
+**/.kotlin/
 build/
 coverage/
 **/doc/api/
@@ -55,7 +59,5 @@ app.*.map.json
 android/app/debug/
 android/app/profile/
 android/app/release/
-
-sentry.properties
 
 sentry.properties

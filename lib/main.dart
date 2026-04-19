@@ -23,14 +23,18 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final config = await AppRuntimeConfiguration.load();
+  if (kDebugMode) {
+    await _runJoblensApp(config);
+    return;
+  }
   await SentryFlutter.init(
     (options) {
       options.dsn = _kSentryDsn;
-      options.environment = kReleaseMode ? 'production' : 'debug';
+      options.environment = kReleaseMode ? 'production' : 'profile';
       options.enableAutoSessionTracking = false;
       options.tracesSampleRate = 0;
       options.attachScreenshot = false;
-      options.debug = kDebugMode;
+      options.debug = false;
     },
     appRunner: () async {
       await _runJoblensApp(config);

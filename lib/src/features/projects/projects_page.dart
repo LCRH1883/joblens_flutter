@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../app/joblens_store.dart';
 import '../../core/models/photo_asset.dart';
 import '../../core/models/project.dart';
+import '../../core/ui/thumbnail_cache_size.dart';
 import 'project_detail_page.dart';
 
 class ProjectsPage extends ConsumerWidget {
@@ -193,6 +194,13 @@ class _ProjectCoverThumbnailState extends State<_ProjectCoverThumbnail> {
   bool _forceRefresh = false;
   bool _localThumbFailed = false;
 
+  int _cacheDimension(BuildContext context) {
+    return thumbnailCacheDimension(
+      logicalSize: 56,
+      devicePixelRatio: MediaQuery.maybeOf(context)?.devicePixelRatio ?? 1.0,
+    );
+  }
+
   @override
   void didUpdateWidget(covariant _ProjectCoverThumbnail oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -204,11 +212,14 @@ class _ProjectCoverThumbnailState extends State<_ProjectCoverThumbnail> {
   @override
   Widget build(BuildContext context) {
     final thumbPath = widget.asset.thumbPath.trim();
+    final cacheDimension = _cacheDimension(context);
     if (thumbPath.isNotEmpty && !_localThumbFailed) {
       return Image.file(
         File(thumbPath),
         width: 56,
         height: 56,
+        cacheWidth: cacheDimension,
+        cacheHeight: cacheDimension,
         fit: BoxFit.cover,
         gaplessPlayback: true,
         errorBuilder: (context, error, stackTrace) {
@@ -228,6 +239,33 @@ class _ProjectCoverThumbnailState extends State<_ProjectCoverThumbnail> {
     }
 
     return FutureBuilder<String?>(
+      future: widget.store.ensurePersistentThumbnail(widget.asset),
+      builder: (context, snapshot) {
+        final persistedThumbPath = snapshot.data?.trim() ?? '';
+        if (persistedThumbPath.isNotEmpty) {
+          return Image.file(
+            File(persistedThumbPath),
+            width: 56,
+            height: 56,
+            cacheWidth: cacheDimension,
+            cacheHeight: cacheDimension,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (context, error, stackTrace) {
+              return _buildRemoteFallback(context, cacheDimension);
+            },
+          );
+        }
+        if (snapshot.connectionState != ConnectionState.done) {
+          return _placeholder(context, loading: true);
+        }
+        return _buildRemoteFallback(context, cacheDimension);
+      },
+    );
+  }
+
+  Widget _buildRemoteFallback(BuildContext context, int cacheDimension) {
+    return FutureBuilder<String?>(
       future: widget.store.resolveThumbnailUrl(
         widget.asset,
         forceRefresh: _forceRefresh,
@@ -244,6 +282,8 @@ class _ProjectCoverThumbnailState extends State<_ProjectCoverThumbnail> {
           url,
           width: 56,
           height: 56,
+          cacheWidth: cacheDimension,
+          cacheHeight: cacheDimension,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) {
             if (!_forceRefresh) {
@@ -368,10 +408,7 @@ class _ProjectDetailsDialogState extends State<_ProjectDetailsDialog> {
             ),
           ),
           const SizedBox(height: 16),
-          Text(
-            'Start date',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
+          Text('Start date', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
