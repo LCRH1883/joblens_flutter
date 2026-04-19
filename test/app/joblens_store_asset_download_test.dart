@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -267,6 +268,213 @@ void main() {
       expect(File(repaired.localPath).existsSync(), isTrue);
       expect(repaired.cloudState, AssetCloudState.localAndCloud);
       expect(await harness.database.getAllBlobUploadTasks(), isEmpty);
+    },
+  );
+
+  test(
+    'ensurePersistentThumbnail stores a cloud-only thumbnail without changing local media state',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final projectId = await harness.database.ensureDefaultProject();
+      await harness.database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-thumb',
+        projectId: projectId,
+        remoteAssetId: 'remote-thumb',
+        sha256: '4' * 64,
+        createdAt: DateTime(2026, 4, 14),
+        remotePath: 'Joblens/Inbox/thumb.jpg',
+      );
+      await harness.store.refresh();
+
+      final asset = harness.store.assets.singleWhere(
+        (item) => item.id == 'asset-thumb',
+      );
+      final thumbPath = await harness.store.ensurePersistentThumbnail(asset);
+
+      expect(thumbPath, isNotNull);
+      expect(thumbPath, isNotEmpty);
+      expect(File(thumbPath!).existsSync(), isTrue);
+      expect(harness.syncService.thumbnailRequests, ['remote-thumb']);
+
+      final updated = await harness.database.getAssetById('asset-thumb');
+      expect(updated, isNotNull);
+      expect(updated!.localPath, isEmpty);
+      expect(updated.thumbPath, thumbPath);
+      expect(updated.cloudState, AssetCloudState.cloudOnly);
+    },
+  );
+
+  test(
+    'ensurePersistentThumbnail deduplicates concurrent cloud-only thumbnail downloads',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final projectId = await harness.database.ensureDefaultProject();
+      await harness.database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-thumb-concurrent',
+        projectId: projectId,
+        remoteAssetId: 'remote-thumb-concurrent',
+        sha256: '5' * 64,
+        createdAt: DateTime(2026, 4, 14),
+        remotePath: 'Joblens/Inbox/thumb-concurrent.jpg',
+      );
+      await harness.store.refresh();
+
+      final asset = harness.store.assets.singleWhere(
+        (item) => item.id == 'asset-thumb-concurrent',
+      );
+      final gate = Completer<void>();
+      harness.syncService.thumbnailGate = gate;
+
+      final first = harness.store.ensurePersistentThumbnail(asset);
+      final second = harness.store.ensurePersistentThumbnail(asset);
+
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(harness.syncService.thumbnailRequests, [
+        'remote-thumb-concurrent',
+      ]);
+
+      gate.complete();
+      final results = await Future.wait([first, second]);
+
+      expect(results[0], isNotNull);
+      expect(results[0], results[1]);
+      expect(harness.syncService.thumbnailRequests, [
+        'remote-thumb-concurrent',
+      ]);
+    },
+  );
+
+  test(
+    'ensurePersistentThumbnail hydrates different cloud-only assets one at a time',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final projectId = await harness.database.ensureDefaultProject();
+      await harness.database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-thumb-queue-a',
+        projectId: projectId,
+        remoteAssetId: 'remote-thumb-queue-a',
+        sha256: '8' * 64,
+        createdAt: DateTime(2026, 4, 14),
+        remotePath: 'Joblens/Inbox/thumb-queue-a.jpg',
+      );
+      await harness.database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-thumb-queue-b',
+        projectId: projectId,
+        remoteAssetId: 'remote-thumb-queue-b',
+        sha256: '9' * 64,
+        createdAt: DateTime(2026, 4, 14),
+        remotePath: 'Joblens/Inbox/thumb-queue-b.jpg',
+      );
+      await harness.store.refresh();
+
+      final assetA = harness.store.assets.singleWhere(
+        (item) => item.id == 'asset-thumb-queue-a',
+      );
+      final assetB = harness.store.assets.singleWhere(
+        (item) => item.id == 'asset-thumb-queue-b',
+      );
+      final gateA = Completer<void>();
+      harness
+              .syncService
+              .thumbnailGatesByRemoteAssetId['remote-thumb-queue-a'] =
+          gateA;
+
+      final first = harness.store.ensurePersistentThumbnail(assetA);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      final second = harness.store.ensurePersistentThumbnail(assetB);
+
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(harness.syncService.thumbnailRequests, ['remote-thumb-queue-a']);
+
+      gateA.complete();
+      final results = await Future.wait([first, second]);
+
+      expect(results[0], isNotNull);
+      expect(results[1], isNotNull);
+      expect(harness.syncService.thumbnailRequests, [
+        'remote-thumb-queue-a',
+        'remote-thumb-queue-b',
+      ]);
+      expect(harness.syncService.maxConcurrentThumbnailDownloads, 1);
+    },
+  );
+
+  test(
+    'ensurePersistentThumbnail repairs a missing persisted thumbnail file',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final projectId = await harness.database.ensureDefaultProject();
+      await harness.database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-thumb-repair',
+        projectId: projectId,
+        remoteAssetId: 'remote-thumb-repair',
+        sha256: '6' * 64,
+        createdAt: DateTime(2026, 4, 14),
+        remotePath: 'Joblens/Inbox/thumb-repair.jpg',
+      );
+      await harness.store.refresh();
+
+      final asset = harness.store.assets.singleWhere(
+        (item) => item.id == 'asset-thumb-repair',
+      );
+      final firstPath = await harness.store.ensurePersistentThumbnail(asset);
+      expect(firstPath, isNotNull);
+      await File(firstPath!).delete();
+
+      final repairedPath = await harness.store.ensurePersistentThumbnail(asset);
+
+      expect(repairedPath, firstPath);
+      expect(File(repairedPath!).existsSync(), isTrue);
+      expect(harness.syncService.thumbnailRequests, [
+        'remote-thumb-repair',
+        'remote-thumb-repair',
+      ]);
+    },
+  );
+
+  test(
+    'ensurePersistentThumbnail reuses an existing local thumbnail while offline',
+    () async {
+      final harness = await _createHarness();
+      addTearDown(harness.dispose);
+
+      final projectId = await harness.database.ensureDefaultProject();
+      await harness.database.upsertCloudOnlyAsset(
+        localAssetId: 'asset-thumb-offline',
+        projectId: projectId,
+        remoteAssetId: 'remote-thumb-offline',
+        sha256: '7' * 64,
+        createdAt: DateTime(2026, 4, 14),
+        remotePath: 'Joblens/Inbox/thumb-offline.jpg',
+      );
+      await harness.store.refresh();
+
+      final asset = harness.store.assets.singleWhere(
+        (item) => item.id == 'asset-thumb-offline',
+      );
+      final thumbPath = await harness.store.ensurePersistentThumbnail(asset);
+      expect(thumbPath, isNotNull);
+
+      harness
+              .syncService
+              .thumbnailErrorsByRemoteAssetId['remote-thumb-offline'] =
+          const ApiException(
+            code: 'thumbnail_download_unavailable',
+            message: 'Offline',
+          );
+
+      final reusedPath = await harness.store.ensurePersistentThumbnail(asset);
+
+      expect(reusedPath, thumbPath);
+      expect(harness.syncService.thumbnailRequests, ['remote-thumb-offline']);
     },
   );
 
@@ -608,8 +816,15 @@ class _DownloadSyncService extends SyncService {
   _DownloadSyncService(super.db) : super();
 
   final List<String> downloadRequests = <String>[];
+  final List<String> thumbnailRequests = <String>[];
   final Map<String, Object> downloadErrorsByRemoteAssetId = <String, Object>{};
+  final Map<String, Object> thumbnailErrorsByRemoteAssetId = <String, Object>{};
+  final Map<String, Completer<void>> thumbnailGatesByRemoteAssetId =
+      <String, Completer<void>>{};
+  Completer<void>? thumbnailGate;
   int kickCount = 0;
+  int _activeThumbnailDownloads = 0;
+  int maxConcurrentThumbnailDownloads = 0;
 
   @override
   Future<Uint8List> downloadAssetBytes(PhotoAsset asset) async {
@@ -620,6 +835,30 @@ class _DownloadSyncService extends SyncService {
       throw configuredError;
     }
     return _testImageBytes;
+  }
+
+  @override
+  Future<Uint8List> downloadThumbnailBytes(PhotoAsset asset) async {
+    final remoteAssetId = asset.remoteAssetId?.trim() ?? '';
+    thumbnailRequests.add(remoteAssetId);
+    _activeThumbnailDownloads += 1;
+    if (_activeThumbnailDownloads > maxConcurrentThumbnailDownloads) {
+      maxConcurrentThumbnailDownloads = _activeThumbnailDownloads;
+    }
+    try {
+      final gate =
+          thumbnailGatesByRemoteAssetId[remoteAssetId] ?? thumbnailGate;
+      if (gate != null && !gate.isCompleted) {
+        await gate.future;
+      }
+      final configuredError = thumbnailErrorsByRemoteAssetId[remoteAssetId];
+      if (configuredError != null) {
+        throw configuredError;
+      }
+      return _testImageBytes;
+    } finally {
+      _activeThumbnailDownloads -= 1;
+    }
   }
 
   @override

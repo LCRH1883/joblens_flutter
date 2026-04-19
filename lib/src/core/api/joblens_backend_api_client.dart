@@ -393,6 +393,26 @@ class JoblensBackendApiClient {
     return response.bodyBytes;
   }
 
+  Future<Uint8List> downloadThumbnailBytes(String assetId) async {
+    final signed = await getThumbnailUrl(assetId);
+    final response = await _withTimeout(
+      _httpClient.get(Uri.parse(signed.url)),
+      timeout: _directUploadTimeout,
+      code: 'thumbnail_download_timeout',
+      message: 'Timed out downloading the remote thumbnail.',
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final mapped = _mapDirectDownloadException(response);
+      throw ApiException(
+        code: mapped.code,
+        message: mapped.message,
+        statusCode: response.statusCode,
+        rawBody: response.body,
+      );
+    }
+    return response.bodyBytes;
+  }
+
   Future<SignedMediaUrlResponse> getVideoPreviewUrl(String assetId) async {
     final map = await _authorizedJsonRequest(
       method: 'GET',

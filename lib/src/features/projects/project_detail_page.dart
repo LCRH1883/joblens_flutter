@@ -9,6 +9,7 @@ import '../../core/models/photo_asset.dart';
 import '../../core/models/project.dart';
 import '../../core/ui/asset_sync_badge.dart';
 import '../../core/ui/edge_swipe_back.dart';
+import '../../core/ui/thumbnail_cache_size.dart';
 import '../../core/ui/user_facing_error.dart';
 import '../camera/joblens_camera_page.dart';
 import '../gallery/photo_viewer_page.dart';
@@ -1119,6 +1120,7 @@ class _ProjectAssetThumbnail extends StatefulWidget {
 class _ProjectAssetThumbnailState extends State<_ProjectAssetThumbnail> {
   bool _forceRefresh = false;
   bool _localThumbFailed = false;
+  static const double _fallbackLogicalTileSize = 120;
 
   @override
   void didUpdateWidget(covariant _ProjectAssetThumbnail oldWidget) {
@@ -1130,28 +1132,69 @@ class _ProjectAssetThumbnailState extends State<_ProjectAssetThumbnail> {
 
   @override
   Widget build(BuildContext context) {
-    final thumbPath = widget.asset.thumbPath;
-    if (thumbPath.isNotEmpty && !_localThumbFailed) {
-      return Image.file(
-        File(thumbPath),
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        errorBuilder: (context, error, stackTrace) {
-          if (!_localThumbFailed) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) {
-                return;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final logicalSize =
+            constraints.biggest.shortestSide.isFinite &&
+                constraints.biggest.shortestSide > 0
+            ? constraints.biggest.shortestSide
+            : _fallbackLogicalTileSize;
+        final cacheDimension = thumbnailCacheDimension(
+          logicalSize: logicalSize,
+          devicePixelRatio:
+              MediaQuery.maybeOf(context)?.devicePixelRatio ?? 1.0,
+        );
+        final thumbPath = widget.asset.thumbPath.trim();
+        if (thumbPath.isNotEmpty && !_localThumbFailed) {
+          return Image.file(
+            File(thumbPath),
+            cacheWidth: cacheDimension,
+            cacheHeight: cacheDimension,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (context, error, stackTrace) {
+              if (!_localThumbFailed) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) {
+                    return;
+                  }
+                  setState(() {
+                    _localThumbFailed = true;
+                  });
+                });
               }
-              setState(() {
-                _localThumbFailed = true;
-              });
-            });
-          }
-          return _placeholder(context, loading: true);
-        },
-      );
-    }
+              return _placeholder(context, loading: true);
+            },
+          );
+        }
 
+        return FutureBuilder<String?>(
+          future: widget.store.ensurePersistentThumbnail(widget.asset),
+          builder: (context, snapshot) {
+            final persistedThumbPath = snapshot.data?.trim() ?? '';
+            if (persistedThumbPath.isNotEmpty) {
+              return Image.file(
+                File(persistedThumbPath),
+                cacheWidth: cacheDimension,
+                cacheHeight: cacheDimension,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder: (context, error, stackTrace) {
+                  return _buildRemoteFallback(context, cacheDimension);
+                },
+              );
+            }
+            if (snapshot.connectionState != ConnectionState.done) {
+              return _placeholder(context, loading: true);
+            }
+            return _buildRemoteFallback(context, cacheDimension);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildRemoteFallback(BuildContext context, int cacheDimension) {
     return FutureBuilder<String?>(
       future: widget.store.resolveThumbnailUrl(
         widget.asset,
@@ -1167,6 +1210,8 @@ class _ProjectAssetThumbnailState extends State<_ProjectAssetThumbnail> {
         }
         return Image.network(
           url,
+          cacheWidth: cacheDimension,
+          cacheHeight: cacheDimension,
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) {
             if (!_forceRefresh) {

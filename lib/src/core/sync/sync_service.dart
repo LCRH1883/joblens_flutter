@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:mime/mime.dart';
@@ -1485,6 +1486,18 @@ class SyncService {
       );
     }
     return client.downloadAssetBytes(remoteAssetId);
+  }
+
+  Future<Uint8List> downloadThumbnailBytes(PhotoAsset asset) async {
+    final remoteAssetId = asset.remoteAssetId?.trim() ?? '';
+    final client = _backendApiClient;
+    if (client == null || remoteAssetId.isEmpty) {
+      throw const ApiException(
+        code: 'thumbnail_download_unavailable',
+        message: 'This thumbnail is not available for remote download.',
+      );
+    }
+    return client.downloadThumbnailBytes(remoteAssetId);
   }
 
   Future<String?> getVideoPreviewUrl(

@@ -1,8 +1,10 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -145,6 +147,56 @@ void main() {
     );
   });
 
+  testWidgets(
+    'ProjectsPage hydrates and reuses a persistent thumbnail for cloud-only covers',
+    (tester) async {
+      final harness = (await tester.runAsync(_createHarness))!;
+      addTearDown(harness.dispose);
+
+      await tester.runAsync(() => harness.store.createProject('Thumb Project'));
+      final project = harness.store.projects.firstWhere(
+        (item) => item.name == 'Thumb Project',
+      );
+      harness
+              .syncService
+              .thumbnailBytesByRemoteAssetId['remote-project-thumb'] =
+          _thumbnailBytes;
+      await tester.runAsync(
+        () => harness.database.upsertCloudOnlyAsset(
+          localAssetId: 'asset-project-thumb',
+          projectId: project.id,
+          remoteAssetId: 'remote-project-thumb',
+          sha256: 'b' * 64,
+          createdAt: DateTime(2026, 4, 14),
+          remotePath: 'Joblens/Thumb Project/thumb.jpg',
+        ),
+      );
+      await tester.runAsync(harness.store.refresh);
+
+      await tester.pumpWidget(
+        _wrapWithStore(harness.store, const ProjectsPage()),
+      );
+      await tester.pump();
+      await _pumpUntil(
+        tester,
+        () async =>
+            (await tester.runAsync(
+              () => harness.database.getAssetById('asset-project-thumb'),
+            ))?.thumbPath.isNotEmpty ==
+            true,
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(harness.syncService.thumbnailRequests, ['remote-project-thumb']);
+      final updated = await tester.runAsync(
+        () => harness.database.getAssetById('asset-project-thumb'),
+      );
+      expect(updated, isNotNull);
+      expect(updated!.thumbPath, isNotEmpty);
+      expect(File(updated.thumbPath).existsSync(), isTrue);
+    },
+  );
+
   testWidgets('GalleryPage shows assets with a valid local original', (
     tester,
   ) async {
@@ -168,6 +220,52 @@ void main() {
       findsNothing,
     );
   });
+
+  testWidgets(
+    'GalleryPage still hides cloud-only assets with a persisted thumbnail',
+    (tester) async {
+      final harness = (await tester.runAsync(_createHarness))!;
+      addTearDown(harness.dispose);
+
+      final projectId = await tester.runAsync(
+        () => harness.database.ensureDefaultProject(),
+      );
+      harness
+              .syncService
+              .thumbnailBytesByRemoteAssetId['remote-gallery-thumb'] =
+          _thumbnailBytes;
+      await tester.runAsync(
+        () => harness.database.upsertCloudOnlyAsset(
+          localAssetId: 'asset-gallery-thumb',
+          projectId: projectId!,
+          remoteAssetId: 'remote-gallery-thumb',
+          sha256: 'c' * 64,
+          createdAt: DateTime(2026, 4, 14),
+          remotePath: 'Joblens/Inbox/gallery-thumb.jpg',
+        ),
+      );
+      await tester.runAsync(harness.store.refresh);
+      final asset = harness.store.assets.singleWhere(
+        (item) => item.id == 'asset-gallery-thumb',
+      );
+      await tester.runAsync(
+        () => harness.store.ensurePersistentThumbnail(asset),
+      );
+
+      await tester.pumpWidget(
+        _wrapWithStore(harness.store, const GalleryPage()),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.byType(Image), findsNothing);
+      expect(
+        find.text(
+          'No photos on this device yet. Capture with Joblens or import from your phone gallery.',
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('ProjectDetailPage supports selecting multiple photos', (
     tester,
@@ -215,6 +313,57 @@ void main() {
 
     expect(find.text('2 selected'), findsOneWidget);
   });
+
+  testWidgets(
+    'ProjectDetailPage hydrates and reuses a persistent thumbnail for cloud-only assets',
+    (tester) async {
+      final harness = (await tester.runAsync(_createHarness))!;
+      addTearDown(harness.dispose);
+
+      await tester.runAsync(
+        () => harness.store.createProject('Cloud Detail Project'),
+      );
+      final project = harness.store.projects.firstWhere(
+        (item) => item.name == 'Cloud Detail Project',
+      );
+      harness.syncService.thumbnailBytesByRemoteAssetId['remote-detail-thumb'] =
+          _thumbnailBytes;
+      await tester.runAsync(
+        () => harness.database.upsertCloudOnlyAsset(
+          localAssetId: 'asset-detail-thumb',
+          projectId: project.id,
+          remoteAssetId: 'remote-detail-thumb',
+          sha256: 'd' * 64,
+          createdAt: DateTime(2026, 4, 14),
+          remotePath: 'Joblens/Cloud Detail Project/detail-thumb.jpg',
+        ),
+      );
+      await tester.runAsync(harness.store.refresh);
+
+      await tester.pumpWidget(
+        _wrapWithStore(harness.store, ProjectDetailPage(project: project)),
+      );
+      await tester.pump();
+      await _pumpUntil(
+        tester,
+        () async =>
+            (await tester.runAsync(
+              () => harness.database.getAssetById('asset-detail-thumb'),
+            ))?.thumbPath.isNotEmpty ==
+            true,
+        maxTicks: 100,
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(harness.syncService.thumbnailRequests, ['remote-detail-thumb']);
+      final updated = await tester.runAsync(
+        () => harness.database.getAssetById('asset-detail-thumb'),
+      );
+      expect(updated, isNotNull);
+      expect(updated!.thumbPath, isNotEmpty);
+      expect(File(updated.thumbPath).existsSync(), isTrue);
+    },
+  );
 
   testWidgets('PhotoViewerPage shows download action for cloud-only assets', (
     tester,
@@ -452,6 +601,19 @@ Future<void> _pumpUntilFound(WidgetTester tester, Finder finder) async {
   }
 }
 
+Future<void> _pumpUntil(
+  WidgetTester tester,
+  Future<bool> Function() condition, {
+  int maxTicks = 20,
+}) async {
+  for (var i = 0; i < maxTicks; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+    if (await condition()) {
+      return;
+    }
+  }
+}
+
 void _pressIconButton(WidgetTester tester, Finder finder) {
   final buttonFinder = find.ancestor(
     of: finder.first,
@@ -468,13 +630,19 @@ Future<_StoreHarness> _createHarness() async {
   final dbPath = p.join(tempDir.path, 'joblens.db');
   final database = await AppDatabase.open(databasePath: dbPath);
   final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+  final syncService = _NoopSyncService(database);
   final store = JoblensStore(
     database: database,
     mediaStorage: mediaStorage,
-    syncService: _NoopSyncService(database),
+    syncService: syncService,
   );
   await store.initialize();
-  return _StoreHarness(store: store, database: database, tempDir: tempDir);
+  return _StoreHarness(
+    store: store,
+    database: database,
+    tempDir: tempDir,
+    syncService: syncService,
+  );
 }
 
 class _StoreHarness {
@@ -482,14 +650,19 @@ class _StoreHarness {
     required this.store,
     required this.database,
     required this.tempDir,
+    required this.syncService,
   });
 
   final JoblensStore store;
   final AppDatabase database;
   final Directory tempDir;
+  final _NoopSyncService syncService;
 
   Future<void> dispose() async {
-    await store.waitForIdle();
+    await store.waitForIdle().timeout(
+      const Duration(seconds: 2),
+      onTimeout: () {},
+    );
     store.dispose();
     await database.close();
     if (await tempDir.exists()) {
@@ -501,9 +674,28 @@ class _StoreHarness {
 class _NoopSyncService extends SyncService {
   _NoopSyncService(super.db) : super();
 
+  final Map<String, Uint8List> thumbnailBytesByRemoteAssetId =
+      <String, Uint8List>{};
+  final List<String> thumbnailRequests = <String>[];
+
   @override
   Future<void> enqueueAsset(PhotoAsset asset) async {}
 
   @override
+  Future<Uint8List> downloadThumbnailBytes(PhotoAsset asset) async {
+    final remoteAssetId = asset.remoteAssetId?.trim() ?? '';
+    thumbnailRequests.add(remoteAssetId);
+    final bytes = thumbnailBytesByRemoteAssetId[remoteAssetId];
+    if (bytes == null) {
+      throw StateError('No thumbnail bytes configured for $remoteAssetId.');
+    }
+    return bytes;
+  }
+
+  @override
   Future<void> kick({bool forceBootstrap = false}) async {}
 }
+
+final Uint8List _thumbnailBytes = Uint8List.fromList(
+  img.encodeJpg(img.Image(width: 12, height: 12)),
+);

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,21 +22,7 @@ final authStateStreamProvider = StreamProvider<AuthState?>((ref) {
   }
 
   final auth = Supabase.instance.client.auth;
-  final controller = StreamController<AuthState?>();
-  controller.add(
-    AuthState(AuthChangeEvent.initialSession, auth.currentSession),
-  );
-
-  final subscription = auth.onAuthStateChange.listen((state) {
-    controller.add(state);
-  });
-
-  ref.onDispose(() async {
-    await subscription.cancel();
-    await controller.close();
-  });
-
-  return controller.stream;
+  return auth.onAuthStateChange;
 });
 
 final authSessionProvider = Provider<Session?>((ref) {
@@ -45,3 +32,33 @@ final authSessionProvider = Provider<Session?>((ref) {
 final authUserProvider = Provider<User?>((ref) {
   return ref.watch(authSessionProvider)?.user;
 });
+
+String authEventFingerprint(AuthState? state) {
+  final eventName = state?.event.name ?? 'none';
+  final session = state?.session;
+  final userId = session?.user.id.trim().isNotEmpty == true
+      ? session!.user.id.trim()
+      : 'none';
+  final accessToken = session?.accessToken.trim() ?? '';
+  final sessionId = accessToken.isEmpty
+      ? ''
+      : (extractAuthSessionId(accessToken) ?? '');
+  return '$eventName|$userId|$sessionId|$accessToken';
+}
+
+String? extractAuthSessionId(String accessToken) {
+  final parts = accessToken.split('.');
+  if (parts.length < 2) {
+    return null;
+  }
+  try {
+    final normalized = base64Url.normalize(parts[1]);
+    final payload = jsonDecode(utf8.decode(base64Url.decode(normalized)));
+    if (payload is Map && payload['session_id'] is String) {
+      return payload['session_id'] as String;
+    }
+  } catch (_) {
+    // Ignore malformed access tokens and skip realtime subscription.
+  }
+  return null;
+}

@@ -35,17 +35,24 @@ Joblens is a cross-platform Flutter app (iOS + Android) for job photo capture an
 
 ## Run
 
+Joblens pins Flutter `3.41.6` in [`.fvmrc`](/Volumes/ExData/Projects/Joblens/joblens_flutter/.fvmrc). Use FVM for local work so everyone runs the same CLI/toolchain version:
+
+```bash
+dart pub global activate fvm
+fvm install
+```
+
 ```bash
 infisical export --domain=https://app.infisical.com --env=prod --path=/joblens/mobile --format=dotenv --output-file=.env
-/Users/lcrh/Tools/flutter/bin/flutter pub get
-/Users/lcrh/Tools/flutter/bin/flutter run --dart-define-from-file=.env
+fvm flutter pub get
+fvm flutter run --dart-define-from-file=.env
 ```
 
 The local `.env` is the runtime source of truth for development. Refresh it from Infisical manually when secrets change.
 
 The app now supports two local-first paths:
 
-- preferred CLI path: `flutter run --dart-define-from-file=.env`
+- preferred CLI path: `fvm flutter run --dart-define-from-file=.env`
 - IDE fallback path: if Dart defines are not passed, the app loads the bundled local `.env` asset at runtime
 
 That means Android Studio and Xcode debug builds can still use the local `.env` copy without contacting Infisical at launch.
@@ -69,8 +76,8 @@ If `API_BASE_URL` is omitted, the app defaults to `${SUPABASE_URL}/functions/v1/
 ## Validate
 
 ```bash
-/Users/lcrh/Tools/flutter/bin/flutter analyze
-/Users/lcrh/Tools/flutter/bin/flutter test
+fvm flutter analyze
+fvm flutter test
 ```
 
 

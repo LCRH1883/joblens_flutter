@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -36,7 +37,9 @@ void main() {
 
       final dbPath = p.join(tempDir.path, 'joblens.db');
       final database = await AppDatabase.open(databasePath: dbPath);
-      final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
       final store = JoblensStore(
         database: database,
         mediaStorage: mediaStorage,
@@ -98,7 +101,9 @@ void main() {
 
       final dbPath = p.join(tempDir.path, 'joblens.db');
       final database = await AppDatabase.open(databasePath: dbPath);
-      final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
       final store = JoblensStore(
         database: database,
         mediaStorage: mediaStorage,
@@ -160,7 +165,9 @@ void main() {
 
       final dbPath = p.join(tempDir.path, 'joblens.db');
       final database = await AppDatabase.open(databasePath: dbPath);
-      final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
       final syncService = _ProviderSwitchSyncService(database);
       final store = JoblensStore(
         database: database,
@@ -218,7 +225,9 @@ void main() {
 
       final dbPath = p.join(tempDir.path, 'joblens.db');
       final database = await AppDatabase.open(databasePath: dbPath);
-      final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
       final syncService = _ProviderSwitchSyncService(database)
         ..providerAuthSessionResult = const ProviderAuthSessionResult(
           sessionId: 'session-1',
@@ -294,20 +303,23 @@ void main() {
     },
   );
 
-  test('disconnected provider does not expose stale account identity', () async {
-    final account = ProviderAccount(
-      id: 'dropbox',
-      providerType: CloudProviderType.dropbox,
-      displayName: 'Jane Dropbox',
-      accountIdentifier: 'jane@example.com',
-      connectionStatus: ProviderConnectionStatus.disconnected,
-      connectedAt: DateTime(2026, 4, 10),
-      isActive: false,
-    );
+  test(
+    'disconnected provider does not expose stale account identity',
+    () async {
+      final account = ProviderAccount(
+        id: 'dropbox',
+        providerType: CloudProviderType.dropbox,
+        displayName: 'Jane Dropbox',
+        accountIdentifier: 'jane@example.com',
+        connectionStatus: ProviderConnectionStatus.disconnected,
+        connectedAt: DateTime(2026, 4, 10),
+        isActive: false,
+      );
 
-    expect(account.hasActiveConnection, isFalse);
-    expect(account.connectedAccountLabel, isNull);
-  });
+      expect(account.hasActiveConnection, isFalse);
+      expect(account.connectedAccountLabel, isNull);
+    },
+  );
 
   test('revoked device session forces local sign-out', () async {
     final tempDir = await Directory.systemTemp.createTemp(
@@ -321,7 +333,9 @@ void main() {
 
     final dbPath = p.join(tempDir.path, 'joblens.db');
     final database = await AppDatabase.open(databasePath: dbPath);
-    final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+    final mediaStorage = await MediaStorageService.create(
+      rootDirectory: tempDir,
+    );
     final syncService = _ProviderSwitchSyncService(database)
       ..sessionStatus = const SessionStatusResponse(
         status: 'revoked',
@@ -369,7 +383,9 @@ void main() {
 
     final dbPath = p.join(tempDir.path, 'joblens.db');
     final database = await AppDatabase.open(databasePath: dbPath);
-    final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
+    final mediaStorage = await MediaStorageService.create(
+      rootDirectory: tempDir,
+    );
     final syncService = _ProviderSwitchSyncService(database)
       ..listDevicesError = const ApiException(
         code: 'device_session_missing',
@@ -398,68 +414,291 @@ void main() {
     expect(store.reauthenticationRequestCount, 0);
   });
 
-  test('failed re-registration keeps user signed in and surfaces warning', () async {
-    final tempDir = await Directory.systemTemp.createTemp(
-      'joblens_device_session_missing_failure_test_',
-    );
-    addTearDown(() async {
-      if (await tempDir.exists()) {
-        await tempDir.delete(recursive: true);
-      }
-    });
-
-    final dbPath = p.join(tempDir.path, 'joblens.db');
-    final database = await AppDatabase.open(databasePath: dbPath);
-    final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
-    final syncService = _ProviderSwitchSyncService(database)
-      ..listDevicesError = const ApiException(
-        code: 'device_session_missing',
-        message: 'Register this device session before continuing.',
-        statusCode: 401,
-      )
-      ..registerDeviceError = const ApiException(
-        code: 'device_register_failed',
-        message: 'backend down',
-        statusCode: 500,
+  test(
+    'failed re-registration keeps user signed in and surfaces warning',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_device_session_missing_failure_test_',
       );
-    final store = JoblensStore(
-      database: database,
-      mediaStorage: mediaStorage,
-      syncService: syncService,
-      currentAuthUserIdProvider: () => 'test-user',
-    );
-    addTearDown(() async {
-      await store.waitForIdle();
-      store.dispose();
-      await database.close();
-    });
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
 
-    await store.initialize();
-    await store.refresh();
-    syncService.registerDeviceCalls = 0;
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
+      final syncService = _ProviderSwitchSyncService(database)
+        ..listDevicesError = const ApiException(
+          code: 'device_session_missing',
+          message: 'Register this device session before continuing.',
+          statusCode: 401,
+        )
+        ..registerDeviceError = const ApiException(
+          code: 'device_register_failed',
+          message: 'backend down',
+          statusCode: 500,
+        );
+      final store = JoblensStore(
+        database: database,
+        mediaStorage: mediaStorage,
+        syncService: syncService,
+        currentAuthUserIdProvider: () => 'test-user',
+      );
+      addTearDown(() async {
+        await store.waitForIdle();
+        store.dispose();
+        await database.close();
+      });
 
-    await store.refreshSignedInDevices();
+      await store.initialize();
+      await store.refresh();
+      syncService.registerDeviceCalls = 0;
 
-    expect(syncService.registerDeviceCalls, 2);
-    expect(store.reauthenticationRequestCount, 0);
-    expect(store.lastError, contains('backend down'));
-  });
+      await store.refreshSignedInDevices();
 
-  test('auth sync registers current device and refreshes signed-in devices', () async {
-    final tempDir = await Directory.systemTemp.createTemp(
-      'joblens_device_list_refresh_test_',
-    );
-    addTearDown(() async {
-      if (await tempDir.exists()) {
-        await tempDir.delete(recursive: true);
+      expect(syncService.registerDeviceCalls, 2);
+      expect(store.reauthenticationRequestCount, 0);
+      expect(store.lastError, contains('backend down'));
+    },
+  );
+
+  test(
+    'auth sync registers current device and refreshes signed-in devices',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_device_list_refresh_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
+      final syncService = _ProviderSwitchSyncService(database)
+        ..devicesResponse = SignedInDevicesResponse(
+          devices: [
+            SignedInDevice(
+              deviceId: 'device-1',
+              deviceName: 'This iPhone',
+              platform: 'ios',
+              signedInAt: DateTime(2026, 4, 11, 10),
+              lastSeenAt: DateTime(2026, 4, 11, 11),
+              lastSyncAt: DateTime(2026, 4, 11, 11),
+              isCurrent: true,
+              canSignOut: false,
+            ),
+            SignedInDevice(
+              deviceId: 'device-2',
+              deviceName: 'Other iPad',
+              platform: 'ios',
+              signedInAt: DateTime(2026, 4, 11, 9),
+              lastSeenAt: DateTime(2026, 4, 11, 10),
+              lastSyncAt: null,
+              isCurrent: false,
+              canSignOut: true,
+            ),
+          ],
+        );
+      final store = JoblensStore(
+        database: database,
+        mediaStorage: mediaStorage,
+        syncService: syncService,
+        currentAuthUserIdProvider: () => 'test-user',
+      );
+      addTearDown(() async {
+        await store.waitForIdle();
+        store.dispose();
+        await database.close();
+      });
+
+      await store.initialize();
+      await store.syncAuthSession(_session('test-user'));
+
+      expect(syncService.registerDeviceCalls, 1);
+      expect(syncService.listDevicesCalls, 1);
+      expect(store.signedInDevices, hasLength(2));
+      expect(store.signedInDevices.first.deviceId, 'device-1');
+    },
+  );
+
+  test(
+    'concurrent auth sync requests share one device registration for the same user',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_auth_sync_queue_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
+      final syncService = _ProviderSwitchSyncService(database)
+        ..registerDeviceGate = Completer<void>();
+      final store = JoblensStore(
+        database: database,
+        mediaStorage: mediaStorage,
+        syncService: syncService,
+        currentAuthUserIdProvider: () => 'test-user',
+      );
+      addTearDown(() async {
+        await store.waitForIdle();
+        store.dispose();
+        await database.close();
+      });
+
+      await store.initialize();
+
+      final first = store.syncAuthSession(_session('test-user'));
+      final second = store.syncAuthSession(_session('test-user'));
+
+      for (var i = 0; i < 20 && syncService.registerDeviceCalls == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
       }
-    });
+      expect(syncService.registerDeviceCalls, 1);
+      expect(syncService.maxConcurrentRegisterDeviceCalls, 1);
 
-    final dbPath = p.join(tempDir.path, 'joblens.db');
-    final database = await AppDatabase.open(databasePath: dbPath);
-    final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
-    final syncService = _ProviderSwitchSyncService(database)
-      ..devicesResponse = SignedInDevicesResponse(
+      syncService.registerDeviceGate!.complete();
+      await Future.wait([first, second]);
+
+      expect(syncService.registerDeviceCalls, 1);
+      expect(syncService.listDevicesCalls, 1);
+    },
+  );
+
+  test(
+    'concurrent revoked session checks force one local sign-out and tolerate missing media storage',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_concurrent_sign_out_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
+      final syncService = _ProviderSwitchSyncService(database)
+        ..sessionStatus = const SessionStatusResponse(
+          status: 'revoked',
+          reason: 'remote_user_signout',
+          message: 'You were signed out from another device.',
+        );
+      String? currentUserId = 'test-user';
+      var signOutCalls = 0;
+      final signOutGate = Completer<void>();
+      final store = JoblensStore(
+        database: database,
+        mediaStorage: mediaStorage,
+        syncService: syncService,
+        currentAuthUserIdProvider: () => currentUserId,
+        signOutAction: () async {
+          signOutCalls += 1;
+          await signOutGate.future;
+          currentUserId = null;
+        },
+      );
+      addTearDown(() async {
+        await store.waitForIdle();
+        store.dispose();
+        await database.close();
+      });
+
+      await store.initialize();
+      await mediaStorage.rootDir.delete(recursive: true);
+
+      final first = store.checkCurrentSessionStatus();
+      final second = store.checkCurrentSessionStatus();
+
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(signOutCalls, 1);
+
+      signOutGate.complete();
+      await Future.wait([first, second]);
+
+      expect(signOutCalls, 1);
+      expect(store.forcedSignOutNoticeCount, 1);
+      expect(await mediaStorage.rootDir.exists(), isTrue);
+    },
+  );
+
+  test(
+    'remote device sign-out calls backend and refreshes signed-in devices',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_device_sign_out_test_',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
+      final syncService = _ProviderSwitchSyncService(database)
+        ..devicesResponse = SignedInDevicesResponse(
+          devices: [
+            SignedInDevice(
+              deviceId: 'device-1',
+              deviceName: 'This iPhone',
+              platform: 'ios',
+              signedInAt: DateTime(2026, 4, 11, 10),
+              lastSeenAt: DateTime(2026, 4, 11, 11),
+              lastSyncAt: DateTime(2026, 4, 11, 11),
+              isCurrent: true,
+              canSignOut: false,
+            ),
+            SignedInDevice(
+              deviceId: 'device-2',
+              deviceName: 'Other iPad',
+              platform: 'ios',
+              signedInAt: DateTime(2026, 4, 11, 9),
+              lastSeenAt: DateTime(2026, 4, 11, 10),
+              lastSyncAt: null,
+              isCurrent: false,
+              canSignOut: true,
+            ),
+          ],
+        );
+      final store = JoblensStore(
+        database: database,
+        mediaStorage: mediaStorage,
+        syncService: syncService,
+        currentAuthUserIdProvider: () => 'test-user',
+      );
+      addTearDown(() async {
+        await store.waitForIdle();
+        store.dispose();
+        await database.close();
+      });
+
+      await store.initialize();
+      await store.syncAuthSession(_session('test-user'));
+
+      syncService.devicesResponse = SignedInDevicesResponse(
         devices: [
           SignedInDevice(
             deviceId: 'device-1',
@@ -471,176 +710,86 @@ void main() {
             isCurrent: true,
             canSignOut: false,
           ),
-          SignedInDevice(
-            deviceId: 'device-2',
-            deviceName: 'Other iPad',
-            platform: 'ios',
-            signedInAt: DateTime(2026, 4, 11, 9),
-            lastSeenAt: DateTime(2026, 4, 11, 10),
-            lastSyncAt: null,
-            isCurrent: false,
-            canSignOut: true,
-          ),
         ],
       );
-    final store = JoblensStore(
-      database: database,
-      mediaStorage: mediaStorage,
-      syncService: syncService,
-      currentAuthUserIdProvider: () => 'test-user',
-    );
-    addTearDown(() async {
-      await store.waitForIdle();
-      store.dispose();
-      await database.close();
-    });
 
-    await store.initialize();
-    await store.syncAuthSession(_session('test-user'));
+      await store.signOutDeviceSession('device-2');
 
-    expect(syncService.registerDeviceCalls, 1);
-    expect(syncService.listDevicesCalls, 1);
-    expect(store.signedInDevices, hasLength(2));
-    expect(store.signedInDevices.first.deviceId, 'device-1');
-  });
+      expect(syncService.signOutDeviceCalls, 1);
+      expect(syncService.lastSignedOutDeviceId, 'device-2');
+      expect(store.signedInDevices.map((device) => device.deviceId), [
+        'device-1',
+      ]);
+    },
+  );
 
-  test('remote device sign-out calls backend and refreshes signed-in devices', () async {
-    final tempDir = await Directory.systemTemp.createTemp(
-      'joblens_device_sign_out_test_',
-    );
-    addTearDown(() async {
-      if (await tempDir.exists()) {
-        await tempDir.delete(recursive: true);
-      }
-    });
-
-    final dbPath = p.join(tempDir.path, 'joblens.db');
-    final database = await AppDatabase.open(databasePath: dbPath);
-    final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
-    final syncService = _ProviderSwitchSyncService(database)
-      ..devicesResponse = SignedInDevicesResponse(
-        devices: [
-          SignedInDevice(
-            deviceId: 'device-1',
-            deviceName: 'This iPhone',
-            platform: 'ios',
-            signedInAt: DateTime(2026, 4, 11, 10),
-            lastSeenAt: DateTime(2026, 4, 11, 11),
-            lastSyncAt: DateTime(2026, 4, 11, 11),
-            isCurrent: true,
-            canSignOut: false,
-          ),
-          SignedInDevice(
-            deviceId: 'device-2',
-            deviceName: 'Other iPad',
-            platform: 'ios',
-            signedInAt: DateTime(2026, 4, 11, 9),
-            lastSeenAt: DateTime(2026, 4, 11, 10),
-            lastSyncAt: null,
-            isCurrent: false,
-            canSignOut: true,
-          ),
-        ],
+  test(
+    'remote device sign-out restores device list when backend call fails',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'joblens_device_sign_out_failure_test_',
       );
-    final store = JoblensStore(
-      database: database,
-      mediaStorage: mediaStorage,
-      syncService: syncService,
-      currentAuthUserIdProvider: () => 'test-user',
-    );
-    addTearDown(() async {
-      await store.waitForIdle();
-      store.dispose();
-      await database.close();
-    });
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
 
-    await store.initialize();
-    await store.syncAuthSession(_session('test-user'));
+      final dbPath = p.join(tempDir.path, 'joblens.db');
+      final database = await AppDatabase.open(databasePath: dbPath);
+      final mediaStorage = await MediaStorageService.create(
+        rootDirectory: tempDir,
+      );
+      final syncService = _ProviderSwitchSyncService(database)
+        ..devicesResponse = SignedInDevicesResponse(
+          devices: [
+            SignedInDevice(
+              deviceId: 'device-1',
+              deviceName: 'This iPhone',
+              platform: 'ios',
+              signedInAt: DateTime(2026, 4, 11, 10),
+              lastSeenAt: DateTime(2026, 4, 11, 11),
+              lastSyncAt: DateTime(2026, 4, 11, 11),
+              isCurrent: true,
+              canSignOut: false,
+            ),
+            SignedInDevice(
+              deviceId: 'device-2',
+              deviceName: 'Other iPad',
+              platform: 'ios',
+              signedInAt: DateTime(2026, 4, 11, 9),
+              lastSeenAt: DateTime(2026, 4, 11, 10),
+              lastSyncAt: null,
+              isCurrent: false,
+              canSignOut: true,
+            ),
+          ],
+        )
+        ..signOutDeviceError = Exception('backend failed');
+      final store = JoblensStore(
+        database: database,
+        mediaStorage: mediaStorage,
+        syncService: syncService,
+        currentAuthUserIdProvider: () => 'test-user',
+      );
+      addTearDown(() async {
+        await store.waitForIdle();
+        store.dispose();
+        await database.close();
+      });
 
-    syncService.devicesResponse = SignedInDevicesResponse(
-      devices: [
-        SignedInDevice(
-          deviceId: 'device-1',
-          deviceName: 'This iPhone',
-          platform: 'ios',
-          signedInAt: DateTime(2026, 4, 11, 10),
-          lastSeenAt: DateTime(2026, 4, 11, 11),
-          lastSyncAt: DateTime(2026, 4, 11, 11),
-          isCurrent: true,
-          canSignOut: false,
-        ),
-      ],
-    );
+      await store.initialize();
+      await store.syncAuthSession(_session('test-user'));
 
-    await store.signOutDeviceSession('device-2');
+      await store.signOutDeviceSession('device-2');
 
-    expect(syncService.signOutDeviceCalls, 1);
-    expect(syncService.lastSignedOutDeviceId, 'device-2');
-    expect(store.signedInDevices.map((device) => device.deviceId), ['device-1']);
-  });
-
-  test('remote device sign-out restores device list when backend call fails', () async {
-    final tempDir = await Directory.systemTemp.createTemp(
-      'joblens_device_sign_out_failure_test_',
-    );
-    addTearDown(() async {
-      if (await tempDir.exists()) {
-        await tempDir.delete(recursive: true);
-      }
-    });
-
-    final dbPath = p.join(tempDir.path, 'joblens.db');
-    final database = await AppDatabase.open(databasePath: dbPath);
-    final mediaStorage = await MediaStorageService.create(rootDirectory: tempDir);
-    final syncService = _ProviderSwitchSyncService(database)
-      ..devicesResponse = SignedInDevicesResponse(
-        devices: [
-          SignedInDevice(
-            deviceId: 'device-1',
-            deviceName: 'This iPhone',
-            platform: 'ios',
-            signedInAt: DateTime(2026, 4, 11, 10),
-            lastSeenAt: DateTime(2026, 4, 11, 11),
-            lastSyncAt: DateTime(2026, 4, 11, 11),
-            isCurrent: true,
-            canSignOut: false,
-          ),
-          SignedInDevice(
-            deviceId: 'device-2',
-            deviceName: 'Other iPad',
-            platform: 'ios',
-            signedInAt: DateTime(2026, 4, 11, 9),
-            lastSeenAt: DateTime(2026, 4, 11, 10),
-            lastSyncAt: null,
-            isCurrent: false,
-            canSignOut: true,
-          ),
-        ],
-      )
-      ..signOutDeviceError = Exception('backend failed');
-    final store = JoblensStore(
-      database: database,
-      mediaStorage: mediaStorage,
-      syncService: syncService,
-      currentAuthUserIdProvider: () => 'test-user',
-    );
-    addTearDown(() async {
-      await store.waitForIdle();
-      store.dispose();
-      await database.close();
-    });
-
-    await store.initialize();
-    await store.syncAuthSession(_session('test-user'));
-
-    await store.signOutDeviceSession('device-2');
-
-    expect(syncService.signOutDeviceCalls, 1);
-    expect(store.signedInDevices.map((device) => device.deviceId), [
-      'device-1',
-      'device-2',
-    ]);
-  });
+      expect(syncService.signOutDeviceCalls, 1);
+      expect(store.signedInDevices.map((device) => device.deviceId), [
+        'device-1',
+        'device-2',
+      ]);
+    },
+  );
 }
 
 class _ProviderSwitchSyncService extends SyncService {
@@ -661,6 +810,7 @@ class _ProviderSwitchSyncService extends SyncService {
   bool lastKickForceBootstrap = false;
   String? lastSignedOutDeviceId;
   List<String> lastReconciledProjectIds = const [];
+  Completer<void>? registerDeviceGate;
   Object? signOutDeviceError;
   Object? registerDeviceError;
   Object? listDevicesError;
@@ -670,6 +820,8 @@ class _ProviderSwitchSyncService extends SyncService {
   SignedInDevicesResponse devicesResponse = const SignedInDevicesResponse(
     devices: [],
   );
+  int _activeRegisterDeviceCalls = 0;
+  int maxConcurrentRegisterDeviceCalls = 0;
 
   @override
   Future<void> refreshProviderConnections() async {
@@ -707,15 +859,27 @@ class _ProviderSwitchSyncService extends SyncService {
   @override
   Future<RegisterDeviceResponse> registerCurrentDevice() async {
     registerDeviceCalls += 1;
-    final error = registerDeviceError;
-    if (error != null) {
-      throw error;
+    _activeRegisterDeviceCalls += 1;
+    if (_activeRegisterDeviceCalls > maxConcurrentRegisterDeviceCalls) {
+      maxConcurrentRegisterDeviceCalls = _activeRegisterDeviceCalls;
     }
-    return const RegisterDeviceResponse(
-      deviceId: 'device-1',
-      isCurrent: true,
-      deviceSessionId: 'session-1',
-    );
+    try {
+      final gate = registerDeviceGate;
+      if (gate != null && !gate.isCompleted) {
+        await gate.future;
+      }
+      final error = registerDeviceError;
+      if (error != null) {
+        throw error;
+      }
+      return const RegisterDeviceResponse(
+        deviceId: 'device-1',
+        isCurrent: true,
+        deviceSessionId: 'session-1',
+      );
+    } finally {
+      _activeRegisterDeviceCalls -= 1;
+    }
   }
 
   @override

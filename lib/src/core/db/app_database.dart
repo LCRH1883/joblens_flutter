@@ -3302,6 +3302,18 @@ class AppDatabase {
     );
   }
 
+  Future<void> updateAssetThumbPath({
+    required String assetId,
+    required String thumbPath,
+  }) async {
+    await _db.update(
+      'photo_assets',
+      {'thumb_path': thumbPath},
+      where: 'id = ?',
+      whereArgs: [assetId],
+    );
+  }
+
   Future<void> finalizePendingAssetIngest({
     required String assetId,
     required String localPath,
