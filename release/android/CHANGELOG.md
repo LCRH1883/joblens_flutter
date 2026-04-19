@@ -10,6 +10,13 @@ Rules:
 - omit minor internal refactors unless they changed release behavior
 - keep entries newest first
 
+## v0.2.1
+
+- Improved sign-in, session restore, and forced sign-out handling so account state is more stable across launches and device changes.
+- Improved sync reliability for provider changes, remote asset downloads, and project media hydration.
+- Reduced stale or oversized thumbnail usage so project and gallery views refresh more consistently.
+- Improved Android camera launch and system UI behavior for more reliable capture flows.
+
 ## v0.2.0
 
 - Added a compact floating camera button inside project views so you can capture directly into the current project.

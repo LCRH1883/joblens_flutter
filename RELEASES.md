@@ -44,7 +44,7 @@ You also need working Apple signing in Xcode for the `Runner` target.
 
 ```bash
 cd /Volumes/ExData/Projects/Joblens/joblens_flutter
-bash scripts/build_android_release.sh v0.2.0
+bash scripts/build_android_release.sh v0.2.1
 ```
 
 Outputs:
@@ -53,12 +53,13 @@ Outputs:
 - release AAB
 - `release-info.txt`
 - auto-updates `pubspec.yaml` to the matching Flutter version/build number before building
+- refreshes local generated build metadata in `ios/Flutter/Generated.xcconfig` and `android/local.properties`
 
 ## Build iOS Release
 
 ```bash
 cd /Volumes/ExData/Projects/Joblens/joblens_flutter
-bash scripts/build_ios_release.sh v0.2.0
+bash scripts/build_ios_release.sh v0.2.1
 ```
 
 Outputs:
@@ -67,6 +68,7 @@ Outputs:
 - zipped `.xcarchive` when available
 - `release-info.txt`
 - auto-updates `pubspec.yaml` to the matching Flutter version/build number before building
+- refreshes local generated build metadata in `ios/Flutter/Generated.xcconfig` and `android/local.properties`
 
 ## Notes
 

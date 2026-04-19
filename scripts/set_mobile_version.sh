@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PUBSPEC_FILE="$ROOT_DIR/pubspec.yaml"
+IOS_GENERATED_XCCONFIG="$ROOT_DIR/ios/Flutter/Generated.xcconfig"
+ANDROID_LOCAL_PROPERTIES="$ROOT_DIR/android/local.properties"
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: bash scripts/set_mobile_version.sh <version>"
@@ -66,6 +68,36 @@ if command -v flutter >/dev/null 2>&1; then
   )
 else
   echo "warning: flutter command not found; run 'flutter pub get' manually to refresh generated platform build metadata" >&2
+fi
+
+if [[ -f "$IOS_GENERATED_XCCONFIG" ]]; then
+  awk -v name="$SEMVER" -v number="$BUILD_CODE" '
+    /^FLUTTER_BUILD_NAME=/ {
+      print "FLUTTER_BUILD_NAME=" name
+      next
+    }
+    /^FLUTTER_BUILD_NUMBER=/ {
+      print "FLUTTER_BUILD_NUMBER=" number
+      next
+    }
+    { print }
+  ' "$IOS_GENERATED_XCCONFIG" > "$IOS_GENERATED_XCCONFIG.tmp"
+  mv "$IOS_GENERATED_XCCONFIG.tmp" "$IOS_GENERATED_XCCONFIG"
+fi
+
+if [[ -f "$ANDROID_LOCAL_PROPERTIES" ]]; then
+  awk -v name="$SEMVER" -v number="$BUILD_CODE" '
+    /^flutter\.versionName=/ {
+      print "flutter.versionName=" name
+      next
+    }
+    /^flutter\.versionCode=/ {
+      print "flutter.versionCode=" number
+      next
+    }
+    { print }
+  ' "$ANDROID_LOCAL_PROPERTIES" > "$ANDROID_LOCAL_PROPERTIES.tmp"
+  mv "$ANDROID_LOCAL_PROPERTIES.tmp" "$ANDROID_LOCAL_PROPERTIES"
 fi
 
 echo "Set Flutter version:"

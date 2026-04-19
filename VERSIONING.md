@@ -4,10 +4,10 @@ This file is the source of truth for Joblens mobile app versioning across Flutte
 
 ## Current release
 
-- current shared Android/iOS release: `v0.2.0`
-- Flutter version string: `0.2.0+2000`
-- numeric release code: `2000`
-- zero-padded release code representation: `0002000`
+- current shared Android/iOS release: `v0.2.1`
+- Flutter version string: `0.2.1+2001`
+- numeric release code: `2001`
+- zero-padded release code representation: `0002001`
 
 ## Format
 
@@ -38,21 +38,28 @@ When writing human-facing release notes, you can omit leading zeroes:
 Flutter drives both platform versions from `pubspec.yaml`:
 
 ```yaml
-version: 0.2.0+2000
+version: 0.2.1+2001
 ```
 
 Rules:
 
-- `0.2.0` is the user-facing app version
-- `2000` is the numeric build/release code
+- `0.2.1` is the user-facing app version
+- `2001` is the numeric build/release code
 - update `pubspec.yaml` first for every release
 
 Use the helper script to do that automatically:
 
 ```bash
 cd /Volumes/ExData/Projects/Joblens/joblens_flutter
-bash scripts/set_mobile_version.sh v0.2.0
+bash scripts/set_mobile_version.sh v0.2.1
 ```
+
+The helper script must also refresh the generated local Flutter build metadata used by platform builds:
+
+- `ios/Flutter/Generated.xcconfig`
+- `android/local.properties`
+
+Those generated files must match the new `FLUTTER_BUILD_NAME` / `FLUTTER_BUILD_NUMBER` and `flutter.versionName` / `flutter.versionCode` values after every version bump.
 
 ## Mapping to Android
 
@@ -63,8 +70,8 @@ Android uses:
 
 That means:
 
-- `versionName` becomes `0.2.0`
-- `versionCode` becomes `2000`
+- `versionName` becomes `0.2.1`
+- `versionCode` becomes `2001`
 
 Android requirement:
 
@@ -79,8 +86,8 @@ iOS uses:
 
 That means:
 
-- `CFBundleShortVersionString` becomes `0.2.0`
-- `CFBundleVersion` becomes `2000`
+- `CFBundleShortVersionString` becomes `0.2.1`
+- `CFBundleVersion` becomes `2001`
 
 iOS requirement:
 
@@ -143,7 +150,7 @@ For `pubspec.yaml`, use the integer form after `+`.
 2. Update `pubspec.yaml` with:
 
 ```bash
-bash scripts/set_mobile_version.sh v0.2.0
+bash scripts/set_mobile_version.sh v0.2.1
 ```
 
 3. Run:
@@ -158,10 +165,12 @@ bash scripts/set_mobile_version.sh v0.2.0
 5. Verify:
    - Android versionName/versionCode
    - iOS CFBundleShortVersionString/CFBundleVersion
+   - `ios/Flutter/Generated.xcconfig` has the new `FLUTTER_BUILD_NAME` and `FLUTTER_BUILD_NUMBER`
+   - `android/local.properties` has the new `flutter.versionName` and `flutter.versionCode`
 6. Generate release notes:
 
 ```bash
-bash scripts/prepare_release_notes.sh v0.2.0
+bash scripts/prepare_release_notes.sh v0.2.1
 ```
 
 7. Review:
@@ -173,4 +182,6 @@ bash scripts/prepare_release_notes.sh v0.2.0
 Do not edit platform version values separately unless there is a deliberate exception. The normal workflow is:
 
 - update `pubspec.yaml`
+- refresh generated Flutter build metadata
+- verify `ios/Flutter/Generated.xcconfig` and `android/local.properties`
 - let Flutter propagate the version to Android and iOS
